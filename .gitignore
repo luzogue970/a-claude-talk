@@ -1,0 +1,33 @@
+# secrets — jamais dans le depot (voir ~/.config/claude-talk/secrets.env)
+*.conf
+.env
+secrets.env
+
+# artefacts lourds
+*.7z
+venv/
+.venv/
+__pycache__/
+*.onnx
+*.onnx.json
+tts/voices/
+tts/samples/
+
+# lexiques obsoletes (remplaces par le prompt)
+tts/accents*.tsv
+tts/en2fr.tsv
+
+# etat runtime
+*.log
+tts/last-spoken
+tts/spoken-history.jsonl
+tts/mic-profile.json
+tts/current.pgid
+tts/playing-until
+tts/phase
+tts/auto-enabled
+tts/mic-muted
+tts/skip-next
+tts/disabled
+tts/voice.running
+tts/voice.pid
