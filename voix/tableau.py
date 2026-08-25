@@ -231,6 +231,27 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 /* Une zone ne se coupe pas en deux : ses elements se replient ensemble ou pas du tout. */
 .zone{display:inline-flex;gap:8px;align-items:center;flex-wrap:nowrap}
 .zone-direct{margin-left:auto}
+
+/* Les conversations en parallele. Une seule ecoute a la fois : le micro est la seule
+   ressource vraiment exclusive, et deux agents qui ecoutent transcrivent la meme phrase
+   deux fois, chacun pour son Claude. */
+#pupitre{display:inline-flex;gap:5px;align-items:center}
+#pupitre:empty{display:none}
+#pupitre a,#pupitre span.sess{border:1px solid var(--bord);border-radius:999px;
+  padding:2px 9px;font-size:11.5px;color:var(--faible);text-decoration:none;
+  white-space:nowrap;display:inline-flex;gap:5px;align-items:center}
+#pupitre a:hover{border-color:#4b5563;color:var(--texte)}
+/* Celle qu'on regarde : pleine. Celle qui ecoute : un point vert. Les deux se distinguent,
+   parce qu'on peut regarder une conversation sans lui parler. */
+#pupitre .moi{color:var(--texte);border-color:#4b5563;background:#1f242c;font-weight:650}
+#pupitre .ecoute::before{content:"";width:6px;height:6px;border-radius:50%;
+  background:var(--voix)}
+#pupitre .muette::before{content:"";width:6px;height:6px;border-radius:50%;
+  background:#3a424d}
+#pupitre .parle::after{content:"◗";color:var(--voix);font-size:9px}
+#pupitre button{background:transparent;border:1px solid var(--toi);border-radius:999px;
+  color:#9ecbff;padding:2px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+#pupitre button:hover{background:#132133}
 h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:flex;gap:8px;align-items:center}
 
@@ -453,6 +474,14 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .g-tour .badge{color:var(--tour)} .g-tour .corps{color:#9fe6ec}
 /* L'écart de fenêtre arrive après la ligne du tour : on le distingue pour qu'on voie qu'il
    s'agit d'une mesure rapportée, pas d'un chiffre connu au moment du bilan. */
+/* Les commandes de lecture, accrochees a LA reponse concernee : couper « la parole en
+   general » ne dit pas laquelle, et relire la derniere n'est pas relire celle-ci. */
+.lecture{display:inline-flex;gap:5px;margin-left:9px;vertical-align:1px}
+.lecture button{background:transparent;border:1px solid var(--bord);border-radius:999px;
+  color:var(--faible);padding:1px 8px;font:inherit;font-size:10.5px;cursor:pointer;
+  white-space:nowrap}
+.lecture button:hover{border-color:#4b5563;color:var(--texte)}
+.lecture button.vif{border-color:var(--voix);color:#7ee08d}
 .fenetre{color:#e3b341;margin-left:2px}
 .fenetre.nul{color:#7d8590}
 .g-erreur .badge{color:var(--erreur)} .g-erreur .corps{color:#ffb3ad}
@@ -466,6 +495,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
    l'indicateur, et 563 caracteres dans 14 px donnent UN CARACTERE PAR LIGNE — des lignes
    de 7 400 px de haut. Un pip sans etat n'a ni bordure ni contenu : il est deja invisible,
    il suffit de le laisser occuper sa cellule. */
+.g-attente .badge{color:var(--faible)} .g-attente .corps{color:#8b949e;font-size:12px}
 .g-dictee .badge{color:var(--outil)} .g-dictee .corps{color:#e8d9a8}
 .g-reprise{border-bottom:1px solid var(--tour)}
 .g-reprise .badge{color:var(--tour)}
@@ -531,6 +561,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
        ce qui se PASSE, et les mesures. Sans elles, la pastille « parole » sautait à la ligne
        suivante et atterrissait à gauche des filtres — la position d'un élément changeait
        selon la largeur de la fenêtre, et on ne savait plus quoi lire où. -->
+  <span id="pupitre" class="zone"></span>
   <span class="zone zone-controles">
     <button id="micro" title="couper le micro (touche m)">🎤 micro</button>
     <button id="arreter" title="arrêter le travail en cours (touche s)" disabled>⏹ arrêter</button>
@@ -606,6 +637,7 @@ const GROUPES = [
     { g: "partiel", lib: "toi…",     quoi: "la transcription en cours, avant validation", cache: true },
     { g: "voix",    lib: "claude",   quoi: "ce que Claude dit à voix haute" },
     { g: "dictee",  lib: "retenu",   quoi: "dit mais pas envoyé — ça attend dans la barre" },
+    { g: "attente", lib: "attente",  quoi: "une autre conversation parle, celle-ci patiente" },
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
     { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
@@ -1040,6 +1072,7 @@ function ajouter(e) {
   if (e.genre === "arret") toutClore("interrompu");
 
   // Les tours rejoues ne captent pas la mesure de fenetre : elle appartient a un tour vif.
+  if (e.genre === "voix" && e.id && dernier) lignesVoix.set(e.id, dernier);
   if (e.genre === "tour" && !e.passe) ligneTour = dernier;
   if (e.genre === "effort" && e.cle) selEffort.value = e.cle;
   if (e.genre === "outil" && !e.passe) actions++;
@@ -1540,6 +1573,13 @@ function recevoir(e) {
     // ligne existante au lieu d'en créer une seconde, sinon un tour laisserait deux traces
     // pour un seul événement.
     if (e.genre === "tour_quota") { completerTour(e); return; }
+    if (e.genre === "pupitre") { majPupitre(e); return; }
+    if (e.genre === "parole_fin") { outillerParole(e); return; }
+    if (e.genre === "lecture") {
+      lectureEnCours = e.actif ? e.id : null;
+      majBoutonsLecture();
+      return;
+    }
     if (e.genre === "micro") {
       microActif = e.actif;
       btnMicro.classList.remove("attente");   // le serveur a repondu : plus d'attente
@@ -1582,6 +1622,83 @@ function recevoir(e) {
       return;
     }
     ajouter(e);
+}
+
+// --- les conversations en parallèle -----------------------------------------------------
+// Une seule écoute à la fois. Le reste continue de travailler : le micro est la seule
+// ressource réellement exclusive, et couper le travail des autres n'aurait aucun sens.
+const zonePupitre = document.getElementById("pupitre");
+let monPid = null, lectureEnCours = null;
+
+function majPupitre(e) {
+  monPid = e.moi;
+  const s = e.sessions || [];
+  // Seul, il n'y a rien à arbitrer : afficher un sélecteur d'une entrée serait du bruit.
+  if (s.length < 2) { zonePupitre.innerHTML = ""; return; }
+  const moi = s.find(x => x.pid === monPid);
+  const bouts = s.map(x => {
+    const classes = ["sess", x.micro ? "ecoute" : "muette"];
+    if (x.pid === monPid) classes.push("moi");
+    if (x.parle) classes.push("parle");
+    const detail = [x.chemin || "", x.micro ? "écoute" : "muette",
+                    x.parle ? "lit une réponse" : ""].filter(Boolean).join(" — ");
+    const nom = ech(x.projet);
+    // Les autres sont des liens : leur tableau vit sur son propre port.
+    return x.pid === monPid
+      ? `<span class="${classes.join(" ")}" title="${ech(detail)}">${nom}</span>`
+      : `<a class="${classes.join(" ")}" href="http://127.0.0.1:${x.port}/" target="_blank"`
+        + ` title="${ech(detail)} — ouvrir son tableau">${nom}</a>`;
+  });
+  if (moi && !moi.micro) {
+    bouts.push(`<button id="prendre-micro" type="button"`
+      + ` title="couper l'écoute des autres et écouter ici">écouter ici</button>`);
+  }
+  zonePupitre.innerHTML = bouts.join("");
+  const b = document.getElementById("prendre-micro");
+  if (b) b.onclick = () => envoyerCmd({ cmd: "prendre_micro" });
+}
+
+// --- couper ou relire UNE réponse -------------------------------------------------------
+// Accrochés à la ligne concernée : « couper la parole » ne dit pas laquelle, et relire la
+// dernière n'est pas relire celle-ci.
+const lignesVoix = new Map();   // id de réponse -> sa ligne dans le flux
+
+function outillerParole(e) {
+  const ligne = lignesVoix.get(e.id);
+  if (!ligne || ligne.dejaOutille) return;
+  ligne.dejaOutille = true;
+  const corps = ligne.querySelector(".corps");
+  if (!corps) return;
+  const zone = document.createElement("span");
+  zone.className = "lecture";
+
+  const couper = document.createElement("button");
+  couper.type = "button";
+  couper.textContent = "couper";
+  couper.title = "arrêter cette lecture";
+  couper.onclick = () => envoyerCmd({ cmd: "couper_lecture" });
+
+  const relire = document.createElement("button");
+  relire.type = "button";
+  relire.textContent = "relire";
+  relire.title = "relire cette réponse — utile si la lecture a été coupée";
+  relire.onclick = () => envoyerCmd({ cmd: "relire", id: e.id });
+
+  zone.append(couper, relire);
+  corps.appendChild(zone);
+  ligne.zoneLecture = zone;
+  majBoutonsLecture();
+}
+
+// « couper » n'a de sens que sur la lecture qui joue : ailleurs, il ne ferait rien.
+function majBoutonsLecture() {
+  for (const [id, ligne] of lignesVoix) {
+    const z = ligne.zoneLecture;
+    if (!z) continue;
+    const joue = lectureEnCours === id;
+    z.children[0].style.display = joue ? "" : "none";
+    z.children[1].classList.toggle("vif", !joue);
+  }
 }
 
 const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };

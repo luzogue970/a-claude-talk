@@ -55,6 +55,11 @@ def faux_voix(**etat):
     v._quota_depart = {}
     v._session_directe = None
     v._activity = None
+    v.inscription = None          # aucun bail : cet agent est seul, il ecoute
+    v.micro_voulu = True
+    v._lecture = None
+    v._paroles = {}
+    v._id_parole = None
     for k, val in etat.items():
         setattr(v, k, val)
     return v
@@ -427,6 +432,7 @@ def tout_genre_affiche_a_un_filtre():
     hors_flux = {
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
         "ecoute", "retenir", "tour_quota", "_histoire",
+        "pupitre", "parole_fin", "lecture",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)

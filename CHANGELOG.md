@@ -7,6 +7,39 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.5.0] — 2026-08-25
+
+### Ajoute — plusieurs conversations en parallele, arbitrees
+
+Trois sujets ouverts en meme temps est un usage normal. Ce qui ne se partage pas, c'est le
+micro et les haut-parleurs : deux agents qui ecoutent transcrivent la meme phrase et l'envoient
+chacun a son Claude, et deux voix sur les memes haut-parleurs s'annulent au lieu de
+s'additionner. On avertissait ; ca ne suffisait pas.
+
+- `voix/pupitre.py` : un registre des conversations vivantes et deux baux — micro et parole.
+  Ecritures atomiques, autorite au PID verifie avec sa ligne de commande.
+- Le bail du micro se PREND au demarrage : lancer une conversation, c'est vouloir lui parler.
+  Les autres continuent leur travail, elles arretent seulement d'ecouter.
+- Le bail de parole fait attendre son tour a la seconde conversation, qui le dit dans son flux.
+- L'en-tete liste les conversations ouvertes, avec des liens vers leur propre tableau et un
+  bouton « ecouter ici ». `vvsessions` fait la meme chose depuis le terminal.
+- Ecouter = vouloir ET avoir le bail. Deux etats separes, un seul endroit qui calcule
+  l'effectif : les quatre combinaisons sont testees.
+- Cas degrades couverts : detenteur tue, bail de parole perime, fichier tronque, PID
+  reattribue. Sans eux, un agent tue au mauvais moment rendait les autres sourds pour toujours.
+
+### Ajoute — couper et relire une reponse, depuis sa ligne
+
+- « couper » n'apparait que sur la lecture qui joue : « couper la parole » ne dit pas laquelle.
+- « relire » fonctionne sur n'importe quelle reponse, y compris ancienne. Les quarante derniers
+  textes sont conserves : une deuxieme synthese ne coute que des caracteres, la ou refaire le
+  tour couterait tout le travail.
+
+### Corrige — le panneau annoncait le port demande, pas le port reel
+
+Avec plusieurs conversations, la bascule de port devient la regle. Un panneau qui annonce une
+adresse ou personne ne repond est pire que pas d'adresse du tout.
+
 ## [1.4.0] — 2026-08-25
 
 ### Corrige — la pastille annonçait la taille de la fenetre, pas le temps restant

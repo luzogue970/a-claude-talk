@@ -340,6 +340,76 @@ dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passe
 dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
      'et renvoie vers le bouton du decompte');
 
+// ---- conversations en parallele ---------------------------------------------------------
+titre('pupitre : plusieurs conversations, un seul micro');
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+
+majPupitre({ moi: 1001, sessions: [{ pid: 1001, projet: 'seule', port: 7788, micro: true }] });
+dire(zonePupitre.innerHTML === '',
+     'seul, aucun selecteur : arbitrer une conversation unique serait du bruit');
+
+majPupitre({ moi: 1001, sessions: [
+  { pid: 1001, projet: 'claude-talk', chemin: '/x/ct', port: 7788, micro: false },
+  { pid: 1002, projet: 'insnap', chemin: '/x/is', port: 7789, micro: true, parle: true },
+  { pid: 1003, projet: 'cyna', chemin: '/x/cy', port: 7790, micro: false },
+]});
+const hp = zonePupitre.innerHTML;
+dire(/claude-talk/.test(hp) && /insnap/.test(hp) && /cyna/.test(hp),
+     'les trois conversations sont listees');
+dire(/class="sess muette moi"/.test(hp), 'celle qu on regarde est marquee « moi »');
+dire(/class="sess ecoute parle"/.test(hp), 'celle qui ecoute ET lit est marquee comme telle');
+dire(hp.includes('href="http://127.0.0.1:7789/"'),
+     'les autres sont des liens vers leur propre tableau');
+dire(!hp.includes('href="http://127.0.0.1:7788'), 'la sienne n est pas un lien vers soi-meme');
+dire(/prendre-micro/.test(hp), 'un bouton « ecouter ici » puisque le micro est ailleurs');
+
+document.getElementById('prendre-micro').onclick();
+dire(envoyes.some(o => o.cmd === 'prendre_micro'), 'le bouton demande le micro au serveur');
+
+majPupitre({ moi: 1001, sessions: [
+  { pid: 1001, projet: 'ct', port: 7788, micro: true },
+  { pid: 1002, projet: 'is', port: 7789, micro: false },
+]});
+dire(!/prendre-micro/.test(zonePupitre.innerHTML),
+     'deja en ecoute : pas de bouton pour prendre ce qu on a');
+
+// ---- couper et relire UNE reponse -------------------------------------------------------
+titre('boutons de lecture, accroches a leur reponse');
+flux.children.length = 0; dernier = null; lignesVoix.clear(); lectureEnCours = null;
+ajouter({ n: 800, genre: 'voix', id: 'p1', texte: 'premiere reponse', h: '12:00:00' });
+dire(lignesVoix.has('p1'), 'la ligne de la reponse est retenue par son identifiant');
+
+outillerParole({ id: 'p1', mots: 12 });
+const zl = lignesVoix.get('p1').zoneLecture;
+dire(!!zl && zl.children.length === 2, 'deux boutons ajoutes a la ligne');
+dire(zl.children[0].textContent === 'couper' && zl.children[1].textContent === 'relire',
+     'couper et relire');
+
+outillerParole({ id: 'p1', mots: 12 });
+dire(lignesVoix.get('p1').zoneLecture.children.length === 2,
+     'appele deux fois, les boutons ne doublent pas');
+
+lectureEnCours = null; majBoutonsLecture();
+dire(zl.children[0].style.display === 'none',
+     'aucune lecture en cours : « couper » est cache');
+dire(zl.children[1].classList.contains('vif'), 'et « relire » est mis en avant');
+lectureEnCours = 'p1'; majBoutonsLecture();
+dire(zl.children[0].style.display === '', 'lecture en cours : « couper » apparait');
+dire(!zl.children[1].classList.contains('vif'), 'et « relire » redevient discret');
+
+envoyes.length = 0;
+zl.children[0].onclick();
+dire(envoyes.some(o => o.cmd === 'couper_lecture'), 'couper envoie la bonne commande');
+zl.children[1].onclick();
+const rl = envoyes.find(o => o.cmd === 'relire');
+dire(rl && rl.id === 'p1',
+     'relire vise CETTE reponse, pas la derniere : ' + JSON.stringify(rl));
+
+lignesVoix.clear();
+let leve2 = false;
+try { outillerParole({ id: 'inconnu' }); } catch (e) { leve2 = true; }
+dire(!leve2, 'une reponse sans ligne ne leve pas d exception');
+
 // ---- fenetres de quota : le temps restant, pas la taille -------------------------------
 titre('pastilles de quota');
 const zoneQ = document.getElementById('compteurs');

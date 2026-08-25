@@ -45,6 +45,7 @@ try:
 except ImportError:   # paquet absent d'un venv reconstruit : on doit rester audible
     deepgram = None
 
+import pupitre
 import stt_local
 
 import config
@@ -114,6 +115,17 @@ class Voix(Agent):
         # La session, gardée directement. Voir la propriété `sess` : c'est la correction du
         # « micro coupé qui ne se coupe pas du premier clic ».
         self._session_directe = None
+        # Deux choses differentes, delibérément separees : ce que TU veux (le bouton) et ce
+        # que le bail autorise (une seule conversation ecoute a la fois). Ecouter = les deux.
+        # Les confondre ferait qu'une prise de micro rouvrirait un micro que tu avais coupe.
+        self.micro_voulu = True
+        self.inscription = None
+        # La lecture en cours, pour pouvoir la couper précisément. Et les réponses déjà dites,
+        # pour pouvoir les relire : le texte existe, une seconde synthèse ne coûte que des
+        # caractères, alors que refaire le tour coûterait tout le travail.
+        self._lecture = None
+        self._paroles: dict[str, str] = {}
+        self._id_parole: str | None = None
         # Marque le tour suivant comme tapé plutôt que dicté. Posé par la commande texte du
         # tableau, lu et effacé par llm_node — pour qu'UNE seule ligne « toi » soit publiée
         # par tour, quel que soit le canal.
@@ -255,9 +267,76 @@ class Voix(Agent):
                 # chiffre arrive, une seconde plus tard.
                 if self.quota:
                     asyncio.create_task(self._mesurer_quota())
-                # say() takes an async iterable, so the voice starts on the first sentence
-                # the porte-parole produces instead of waiting for the whole rewrite.
-                await self.sess.say(self._debrief(charge), allow_interruptions=True)
+                await self._lire(self._debrief(charge))
+
+    async def _attendre_son_tour(self):
+        """Attendre qu'aucune autre conversation ne soit en train de lire.
+
+        Deux voix sur les mêmes haut-parleurs ne s'additionnent pas, elles s'annulent : on ne
+        comprend ni l'une ni l'autre. Celle qui arrive en second attend son tour.
+
+        Le plafond existe pour la même raison que le bail périmé : un agent tué en pleine
+        lecture ne libère rien, et le silence définitif des autres serait un prix absurde.
+        """
+        if not self.inscription:
+            return
+        limite = time.monotonic() + 90
+        annonce = False
+        while time.monotonic() < limite:
+            autre = self.inscription.parole_ailleurs()
+            if autre is None:
+                return
+            if not annonce:
+                annonce = True
+                self._voir("attente", texte=f"une autre conversation lit sa réponse "
+                                            f"(session {autre}) — j'attends mon tour")
+            await asyncio.sleep(0.4)
+        log.warning("attente de parole abandonnée après 90 s")
+
+    async def _lire(self, source):
+        """Lire une réponse : attendre son tour, prendre la parole, la rendre à la fin.
+
+        La poignée est conservée pour que la page puisse couper CETTE lecture — et non
+        « la parole en général » — et pour pouvoir la relancer si elle a été coupée.
+        """
+        await self._attendre_son_tour()
+        if self.inscription:
+            self.inscription.prendre_parole()
+        poignee = await self.sess.say(source, allow_interruptions=True)
+        self._lecture = poignee
+
+        def rendre(_):
+            if self.inscription:
+                self.inscription.liberer_parole()
+            if self._lecture is poignee:
+                self._lecture = None
+            self._voir("lecture", actif=False, id=self._id_parole)
+
+        # Rendue par rappel, pas en attendant ici : la pompe doit rester libre de traiter
+        # l'événement suivant pendant que la voix parle.
+        poignee.add_done_callback(rendre)
+        self._voir("lecture", actif=True, id=self._id_parole)
+        return poignee
+
+    def couper_lecture(self) -> bool:
+        """Couper la lecture en cours, et elle seule."""
+        if self._lecture is not None and not self._lecture.done():
+            self._lecture.interrupt()
+            return True
+        return False
+
+    async def relire(self, cle: str | None = None) -> bool:
+        """Relire une réponse déjà dite. Sans clé, la dernière.
+
+        Utile quand la lecture a été coupée — par une interruption, par un bruit, par un
+        clic — parce que le texte existe toujours et qu'une deuxième synthèse ne coûte que
+        des caractères, là où refaire le tour coûterait le travail entier.
+        """
+        texte = (self._paroles.get(cle) if cle else None) or self._dernier_debrief
+        if not texte:
+            return False
+        await self._lire(texte)
+        return True
 
     async def _mesurer_quota(self):
         """De combien les fenêtres ont bougé pendant le tour qui vient de finir."""
@@ -310,6 +389,24 @@ class Voix(Agent):
             return self.quota.resume_parle() if self.quota else "je n'ai pas le quota."
         return None
 
+    def appliquer_micro(self, publier: bool = True) -> bool:
+        """Aligne l'entree audio sur « voulu ET autorisé ». Renvoie l'etat effectif.
+
+        Un seul endroit calcule l'etat reel du micro. Deux endroits qui l'ecrivent finissent
+        toujours par se contredire, et le symptome serait le pire possible : croire qu'on est
+        ecoute alors qu'on ne l'est pas, ou l'inverse.
+        """
+        bail = self.inscription.detient_micro() if self.inscription else True
+        effectif = self.micro_voulu and bail
+        try:
+            self.sess.input.set_audio_enabled(effectif)
+        except Exception:
+            log.debug("micro non applicable pour l'instant", exc_info=True)
+            return effectif
+        if publier:
+            self._voir("micro", actif=effectif, voulu=self.micro_voulu, bail=bail)
+        return effectif
+
     def couper_micro(self) -> str:
         """Cuts the input and returns what to say about it.
 
@@ -322,20 +419,33 @@ class Voix(Agent):
         Le message est dit après la coupure, jamais avant : la coupure doit être immédiate, et
         comme elle ne concerne que l'entrée, la confirmation s'entend quand même. Elle nomme
         toujours le chemin du retour : micro fermé, on ne peut plus demander à le rouvrir."""
-        self.sess.input.set_audio_enabled(False)
-        self._voir("micro", actif=False)
+        self.micro_voulu = False
+        self.appliquer_micro()
         suite = "la réflexion continue" if self.worker.occupe else "j'attends tes instructions"
         return f"le micro est bien coupé, {suite}. Touche m ou le bouton pour le rouvrir."
 
     async def _debrief(self, journal_):
         """Feeds TTS and the page from the same stream, so what you read is what you hear."""
         morceaux = []
+        # Un identifiant par réponse : sans lui, « relire » ne pourrait viser que la dernière,
+        # alors que ce qu'on veut relire est souvent celle d'avant.
+        cle = f"p{len(self._paroles) + 1}"
+        self._id_parole = cle
         async for bout in self.porte_parole.dire_flux(journal_):
             morceaux.append(bout)
-            self._voir("voix", texte=bout, suite=True)
+            self._voir("voix", texte=bout, suite=True, id=cle)
             yield bout
         # Kept so "répète" can say it again without paying for a second rewrite.
         self._dernier_debrief = "".join(morceaux).strip() or None
+        if self._dernier_debrief:
+            self._paroles[cle] = self._dernier_debrief
+            # Bornée : garder tout l'historique parlé d'une session de deux jours n'aurait
+            # aucun usage et grossirait sans fin.
+            if len(self._paroles) > 40:
+                for vieux in list(self._paroles)[:-40]:
+                    self._paroles.pop(vieux, None)
+            # La ligne du flux reçoit ses boutons quand le texte complet existe.
+            self._voir("parole_fin", id=cle, mots=len(self._dernier_debrief.split()))
         if self.conv:
             self.conv.tour_claude(self._dernier_debrief or "", outils=journal_lignes(journal_),
                                   jetons=getattr(journal_, "jetons", None),
@@ -469,6 +579,16 @@ async def entrypoint(ctx: JobContext):
         log.warning("%s", alerte)
         tableau.publier("erreur", texte=alerte)
 
+    # Le registre des conversations parallèles, et le bail sur le micro. Le micro est la
+    # seule ressource vraiment exclusive : deux agents qui écoutent transcrivent la même
+    # phrase, l'envoient chacun à son Claude, et consomment deux fois la même fenêtre.
+    #
+    # Le bail se PREND au démarrage : lancer une conversation, c'est vouloir lui parler. Les
+    # autres continuent leur travail, elles arrêtent seulement d'écouter.
+    inscription = pupitre.Inscription(
+        projet=Path(config.WORKDIR).name, chemin=config.WORKDIR, port=tableau.port)
+    inscription.prendre_micro()
+
     conv = journal.Conversation(
         projet=Path(config.WORKDIR).name,
         modele=config.WORKER_MODEL,
@@ -498,6 +618,10 @@ async def entrypoint(ctx: JobContext):
         f"{config.STT_ENGINE} · {config.LANGUAGE} · {len(config.phrase_list())} termes biaisés"
         + (f" · repli local {config.STT_LOCAL_MODELE}"
            if config.STT_ENGINE == "auto" else ""))
+    # Le port REEL, pas celui demande : avec plusieurs conversations en parallele la bascule
+    # de port devient la regle, et un panneau qui annonce une adresse ou personne ne repond
+    # est pire que pas d'adresse du tout.
+    valeurs["tableau"] = f"http://127.0.0.1:{tableau.port}"
     valeurs["journal"] = conv.fichier.name
     if config.REPRENDRE:
         valeurs["reprise de"] = config.REPRENDRE
@@ -623,6 +747,12 @@ async def entrypoint(ctx: JobContext):
         if porte_parole.client:
             await porte_parole.client.disconnect()
         await quota.fermer()
+        # Rendre le bail : sans ça, fermer la conversation qui écoutait laisserait les
+        # autres sourdes jusqu'à ce que l'une d'elles constate la mort du détenteur.
+        try:
+            inscription.liberer()
+        except Exception:
+            log.debug("libération du pupitre", exc_info=True)
         await tableau.arreter()
 
     ctx.add_shutdown_callback(fermer)
@@ -701,8 +831,13 @@ async def entrypoint(ctx: JobContext):
             actif = bool(donnees.get("actif", True))
             try:
                 if actif:
-                    session.input.set_audio_enabled(True)
-                    tableau.publier("micro", actif=bool(session.input.audio_enabled))
+                    agent.micro_voulu = True
+                    # Vouloir écouter ici, c'est vouloir écouter ICI : on reprend donc le
+                    # bail. Sans ça, rouvrir le micro ne ferait rien de visible tant qu'une
+                    # autre conversation le détient — un bouton sans effet, encore.
+                    if inscription.prendre_micro():
+                        publier_pupitre()
+                    agent.appliquer_micro()
                 else:
                     # Same path as the spoken command, minus the confirmation: you are looking
                     # at the page, the red button says it.
@@ -776,6 +911,35 @@ async def entrypoint(ctx: JobContext):
             tableau.publier("ordre",
                             texte=f"envoi après {plancher:g} s de silence "
                                   f"(jusqu'à {plafond:g} s si la phrase semble inachevée)")
+        elif nom == "couper_lecture":
+            if agent.couper_lecture():
+                tableau.publier("ordre", texte="lecture coupée")
+            else:
+                tableau.publier("log", niveau="INFO", source="lecture",
+                                texte="aucune lecture en cours")
+        elif nom == "relire":
+            cle = donnees.get("id")
+            if not await agent.relire(cle if isinstance(cle, str) else None):
+                tableau.publier("log", niveau="INFO", source="lecture",
+                                texte="ce texte n'est plus en mémoire")
+        elif nom == "prendre_micro":
+            # Prendre le micro pour CETTE conversation. Les autres se taisent d'elles-mêmes
+            # en une seconde, par leur propre surveillance.
+            agent.micro_voulu = True
+            inscription.prendre_micro()
+            agent.appliquer_micro()
+            publier_pupitre()
+            tableau.publier("ordre", texte="micro pris pour cette conversation")
+        elif nom == "ceder_micro":
+            cible = donnees.get("pid")
+            if isinstance(cible, int) and pupitre.ceder_a(cible):
+                agent.appliquer_micro()
+                publier_pupitre()
+                tableau.publier("ordre", texte=f"micro cédé à la session {cible}")
+            else:
+                tableau.publier("log", niveau="WARNING", source="pupitre",
+                                texte="cette conversation n'existe plus")
+                publier_pupitre()
         elif nom == "retenir_tour":
             # Rattraper le message pendant son décompte. On n'arme PAS le mode : c'est ce
             # tour-là qu'on veut relire, pas tous les suivants.
@@ -804,9 +968,45 @@ async def entrypoint(ctx: JobContext):
     # Sans ça, tout appel venant du tableau passerait par Agent.session et son contrôle
     # d'activité — voir Voix.sess.
     agent.attacher_session(session)
+    agent.inscription = inscription
     tableau.on_commande = commande
     tableau.publier("micro", actif=session.input.audio_enabled)
 
+    def publier_pupitre():
+        """Qui existe, qui écoute, et où aller pour les rejoindre."""
+        tableau.publier("pupitre", moi=inscription.pid,
+                        sessions=[
+                            {"pid": s["pid"], "projet": s.get("projet") or "?",
+                             "chemin": s.get("chemin") or "", "port": s.get("port"),
+                             "micro": s.get("micro", False), "depuis": s.get("depuis")}
+                            for s in pupitre.sessions()])
+
+    async def surveiller_pupitre():
+        """Suivre le bail, et le registre.
+
+        Un fichier plutôt qu'un signal : l'état survit au redémarrage d'un agent, et un agent
+        qui n'a pas encore démarré peut quand même être découvert par les autres. Une seconde
+        de latence est invisible à l'usage et coûte moins qu'une surveillance d'inotify à
+        maintenir.
+        """
+        dernier = None
+        while True:
+            try:
+                bail = inscription.detient_micro()
+                etat = (bail, tuple(sorted(
+                    (s["pid"], s.get("micro", False)) for s in pupitre.sessions())))
+                if etat != dernier:
+                    dernier = etat
+                    agent.appliquer_micro()
+                    publier_pupitre()
+                    if not bail:
+                        log.info("micro cédé à une autre conversation")
+            except Exception:
+                log.debug("surveillance du pupitre", exc_info=True)
+            await asyncio.sleep(1.0)
+
+    publier_pupitre()
+    asyncio.create_task(surveiller_pupitre())
     asyncio.create_task(agent.pomper_evenements())
     asyncio.create_task(quota.boucle())
     if config.STT_ENGINE in ("auto", "local"):

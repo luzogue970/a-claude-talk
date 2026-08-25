@@ -574,16 +574,56 @@ est bien celle d'un agent — parce qu'un PID libéré est réattribué : sans c
 conversation morte réapparaîtrait comme active dès qu'un navigateur hérite du numéro, et
 l'avertissement deviendrait du bruit qu'on apprend à ignorer.
 
-### Une seule session à la fois
+### Plusieurs conversations en parallèle
 
-Deux agents ne se cassent pas mutuellement — le tableau change de port tout seul — mais ils
-**se disputent le micro et consomment la même fenêtre de quota**. C'est exactement ce qui
-s'était produit : un zombie qui mangeait le quota sans que personne l'écoute.
+Trois sujets ouverts en même temps est un usage normal : `vv` dans trois projets, trois
+tableaux sur trois ports. Ce qui ne se partage pas, c'est le **micro** et les **haut-parleurs**
+— deux agents qui écoutent transcrivent la même phrase et l'envoient chacun à son Claude, et
+deux voix sur les mêmes haut-parleurs ne s'additionnent pas, elles s'annulent.
 
-Au lancement, `vv` avertit donc si une session tourne déjà, en nommant le PID, le projet et le
-chemin — « pid 4123, 1,5 Go » ne permet pas de décider s'il faut le tuer, « pid 4123, projet
-insnap » si. Le tableau affiche le même avertissement. C'est un **avertissement, pas un
-blocage** : bloquer empêcherait aussi les cas légitimes. Pour nettoyer : `vvstop`.
+Deux baux, dans `~/.config/claude-talk/` :
+
+| | |
+|---|---|
+| **micro** | une seule conversation écoute. Le bail se **prend**, il ne se demande pas : lancer une conversation, c'est vouloir lui parler. |
+| **parole** | une seule lit à la fois. Celle qui arrive en second attend son tour, et le dit dans son flux. |
+
+**Ce qui n'est pas coupé chez les autres : leur travail.** Claude continue sa tâche, son
+tableau continue de la montrer. Seule l'écoute s'arrête, parce que c'est la seule ressource
+réellement exclusive.
+
+L'en-tête de chaque tableau liste les conversations ouvertes — celle qu'on regarde en plein,
+celles qui écoutent avec un point vert, celle qui lit avec un chevron — et les autres sont des
+**liens vers leur propre tableau**. Un bouton `écouter ici` prend le micro ; les autres se
+taisent d'elles-mêmes en une seconde.
+
+```fish
+vvsessions   # qui est ouvert, qui écoute, sur quel port
+```
+
+**Écouter = vouloir ET avoir le bail.** Deux états séparés, un seul endroit qui calcule
+l'effectif : couper le micro à la main n'abandonne pas le bail, et reprendre le bail ne
+rouvre pas un micro qu'on avait coupé. Les quatre combinaisons sont testées — parce que le
+pire symptôme possible serait de croire qu'on est écouté alors qu'on ne l'est pas.
+
+**Les cas dégradés sont ceux qui comptent.** L'autorité est le PID, vérifié avec sa ligne de
+commande. Un détenteur tué par un `kill -9` libère le bail au premier qui regarde ; un bail de
+parole de plus de trois minutes est périmé ; un fichier tronqué est traité comme vacant ; un
+PID réattribué à un autre programme ne détient rien. Sans ces quatre garde-fous, un agent tué
+au mauvais moment rendait tous les autres sourds ou muets pour toujours.
+
+### Couper et relire une réponse
+
+Chaque réponse parlée porte ses propres commandes, dans le flux :
+
+- **couper** — n'apparaît que sur la lecture qui joue vraiment ; « couper la parole » ne dit
+  pas laquelle.
+- **relire** — sur n'importe quelle réponse, y compris ancienne. Le texte est conservé (les
+  quarante dernières), donc une deuxième synthèse ne coûte que des caractères, là où refaire
+  le tour coûterait tout le travail.
+
+C'est ce qui rattrape une lecture coupée par un bruit, par un barge-in involontaire, ou par
+une autre conversation qui a pris la parole.
 
 Les conversations antérieures à l'enregistrement du chemin sont rapprochées du dossier courant
 par le nom du projet, et l'affichage le dit — une déduction n'est pas présentée comme un fait.
