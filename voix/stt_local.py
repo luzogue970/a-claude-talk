@@ -71,7 +71,7 @@ class WhisperLocal(stt.STT):
                 audio, language=self.langue, beam_size=1,
                 condition_on_previous_text=False,
                 # Les mots du projet, comme la phrase_list d'Azure : whisper s'appuie
-                # dessus pour ne pas transformer « MQL » en « kubedka ».
+                # dessus pour ne pas transformer un sigle maison en « kubedka ».
                 initial_prompt=", ".join(config.phrase_list()[:40]),
             )
             return "".join(s.text for s in segments).strip()

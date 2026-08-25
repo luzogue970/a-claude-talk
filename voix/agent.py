@@ -468,7 +468,8 @@ class Voix(Agent):
 
 
 def _stt_azure():
-    # phrase_list biases the acoustic layer. Without it Azure fr-FR turned "MQL" into
+    # phrase_list biases the acoustic layer. Without it Azure fr-FR turned a three-letter
+    # in-house acronym into
     # "kubedka" and "un fichier point MD" into "un point MD".
     return azure.STT(
         speech_key=config.AZURE_KEY,
@@ -483,7 +484,7 @@ def _stt_deepgram():
     """Le repli de même calibre qu'Azure.
 
     keyterm est à nova-3 ce que phrase_list est à Azure : sans lui la bascule ferait perdre
-    le vocabulaire du projet au pire moment, et « MQL » redeviendrait « kubedka » juste
+    le vocabulaire du projet au pire moment, et un sigle maison redeviendrait « kubedka » juste
     parce qu'Azure a manqué de crédit."""
     extra = {}
     if config.DEEPGRAM_KEYTERM:

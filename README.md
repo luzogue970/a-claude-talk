@@ -4,6 +4,11 @@ Agent conversationnel vocal pour développer, en français. Tu parles, Claude Co
 aussi longtemps qu'il faut, puis il te **raconte** ce qu'il a fait — pas en lisant son
 markdown à voix haute, mais en te briefant comme un collègue.
 
+> **Où regarder.** Tout le système vit dans **`voix/`** ; `outils/voix.fish` fournit les
+> raccourcis de shell. **`tts/` est l'ancien système**, conservé le temps de la transition et
+> gardé pour ses voix Piper — il ne participe à rien de ce qui est décrit ici, et il n'y a
+> aucune raison de le lire.
+
 ## Architecture
 
 ```
@@ -40,9 +45,25 @@ markdown à voix haute, mais en te briefant comme un collègue.
 il lit le journal des outils réellement appelés. C'était la faille de la version
 précédente : le résumé parlé ne voyait que le dernier paragraphe de texte.
 
+## Prérequis
+
+| | | |
+|---|---|---|
+| **Python** | 3.13 recommandé | testé sur 3.13 ; 3.11+ devrait convenir, les versions sont figées dans `requirements.txt` |
+| **Claude Code** | la CLI, authentifiée | `claude` dans le `PATH`, ou l'extension VS Code (l'agent trouve la plus récente des deux). C'est ce binaire qui fait le travail. |
+| **Un compte Claude** | siège Team, Max ou Pro | l'agent ne gère aucune clé API Anthropic : il réutilise l'authentification de la CLI (`~/.claude/.credentials.json`). Lance `claude` une fois et connecte-toi. |
+| **Azure Speech** | une ressource, région au choix | reconnaissance **et** synthèse. Le palier gratuit F0 donne 5 h de transcription et 500 k caractères par mois. |
+| **Linux + PipeWire/PulseAudio** | | développé sur Fedora/i3. Le mode console de LiveKit fournit l'annulation d'écho, donc micro et haut-parleurs du portable suffisent. |
+| **fish** | facultatif | seulement pour les raccourcis `vv`. Tout marche sans, en lançant Python directement. |
+| **Deepgram** | facultatif | second moteur de reconnaissance, en repli d'Azure. Sans clé, la chaîne est Azure → local. |
+
+**Ce qui n'est pas nécessaire :** aucun compte LiveKit (le mode console est local), aucune clé
+API Anthropic, aucun GPU.
+
 ## Installation
 
 ```sh
+git clone <ce-dépôt> claude-talk && cd claude-talk
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt          # versions figées, voir l'avertissement
 .venv/bin/python voix/agent.py download-files      # modèles locaux (VAD, détecteur de tour)
@@ -54,13 +75,59 @@ python3 -m venv .venv
 > `livekit-agents` à jour à l'aveugle : le jour où tu le fais, c'est ce mode-là qu'il faut
 > revérifier en premier.
 
-Les secrets vivent **hors du dépôt**, dans `~/.config/claude-talk/secrets.env` (chmod 600) :
+Les secrets vivent **hors du dépôt**, dans `~/.config/claude-talk/secrets.env` :
 
-```
+```sh
+mkdir -p ~/.config/claude-talk
+cat > ~/.config/claude-talk/secrets.env <<'EOF'
 AZURE_SPEECH_KEY=...
 AZURE_SPEECH_REGION=francecentral
 AZURE_SPEECH_VOICE=fr-FR-Marc:MAI-Voice-2-Flash
+# facultatif — second moteur de reconnaissance, en repli d'Azure
+DEEPGRAM_API_KEY=
+EOF
+chmod 600 ~/.config/claude-talk/secrets.env
 ```
+
+Pour la clé Azure : portail Azure → *Create a resource* → **Speech** → une fois créée,
+*Keys and Endpoint*. Le palier **F0** est gratuit et suffit pour essayer ; il plafonne à 5 h
+de transcription et 500 k caractères de synthèse par mois. Voir
+*[Quand Azure lâche](#quand-azure-lâche)* pour ce qui se passe ensuite, et la variable
+`VOIX_TARIF_STT` pour le suivi des coûts.
+
+Pour Deepgram, facultatif : [console.deepgram.com](https://console.deepgram.com) → *API Keys*.
+
+### Les raccourcis fish
+
+Le dépôt les fournit ; ils ne sont pas installés d'office parce qu'ils touchent à ta
+configuration de shell.
+
+```fish
+ln -s (pwd)/outils/voix.fish ~/.config/fish/conf.d/voix.fish
+exec fish
+voix          # l'aide : toutes les commandes et ce qu'elles font
+```
+
+`VOIX_RACINE` est déduit de l'emplacement du fichier, symlink compris — rien à régler. Sans
+fish, chaque raccourci a son équivalent direct : voir *Lancer* juste en dessous.
+
+### Vérifier que tout est en place
+
+```sh
+.venv/bin/python voix/agent.py console --list-devices   # les périphériques sont vus
+cd voix && ../.venv/bin/python test_noyau.py            # la boucle tourne, sans micro
+node test_front.js                                      # le tableau de bord
+```
+
+Au premier lancement, le **panneau de configuration** en haut du tableau dit ce qui est
+réellement en vigueur — dont `binaire claude`, qui vaut `INTROUVABLE` si la CLI n'est pas
+trouvée. C'est le premier endroit à regarder si quelque chose ne démarre pas.
+
+### Ajoute ton vocabulaire
+
+`config.PHRASE_LIST` contient une base générique. **Complète-la avec ton jargon** : sigles
+maison, noms de services, bibliothèques. C'est ce qui décide entre ton sigle et « kubedka ». Le
+nom du projet et la branche git courante sont ajoutés automatiquement ; le reste est à toi.
 
 ## Lancer
 
@@ -117,7 +184,8 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 
 Le vocabulaire biaisé pour la reconnaissance est dans `config.PHRASE_LIST` ; le nom du
 projet et la branche git y sont ajoutés automatiquement. **Ajoute-y ton jargon** : sans ça
-Azure transformait « MQL » en « kubedka » et « un fichier point MD » en « un point MD ».
+Azure transformait un sigle maison de trois lettres en « kubedka », et « un fichier point MD »
+en « un point MD ».
 
 ## Tableau de bord
 
@@ -1019,7 +1087,7 @@ azure → deepgram → local
 L'ordre n'est pas arbitraire. **Azure et Deepgram sont deux pairs** : les deux font du vrai
 streaming avec résultats intermédiaires, autour de 300 ms, donc la bascule de l'un à l'autre
 ne s'entend pas. Deepgram `nova-3` accepte le `keyterm prompting`, l'équivalent exact de la
-`phrase_list` d'Azure — le vocabulaire du projet survit donc à la bascule, et « MQL » ne
+`phrase_list` d'Azure — le vocabulaire du projet survit donc à la bascule, et ton sigle ne
 redevient pas « kubedka » juste parce qu'Azure a manqué de crédit.
 
 **Le moteur local est en dernier**, parce que lui s'entend : 4 à 5 s par phrase. Il reste
@@ -1043,7 +1111,7 @@ Ce que le local vaut, mesuré sur ce portable (i5-1335U, sans GPU, int8) :
 | modèle | 2 s d'audio | qualité |
 |---|---|---|
 | `base` | 1,5-1,9 s | moyenne — perd des mots |
-| **`small`** (défaut) | 4,2-4,9 s | correcte, garde `config.py` et `MQL` |
+| **`small`** (défaut) | 4,2-4,9 s | correcte, garde `config.py` et les sigles du projet |
 
 C'est plus lent qu'Azure et il faut l'assumer. En échange : aucun quota, aucune facture, et
 **l'audio ne quitte pas la machine** — ce qui pour du code d'entreprise n'est pas un détail.

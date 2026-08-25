@@ -3,12 +3,13 @@
 Ce qu'il faut prouver : le mot de reveil ouvre, le tour suivant n'en a plus besoin, le
 contexte est conserve entre les tours, et une formulation de sortie ferme.
 """
-import asyncio, os, sys, time, urllib.request, wave, pathlib
+import asyncio, os, sys, tempfile, time, urllib.request, wave, pathlib
 sys.path.insert(0, os.path.dirname(__file__))
 import config
 from assistant import Assistant, TAUX
 
-DOSSIER = pathlib.Path("/tmp/claude-1000/-home-mathieulp-Documents-mathieu-obsidian-kaizen/eda31a1b-e94c-4fca-94ee-75513d4a62a0/scratchpad/audio")
+DOSSIER = pathlib.Path(tempfile.mkdtemp(prefix="conv-"))  # jamais un chemin en dur :
+# il porterait le nom d'utilisateur de qui l'a ecrit, et ne marcherait que chez lui.
 
 TOURS = [
     ("Hey Claude, quelle est la taille de la Terre ?", "ouvre la conversation"),

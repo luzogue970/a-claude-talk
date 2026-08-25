@@ -7,6 +7,40 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.6.0] — 2026-08-25
+
+### Corrige — le depot etait incomplet pour une installation neuve
+
+Un clone ne suffisait pas a demarrer, et le README supposait des choses absentes du depot.
+
+- `faster-whisper` manquait dans `requirements.txt` : le repli local plantait sur une
+  installation neuve. Un controle automatique verifie desormais que chaque import tiers a sa
+  dependance declaree — c'est cette classe de bug qui echappe a la relecture.
+- `outils/voix.fish` : les raccourcis `vv` etaient references dix fois dans le README sans
+  jamais etre livres. `VOIX_RACINE` se deduit de l'emplacement du fichier, symlink compris.
+  Les fonctions dependant d'une unite systemd ou d'un script i3 ne sont pas livrees : une
+  commande qui echoue est pire qu'une commande absente.
+- Une section **Prerequis** : version de Python, la CLI Claude Code authentifiee, le compte,
+  Azure, et ce qui n'est PAS necessaire — aucun compte LiveKit, aucune cle API Anthropic,
+  aucun GPU.
+- Les etapes de creation de la ressource Azure et de la cle Deepgram, et une sequence de
+  verification qui dit ou regarder quand ca ne demarre pas.
+
+### Corrige — des references personnelles dans un depot destine a etre partage
+
+- `PHRASE_LIST` contenait des noms de projets internes. La liste de base est generique, et le
+  README explique que c'est a completer — c'est justement ce qui fait la difference entre un
+  sigle maison et « kubedka ».
+- `test_conversation.py` portait un chemin absolu avec un nom d'utilisateur : il ne marchait
+  que sur une machine. Dossier temporaire.
+- Les anecdotes de transcription sont conservees, sans nommer le projet : la mesure garde sa
+  valeur, le nom n'en apportait aucune.
+
+### Ajoute — un avertissement sur `tts/`
+
+L'ancien systeme est toujours la, conserve pour ses voix Piper. Un lecteur devait pouvoir
+l'apprendre en cinq secondes plutot qu'en le lisant.
+
 ## [1.5.0] — 2026-08-25
 
 ### Ajoute — plusieurs conversations en parallele, arbitrees

@@ -306,11 +306,17 @@ def resume() -> dict:
     }
 
 # --- vocabulaire -------------------------------------------------------------
-# Azure fr-FR alone turns "un fichier point MD" into "un point MD" and "MQL" into
+# Azure fr-FR alone turns "un fichier point MD" into "un point MD" and a three-letter
+# in-house acronym into
 # "kubedka". A phrase list biases the acoustic layer; the project name and branch
 # are appended at runtime, the way the native /voice does it.
+# Le vocabulaire de base, volontairement generique. AJOUTE LE TIEN : c'est ce qui fait la
+# difference entre ton sigle maison et « kubedka ». Le nom du projet et la branche git
+# courante sont
+# ajoutes automatiquement, mais les sigles maison, les noms de services et le jargon d'equipe
+# doivent etre listes ici a la main.
 PHRASE_LIST = [
-    "MQL", "GLIMPS", "gliphish", "Claude Code", "LiveKit", "Pipecat",
+    "Claude Code", "LiveKit", "Pipecat",
     "markdown", "gitignore", "commit", "rebase", "pull request", "merge request",
     "refactor", "linter", "pytest", "venv", "async", "await", "JSON", "YAML",
     "TypeScript", "Python", "Docker", "Kubernetes", "CI", "pipeline",
