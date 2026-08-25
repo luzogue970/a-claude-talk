@@ -7,6 +7,24 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.6.0] — 2026-08-25
+
+### Ajoute — modele a chaud, effort par reconstruction, correlation des outils
+
+La session Claude Code unique et autoritaire, pilotable en cours de route.
+
+- `changer_modele()` par `set_model()`. Le cout a connaitre : ca invalide le cache
+  de prompt.
+- `changer_effort()` par reconstruction du client : le SDK n'expose PAS de
+  `set_effort`. La session est reprise, donc le contexte revient complet. Deux
+  garde-fous : jamais en pleine tache, et construire avant de basculer avant de
+  lacher l'ancien — l'ordre inverse laissait 2,5 s ou le client etait mort.
+- `ToolUseBlock.id` et `is_error` publies : le verdict d'un outil vient du SDK, pas
+  d'une supposition. Un outil sans sortie publie quand meme son resultat, sinon
+  son indicateur tournerait indefiniment.
+- Les deltas vides ne sont plus publies : mesure sur une session reelle, 65
+  evenements « pensee » sur 65 avaient un texte vide.
+
 ## [0.5.0] — 2026-08-25
 
 ### Ajoute — transcripts, etats de conversation et reprise complete
