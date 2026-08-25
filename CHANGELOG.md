@@ -7,6 +7,32 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.8.0] — 2026-08-25
+
+### Ajoute — orchestration : chaine STT, fenetre de parole, dictee retenue
+
+Ce qui assemble le tout : LiveKit pour l'audio, Claude Code pour le travail, un
+porte-parole Haiku pour la voix.
+
+- Chaine de reconnaissance Azure -> Deepgram -> local, decidee par une seule
+  fonction que l'agent ET le panneau lisent, pour qu'ils ne racontent pas deux
+  histoires. Deepgram `nova-3` accepte le `keyterm`, donc le vocabulaire du
+  projet survit a la bascule.
+- Fenetre de parole reglable. Le defaut de LiveKit committait le tour apres 0,3 s
+  de silence : une pause pour reflechir devenait une fin de phrase, et la suite
+  arrivait comme un second message par-dessus. Plancher a 5 s, plafond
+  proportionnel — un plafond fixe se retournait contre un plancher long.
+- Mode « retenir » et rattrapage d'un seul tour pendant le decompte.
+- Une ligne « toi » signifie « pris en compte », et rien d'autre : publiee par
+  chaque branche qui consomme l'enonce, jamais en amont.
+- `Voix.sess` : `Agent.session` leve des que l'activite est absente, or le tableau
+  appelle depuis l'exterieur d'un tour. C'est ce qui faisait echouer « couper le
+  micro » par intermittence.
+- Couper le micro ne touche plus a la parole en cours : « arrete de m'ecouter » et
+  « arrete de parler » sont deux demandes differentes.
+- Avertissement de session unique : deux agents se disputent le micro et la meme
+  fenetre de quota.
+
 ## [0.7.0] — 2026-08-25
 
 ### Ajoute — tableau de bord temps reel dans le navigateur
