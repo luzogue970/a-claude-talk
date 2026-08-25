@@ -353,6 +353,24 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
   border-radius:999px;padding:8px 10px;font:inherit;font-size:12.5px;cursor:pointer}
 #delai:hover{border-color:#4b5563}
 
+/* Une explication accessible sans manger le bouton. Le « i » est un élément SÉPARÉ : mis
+   dans le bouton, il aurait volé les clics destinés à la bascule, et « retenir » est fait
+   pour être basculé, pas pour être lu. */
+.avec-info{position:relative;display:inline-flex;align-items:center;gap:4px}
+.info{width:17px;height:17px;flex:none;border-radius:50%;border:1px solid var(--bord);
+  background:transparent;color:var(--faible);font:inherit;font-size:10.5px;font-weight:700;
+  font-style:italic;line-height:1;cursor:help;padding:0;display:inline-flex;
+  align-items:center;justify-content:center}
+.info:hover,.info.ouvert{border-color:var(--toi);color:#9ecbff}
+.bulle{position:absolute;bottom:calc(100% + 9px);right:0;z-index:30;width:290px;
+  background:var(--carte);border:1px solid var(--bord);border-radius:10px;
+  padding:11px 13px;font-size:11.5px;line-height:1.5;color:var(--faible);
+  box-shadow:0 12px 32px #00000080}
+.bulle[hidden]{display:none}
+.bulle b{color:var(--texte)}
+.bulle .astuce{color:#8a949f;border-top:1px solid var(--bord);display:block;
+  padding-top:8px;margin-top:2px}
+
 /* Le bascule dictée : envoyer tout seul, ou garder dans la barre pour corriger. */
 #retenir{background:transparent;border:1px solid var(--bord);border-radius:999px;
   padding:8px 14px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--faible);
@@ -479,8 +497,25 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
               placeholder="écrire au lieu de parler — touche /"
               aria-label="message à envoyer" maxlength="4000"></textarea>
     <select id="delai" title="au bout de combien de silence le message part"></select>
-    <button id="retenir" type="button"
-            title="retenir la dictée dans la barre au lieu de l'envoyer (touche r)">retenir</button>
+    <span class="avec-info">
+      <button id="retenir" type="button"
+              title="retenir la dictée dans la barre au lieu de l'envoyer (touche r)">retenir</button>
+      <button id="retenir-info" class="info" type="button"
+              aria-label="à quoi sert « retenir »">i</button>
+      <div id="retenir-aide" class="bulle" hidden>
+        <b>Retenir</b> — ce que tu dictes se dépose dans la barre au lieu de partir chez
+        Claude. Tu relis, tu corriges, tu envoies quand tu veux.
+        <br><br>
+        Utile quand la transcription se trompe sur un mot technique, ou quand tu penses à
+        voix haute avant de savoir ce que tu veux demander.
+        <br><br>
+        Les ordres immédiats — « coupe le micro », « stop » — continuent de passer : ce
+        ne sont pas des messages à relire.
+        <br><br>
+        <span class="astuce">Le décompte a son propre bouton « retenir » : il rattrape un
+        seul message, sans changer ce réglage.</span>
+      </div>
+    </span>
     <button id="envoyer" type="submit" disabled>envoyer</button>
   </form>
 </div>
@@ -1234,6 +1269,38 @@ function basculerRetenir() {
 }
 btnRetenir.onclick = basculerRetenir;
 majRetenir();
+
+// L'explication de « retenir ». Au survol pour la lire d'un coup d'oeil, au clic pour
+// qu'elle reste — sans jamais déclencher la bascule, qui est le rôle du bouton d'à côté.
+const btnInfo = document.getElementById("retenir-info");
+const bulle = document.getElementById("retenir-aide");
+let bulleEpinglee = false;
+
+function montrerBulle(oui) {
+  bulle.hidden = !oui;
+  btnInfo.classList.toggle("ouvert", oui);
+}
+btnInfo.addEventListener("mouseenter", () => montrerBulle(true));
+btnInfo.addEventListener("mouseleave", () => { if (!bulleEpinglee) montrerBulle(false); });
+btnInfo.addEventListener("click", ev => {
+  // Sans ça le clic remonterait jusqu'au gestionnaire global, qui refermerait aussitôt.
+  ev.stopPropagation();
+  bulleEpinglee = !bulleEpinglee;
+  montrerBulle(bulleEpinglee);
+});
+// Épinglée, elle se referme comme tout le reste : un clic ailleurs, ou Échap.
+addEventListener("click", ev => {
+  if (bulleEpinglee && !bulle.contains(ev.target) && ev.target !== btnInfo) {
+    bulleEpinglee = false;
+    montrerBulle(false);
+  }
+});
+addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && bulleEpinglee) {
+    bulleEpinglee = false;
+    montrerBulle(false);
+  }
+});
 
 // Taper reprend la main. L'événement input ne se déclenche que pour une vraie frappe — une
 // valeur posée par le script ne le déclenche pas — donc ceci ne peut venir que de toi, et ce

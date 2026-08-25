@@ -376,6 +376,13 @@ plus *courte* que la fenêtre normale : un réglage qui se retourne contre celui
 Une valeur venue de la configuration et absente des paliers reste proposée dans la liste :
 le sélecteur doit afficher ce qui est réellement en vigueur, pas le palier le plus proche.
 
+**Comprendre « retenir » sans documentation.** Un `ⓘ` à côté de la bascule ouvre une
+explication de quatre paragraphes : ce que le mode fait, quand il sert, que les ordres
+immédiats passent quand même, et que le décompte a son propre bouton. Il est **à côté** du
+bouton, pas dedans : mis dedans, il aurait volé les clics destinés à la bascule, et
+`retenir` est fait pour être basculé, pas pour être lu. Au survol elle apparaît, au clic elle
+s'épingle, Échap ou un clic ailleurs la referme.
+
 **Rattraper un message en vol.** Le décompte porte un bouton `retenir` : cliqué pendant la
 fenêtre, il garde **ce** message dans la barre au lieu de l'envoyer. Il n'arme pas le mode —
 sinon le tour suivant serait retenu sans qu'on l'ait demandé, une surprise dans le sens où

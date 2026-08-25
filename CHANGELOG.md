@@ -7,6 +7,29 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.1.1] — 2026-08-25
+
+### Ajoute — expliquer « retenir » sur place
+
+Le mot ne dit pas ce qu'il fait, et un `title` HTML se lit mal et tronque.
+
+- Un `i` a cote de la bascule ouvre une explication : ce que le mode fait, quand il sert,
+  que les ordres immediats passent quand meme, et que le decompte a son propre bouton.
+- Il est A COTE du bouton, pas dedans : dedans il aurait vole les clics destines a la
+  bascule, et « retenir » est fait pour etre bascule, pas pour etre lu. Un test verifie
+  precisement ca.
+- Survol pour lire, clic pour epingler, Echap ou clic ailleurs pour refermer.
+
+### Interne — les cas de test du front sortent du template literal
+
+Tant qu'ils vivaient dans un template literal, chaque antislash y etait mange une fois de
+plus : `\b` devenait un retour arriere, `\/` une simple barre oblique, et une regex correcte
+se transformait en erreur de syntaxe. C'est arrive quatre fois.
+
+- `voix/test_front_cas.js` est du JavaScript ordinaire : ce qu'on ecrit est ce qui s'execute.
+- L'etat initial des elements (attribut `hidden`, classes) est verifie sur le balisage reel
+  et non sur le stub, qui ne peut pas l'heriter.
+
 ## [1.1.0] — 2026-08-25
 
 ### Ajoute — filtres du flux regroupes en familles
