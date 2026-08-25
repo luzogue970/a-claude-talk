@@ -7,6 +7,18 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.0.0] — 2026-08-25
+
+### Documentation — README complet et CHANGELOG
+
+De l'installation a l'usage, avec les raisons derriere les choix — et les
+mesures qui les ont tranches, pour qu'un reglage ne soit pas defait par erreur.
+
+- Architecture, installation, lancement, reglages, tableau de bord, permissions,
+  ordres locaux, conversations, secrets, tests.
+- Chaque piege documente avec sa cause : le quota Azure, la fenetre de 0,3 s, le
+  clic avale, la session rangee par repertoire, la notification qui mentait.
+
 ## [0.9.0] — 2026-08-25
 
 ### Tests — harnais sans navigateur et invariants du serveur
