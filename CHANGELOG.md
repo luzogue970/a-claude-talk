@@ -7,6 +7,21 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.3.0] — 2026-08-25
+
+### Ajoute — repli local faster-whisper quand le cloud lache
+
+Le palier gratuit d'Azure s'arrete a 5 h de transcription par mois. Une fois
+epuise il repond `400 Quota exceeded` sur chaque requete, et sans filet la
+session devient sourde sans rien dire.
+
+- `WhisperLocal`, rendu streaming par le VAD via `StreamAdapter`.
+- Modele charge a la premiere phrase, pas au demarrage : quand le cloud repond,
+  ce module ne coute rien.
+- Vocabulaire du projet passe en `initial_prompt`, equivalent de la phrase list
+  d'Azure.
+- Mesure assumee : `small` prend 4,2 a 4,9 s pour 2 s d'audio sur ce portable.
+
 ## [0.2.0] — 2026-08-25
 
 ### Ajoute — reconnaitre les ordres locaux sur toute formulation
