@@ -7,6 +7,19 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.8.1] — 2026-08-25
+
+### Interne — « Hey Claude » verse au depot, desactive
+
+L'assistant d'arriere-plan est conserve mais arrete : service systemd renomme,
+raccourcis i3 commentes, aucun lanceur automatique.
+
+- Plafond de depense en centimes couvrant STT ET TTS, avec projection.
+- Detection de sortie audio : inutile d'ecouter quand les haut-parleurs jouent.
+- Desactive parce que le rapport interet / cout ne le justifiait pas, et parce que
+  `toggle-claude.sh` affichait « ecoute REACTIVEE » sans jamais verifier que le
+  service tournait.
+
 ## [0.8.0] — 2026-08-25
 
 ### Ajoute — orchestration : chaine STT, fenetre de parole, dictee retenue
