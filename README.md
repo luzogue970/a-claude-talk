@@ -212,6 +212,24 @@ lignes apparaissaient sans qu'on sache si elles tournaient encore, avaient about
   machine n'est pas morte. Tirage par sac mélangé, donc les quarante passent avant qu'un
   seul revienne.
 
+### L'en-tête, en zones
+
+Une seule rangée en `flex-wrap` se repliait n'importe comment : la pastille « parole » sautait
+à la ligne suivante et atterrissait **à gauche des filtres**. La position d'un élément
+changeait selon la largeur de la fenêtre, et on ne savait plus quoi lire où.
+
+Trois zones qui ne se coupent pas en deux — ce que tu **pilotes** (micro, arrêt, modèle,
+effort), ce qui se **passe** (décompte, activité), et les **mesures** (actions, jetons,
+quotas) — sur deux rangs : contrôles en haut, filtres et mesures en bas.
+
+Les sélecteurs affichent un libellé court : `Opus 5` plutôt que `Opus 5 — le plus capable`.
+Un `select` montre le libellé complet de l'option choisie, et 250 px pour dire
+« très élevé — défaut » écrasait tout l'en-tête. La nuance reste, en infobulle.
+
+La barre de saisie respire : **18 px** sous le champ plutôt que le bord de l'écran. Collée en
+bas, elle donnait l'impression d'une fenêtre coupée — et sur un portable, la zone la plus
+basse est celle qu'on atteint le moins bien.
+
 ### Les filtres, par famille
 
 Dix-huit boutons alignés ne disaient ni ce qu'ils montraient ni pourquoi on voudrait les

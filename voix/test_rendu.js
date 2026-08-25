@@ -46,13 +46,26 @@ const LONG = "Oui, c'est faisable, mais le vrai obstacle n'est pas le langage : 
   + "de repondre dans les vingt-quatre heures, donc elle ne remplace pas une messagerie "
   + "personnelle ; le pont non officiel donne tout mais viole les conditions d'utilisation.";
 
+// Les selecteurs DOIVENT etre remplis : mesurer la largeur d'un select vide passerait
+// l'assertion sans rien verifier, et c'est ce qui est arrive a la premiere version du test.
+const LISTES = [
+  { n: 1, genre: "modeles", actuel: "opus", liste: [
+      { cle: "opus", libelle: "Opus 5 — le plus capable" },
+      { cle: "sonnet", libelle: "Sonnet 5 — équilibré" }] },
+  { n: 2, genre: "efforts", actuel: "xhigh", liste: [
+      { cle: "xhigh", libelle: "très élevé — défaut" },
+      { cle: "max", libelle: "maximum — le plus fouillé, le plus lent" }] },
+  { n: 3, genre: "delais", actuel: 5, plafond: 12.5,
+    paliers: [{ s: 3 }, { s: 5 }, { s: 10 }] },
+];
+
 const EVENEMENTS = [
-  { n: 1, genre: "toi",    texte: LONG, passe: true,  h: "14:30:00", t: 1 },
-  { n: 2, genre: "texte",  texte: LONG, passe: true,  h: "14:30:01", t: 2 },
-  { n: 3, genre: "tour",   actions: 5, texte: "Bash ls, Bash cat", passe: true, h: "14:30:02", t: 3 },
-  { n: 4, genre: "toi",    texte: LONG, h: "14:30:03", t: 4 },
-  { n: 5, genre: "outil",  nom: "Read", cible: "config.py", id: "x1", h: "14:30:04", t: 5 },
-  { n: 6, genre: "voix",   texte: LONG, h: "14:30:05", t: 6 },
+  { n: 11, genre: "toi",    texte: LONG, passe: true,  h: "14:30:00", t: 1 },
+  { n: 12, genre: "texte",  texte: LONG, passe: true,  h: "14:30:01", t: 2 },
+  { n: 13, genre: "tour",   actions: 5, texte: "Bash ls, Bash cat", passe: true, h: "14:30:02", t: 3 },
+  { n: 14, genre: "toi",    texte: LONG, h: "14:30:03", t: 4 },
+  { n: 15, genre: "outil",  nom: "Read", cible: "config.py", id: "x1", h: "14:30:04", t: 5 },
+  { n: 16, genre: "voix",   texte: LONG, h: "14:30:05", t: 6 },
 ];
 
 const SONDE = `
@@ -62,7 +75,6 @@ setTimeout(() => {
   const releve = { lignes: [] };
   const flux = document.querySelector("main");
   releve.page = { hauteur: document.body.scrollHeight, largeur: document.body.clientWidth };
-  releve.entete = document.querySelector("header").offsetHeight;
   for (const l of flux.children) {
     if (!l.dataset.g) continue;
     const corps = l.querySelector(".corps");
@@ -77,7 +89,21 @@ setTimeout(() => {
     });
   }
   const champ = document.getElementById("saisie");
-  releve.champ = { hauteur: champ.offsetHeight, debordement: cs(champ).overflowY };
+  const bcc = champ.getBoundingClientRect();
+  releve.champ = {
+    hauteur: champ.offsetHeight, debordement: cs(champ).overflowY,
+    // La respiration sous le champ : colle au bord, la barre donne l'impression d'une
+    // fenetre coupee, et c'est la zone la moins accessible d'un portable.
+    souffleBas: Math.round(innerHeight - bcc.bottom),
+  };
+  const b = s => { const e = document.querySelector(s); if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return { t: Math.round(r.top), b: Math.round(r.bottom), l: Math.round(r.left),
+             w: Math.round(r.width), h: Math.round(r.height) }; };
+  releve.entete = document.querySelector("header").offsetHeight;
+  releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
+                    modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct") };
+  releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
   pre.id = "releve";
   pre.textContent = JSON.stringify(releve);
@@ -88,9 +114,14 @@ setTimeout(() => {
 // L'appel de niveau superieur, pas ceux imbriques dans reconnecter() ou le setTimeout :
 // remplacer le premier venu injectait le code la ou il ne s'executait jamais.
 const html = page.replace(/^brancher\(\);$/m,
-  `const __e = ${JSON.stringify(EVENEMENTS)};\n__e.filter(e => !dejaVu(e)).forEach(ajouter);\nwindow.scrollTo(0, 0);`) + SONDE;
+  // recevoir() est le point d'entree reel du serveur : passer par ajouter() sauterait
+  // tout le routage, et c'est ainsi qu'un apercu montrait des selecteurs vides.
+  `const __l = ${JSON.stringify(LISTES)};\n__l.forEach(recevoir);\n`
+  + `const __e = ${JSON.stringify(EVENEMENTS)};\n__e.forEach(recevoir);\n`
+  + `zoneMot.textContent = "Emberlificotage"; zoneCogite.hidden = false;\n`
+  + `window.scrollTo(0, 0);`) + SONDE;
 
-if (!html.includes("__e.filter")) {
+if (!html.includes("__l.forEach")) {
   console.error("  ECHEC l'injection n'a pas trouve l'appel de niveau superieur a brancher()");
   process.exit(1);
 }
@@ -152,6 +183,26 @@ dire(r.champ.debordement === "hidden",
      `le champ vide n'affiche aucune barre de défilement (overflow-y: ${r.champ.debordement})`);
 
 dire(r.page.hauteur < 6000, `la page garde une hauteur saine (${r.page.hauteur} px)`);
+
+// --- ergonomie : ce qui se degrade sans qu'on s'en apercoive -----------------------------
+dire(r.champ.souffleBas >= 12,
+     `le champ respire sous lui : ${r.champ.souffleBas} px jusqu'au bas de l'écran`);
+
+dire(r.entete <= 110, `l'en-tête tient en deux rangs (${r.entete} px)`);
+
+const bo = r.boites;
+if (bo.modele && bo.effort) {
+  dire(bo.modele.w < 140 && bo.effort.w < 140,
+       `les sélecteurs restent compacts (modèle ${bo.modele.w} px, effort ${bo.effort.w} px)`);
+}
+if (bo.direct) {
+  dire(bo.direct.l > r.vue.w * 0.5,
+       `la zone « ce qui se passe » reste à droite (x=${bo.direct.l} sur ${r.vue.w})`);
+}
+if (bo.cogit && bo.barre) {
+  dire(bo.cogit.b <= bo.barre.t + 1,
+       `le bandeau de cogitation ne recouvre pas la barre (${bo.cogit.b} <= ${bo.barre.t})`);
+}
 
 fs.rmSync(dossier, { recursive: true, force: true });
 console.log(`\n${r.lignes.length} lignes mesurées — ${ok ? "TOUT VERT" : "DES ECHECS"}`);

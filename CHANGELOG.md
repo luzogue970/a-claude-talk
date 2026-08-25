@@ -7,6 +7,38 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.2.0] — 2026-08-25
+
+### Ajoute — passe d'ergonomie sur toute la page
+
+- La barre de saisie respire : 18 px sous le champ plutot que le bord de l'ecran.
+- L'en-tete est organise en trois zones qui ne se coupent pas en deux, sur deux rangs. Une
+  seule rangee en flex-wrap se repliait n'importe comment : la pastille « parole » sautait a
+  la ligne suivante et atterrissait a gauche des filtres.
+- Libelles courts dans les selecteurs — « Opus 5 » et non « Opus 5 — le plus capable » : un
+  select affiche le libelle complet de l'option choisie, et 250 px ecrasaient l'en-tete. La
+  nuance reste en infobulle. Mesure : 250 -> 96 px.
+- La pastille d'etat porte un point de sa couleur : on le lit avant le mot.
+- Les lignes du flux se detachent au survol : suivre une ligne dans un mur de deux cents
+  sans repere est fatigant.
+
+### Corrige — la ligne « session » s'affichait vide
+
+L'evenement porte `id`, pas `texte`, et `corps()` n'avait pas de cas pour lui. Or c'est
+precisement l'identifiant qu'on vient chercher pour reprendre une conversation. La ligne
+affiche desormais l'identifiant et la commande de reprise.
+
+### Interne — un point d'entree unique pour ce qui arrive du serveur
+
+Le routage vivait dans `ws.onmessage`, donc un harnais appelant `ajouter()` ne le traversait
+pas : un apercu montrait des selecteurs vides en croyant montrer l'application, et une
+assertion sur leur largeur passait a vide.
+
+- `recevoir(e)` est nomme et hors du gestionnaire ; l'application et les harnais partagent
+  la meme entree.
+- `test_rendu.js` mesure maintenant la respiration sous le champ, le nombre de rangs de
+  l'en-tete, la largeur des selecteurs remplis, et que le bandeau ne recouvre pas la barre.
+
 ## [1.1.2] — 2026-08-25
 
 ### Corrige — l'historique rejoue s'affichait sur un caractere de large

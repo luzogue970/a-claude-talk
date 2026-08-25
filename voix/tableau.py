@@ -226,7 +226,11 @@ button,select,summary,input,textarea,.q,.act,.pip,#etat,#travail,#compte{
 body{margin:0;background:var(--fond);color:var(--texte);
   font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--bord);padding:10px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  border-bottom:1px solid var(--bord);padding:9px 16px;display:flex;gap:10px 14px;
+  align-items:center;flex-wrap:wrap}
+/* Une zone ne se coupe pas en deux : ses elements se replient ensemble ou pas du tout. */
+.zone{display:inline-flex;gap:8px;align-items:center;flex-wrap:nowrap}
+.zone-direct{margin-left:auto}
 h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:flex;gap:8px;align-items:center}
 
@@ -259,11 +263,14 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 .points i:nth-child(2){animation-delay:.18s}
 .points i:nth-child(3){animation-delay:.36s}
 @keyframes clignote{0%,100%{opacity:.18}45%{opacity:1}}
-#etat{font-weight:600;padding:2px 10px;border-radius:999px;border:1px solid var(--bord);font-size:12px}
+#etat{font-weight:600;padding:2px 11px;border-radius:999px;border:1px solid var(--bord);
+  font-size:12px;display:inline-flex;gap:6px;align-items:center}
+/* Un point de la couleur de l'etat : on le lit avant d'avoir lu le mot. */
+#etat::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .e-listening{color:var(--toi);border-color:var(--toi)}
 .e-thinking{color:var(--pensee);border-color:var(--pensee)}
 .e-speaking{color:var(--voix);border-color:var(--voix)}
-#compteurs{margin-left:auto;display:flex;gap:8px;align-items:center;
+#compteurs{display:flex;gap:8px;align-items:center;
   color:var(--faible);font-size:12px;font-variant-numeric:tabular-nums}
 .q{border:1px solid var(--bord);border-radius:999px;padding:2px 9px;white-space:nowrap}
 .q b{font-weight:650;color:var(--texte)}
@@ -309,7 +316,10 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 /* Les filtres, par famille. Dix-huit boutons alignes ne disaient ni ce qu'ils montraient ni
    pourquoi on voudrait les couper. Une liste deroulante par famille, avec une phrase par
    ligne, se lit sans documentation. */
-#filtres{display:flex;gap:6px;flex-wrap:wrap}
+/* Le second rang : les filtres a gauche, les mesures a droite. */
+.rang-bas{flex:1 0 100%;display:flex;gap:14px;align-items:center;justify-content:space-between;
+  padding-top:8px;border-top:1px solid #171c23;margin-top:2px}
+#filtres{display:flex;gap:6px;flex-wrap:wrap;min-width:0}
 .famille{position:relative}
 .famille summary{list-style:none;cursor:pointer;user-select:none;
   background:transparent;color:var(--faible);border:1px solid var(--bord);
@@ -345,9 +355,13 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 
 /* Écrire au lieu de parler. Utile quand le micro est coupé, quand le mot est trop
    technique pour être dicté proprement, ou quand quelqu'un dort à côté. */
+/* La barre respire : 18 px sous le champ plutot que le bord de l'ecran. Collee en bas, elle
+   donnait l'impression d'une fenetre coupee — et sur un portable, la zone la plus basse est
+   celle qu'on atteint le moins bien. */
 #saisie-barre{position:fixed;bottom:0;left:0;right:0;z-index:6;
-  background:#0e1116f2;backdrop-filter:blur(8px);border-top:1px solid var(--bord);
-  padding:10px 16px;display:flex;justify-content:center}
+  background:linear-gradient(to top,#0e1116 62%,#0e1116e0);backdrop-filter:blur(10px);
+  border-top:1px solid var(--bord);
+  padding:11px 16px 18px;display:flex;justify-content:center}
 /* align-items:flex-end : quand le champ grandit, les boutons restent alignes sur sa
    derniere ligne au lieu de flotter au milieu d'une grande boite. */
 #saisie-barre form{display:flex;gap:8px;width:100%;max-width:1100px;align-items:flex-end}
@@ -415,6 +429,10 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .t{color:#5a636e;font-size:11px;font-variant-numeric:tabular-nums;text-align:right}
 .badge{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
 .corps{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* Survol : la ligne se detache. Dans un flux de deux cents lignes, suivre une ligne du
+   regard sans repere est fatigant. */
+.ev{border-radius:6px;padding-left:6px;margin-left:-6px}
+.ev:hover{background:#141a22}
 .g-toi .badge{color:var(--toi)} .g-toi .corps{color:#cde3ff}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
 .g-voix .badge{color:var(--voix)} .g-voix .corps{color:#c6f0cf}
@@ -443,6 +461,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .g-reprise{border-bottom:1px solid var(--tour)}
 .g-reprise .badge{color:var(--tour)}
 .g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.02em}
+.apres{color:#5a636e;margin-left:9px;font-size:11px}
 .g-log .badge{color:#4d5560} .g-log .corps{color:#6e7681;font-size:12px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#1b212a;
@@ -498,10 +517,19 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   </h1>
   <span id="etat" class="e-listening">connexion…</span>
   <span id="alerte-entete" class="alerte" style="display:none"></span>
-  <button id="micro" title="couper le micro (touche m)">🎤 micro</button>
-  <button id="arreter" title="arrêter le travail en cours (touche s)" disabled>⏹ arrêter</button>
-  <select id="modele" title="modèle utilisé pour le travail"></select>
-  <select id="effort" title="niveau d'effort de réflexion"></select>
+
+  <!-- Trois zones plutôt qu'une rangée qui se replie n'importe comment : ce que tu PILOTES,
+       ce qui se PASSE, et les mesures. Sans elles, la pastille « parole » sautait à la ligne
+       suivante et atterrissait à gauche des filtres — la position d'un élément changeait
+       selon la largeur de la fenêtre, et on ne savait plus quoi lire où. -->
+  <span class="zone zone-controles">
+    <button id="micro" title="couper le micro (touche m)">🎤 micro</button>
+    <button id="arreter" title="arrêter le travail en cours (touche s)" disabled>⏹ arrêter</button>
+    <select id="modele" title="modèle utilisé pour le travail"></select>
+    <select id="effort" title="niveau d'effort de réflexion"></select>
+  </span>
+
+  <span class="zone zone-direct">
   <span id="compte" title="temps avant envoi automatique">
     <span id="reste"></span>
     <button id="retenir-vite" type="button"
@@ -510,8 +538,14 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   </span>
   <span id="travail"></span>
   <div id="activite"></div>
-  <div id="filtres"></div>
-  <span id="compteurs"></span>
+  </span>
+
+  <!-- Filtres et mesures partagent le second rang : les mesures seules occupaient un rang
+       entier pour deux pastilles. -->
+  <div class="rang-bas">
+    <div id="filtres"></div>
+    <span id="compteurs"></span>
+  </div>
 </header>
 <main id="flux"></main>
 <button id="bas">↓ suivre</button>
@@ -773,6 +807,11 @@ function corps(e) {
     }
     case "log":
       return `<span style="opacity:.7">${ech(e.source)}</span> ${ech(e.texte)}`;
+    case "session":
+      // Sans ce cas la ligne s'affichait VIDE : l'événement porte `id`, pas `texte`. Or
+      // c'est précisément l'identifiant qu'on vient chercher pour reprendre.
+      return `<code>${ech(e.id || "?")}</code>`
+        + `<span class="apres">reprendre : vvreprendre ${ech(e.id || "")}</span>`;
     case "toi":
       // Même badge, même couleur : c'est le même tour de conversation. Le petit glyphe dit
       // seulement par quel canal il est arrivé, ce qui compte pour relire un transcript.
@@ -1036,10 +1075,17 @@ btnMicro.onclick = basculerMicro;
 // Le selecteur reflete l'etat du worker, il ne le devine pas : un changement vocal doit
 // mettre la liste a jour, et une bascule temporaire doit se voir comme temporaire.
 const selModele = document.getElementById("modele");
+// « Opus 5 » plutot que « Opus 5 — le plus capable » : un select affiche le libelle complet
+// de l'option choisie, et 250 px pour dire « tres eleve — defaut » ecrasait tout l'en-tete.
+// La nuance reste, en infobulle.
+const court = t => String(t).split(" — ")[0];
 function remplirModeles(liste, actuel) {
   selModele.innerHTML = liste.map(m =>
-    `<option value="${ech(m.cle)}">${ech(m.libelle)}</option>`).join("");
+    `<option value="${ech(m.cle)}" title="${ech(m.libelle)}">${ech(court(m.libelle))}</option>`
+  ).join("");
   if (actuel) selModele.value = actuel;
+  const choisi = liste.find(m => m.cle === actuel);
+  if (choisi) selModele.title = "modèle utilisé pour le travail — " + choisi.libelle;
 }
 selModele.onchange = () => { envoyerCmd({ cmd: "modele", cle: selModele.value }); };
 
@@ -1050,8 +1096,11 @@ selModele.onchange = () => { envoyerCmd({ cmd: "modele", cle: selModele.value })
 const selEffort = document.getElementById("effort");
 function remplirEfforts(liste, actuel) {
   selEffort.innerHTML = liste.map(e =>
-    `<option value="${ech(e.cle)}">${ech(e.libelle)}</option>`).join("");
+    `<option value="${ech(e.cle)}" title="${ech(e.libelle)}">${ech(court(e.libelle))}</option>`
+  ).join("");
   if (actuel) selEffort.value = actuel;
+  const choisi = liste.find(e => e.cle === actuel);
+  if (choisi) selEffort.title = "niveau d'effort — " + choisi.libelle;
 }
 selEffort.onchange = () => { envoyerCmd({ cmd: "effort", cle: selEffort.value }); };
 
@@ -1408,28 +1457,11 @@ composer.onsubmit = ev => {
   window.scrollTo(0, document.body.scrollHeight);
 };
 
-const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };
-let echecs = 0;   // reconnexions ratées d'affilée
-function brancher() {
-  // Fermer l'ancienne avant d'ouvrir : deux sockets vivantes recevaient les mêmes
-  // événements, et la page les affichait deux fois.
-  if (socket && socket.readyState <= 1) {
-    try { socket.onclose = null; socket.close(); } catch (_) {}
-  }
-  const ws = new WebSocket(`ws://${location.host}/flux`);
-  socket = ws;
-  // Le bouton suit l'état réel de la liaison : proposer « envoyer » sur une socket morte
-  // ferait disparaître le message sans rien dire.
-  ws.onopen = () => {
-    echecs = 0;
-    reconnexionPrevue = false;
-    majEnvoyer();
-    champ.placeholder = "écrire au lieu de parler — touche /";
-    // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
-    viderFile();
-  };
-  ws.onmessage = m => {
-    const e = JSON.parse(m.data);
+// Le point d'entree unique de tout ce qui arrive du serveur. Nomme, et hors de
+// ws.onmessage, pour deux raisons : le routage est la partie la plus facile a casser en
+// ajoutant un genre, et un harnais qui appelle `ajouter()` directement ne le traverse pas —
+// c'est ainsi qu'un apercu montrait des selecteurs vides en croyant montrer l'application.
+function recevoir(e) {
     if (e.genre === "_histoire") {
       // L'état du micro se relit sur TOUTE l'histoire, y compris la partie déjà affichée :
       // c'est une resynchronisation, pas un affichage.
@@ -1492,7 +1524,29 @@ function brancher() {
       return;
     }
     ajouter(e);
+}
+
+const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };
+let echecs = 0;   // reconnexions ratées d'affilée
+function brancher() {
+  // Fermer l'ancienne avant d'ouvrir : deux sockets vivantes recevaient les mêmes
+  // événements, et la page les affichait deux fois.
+  if (socket && socket.readyState <= 1) {
+    try { socket.onclose = null; socket.close(); } catch (_) {}
+  }
+  const ws = new WebSocket(`ws://${location.host}/flux`);
+  socket = ws;
+  // Le bouton suit l'état réel de la liaison : proposer « envoyer » sur une socket morte
+  // ferait disparaître le message sans rien dire.
+  ws.onopen = () => {
+    echecs = 0;
+    reconnexionPrevue = false;
+    majEnvoyer();
+    champ.placeholder = "écrire au lieu de parler — touche /";
+    // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
+    viderFile();
   };
+  ws.onmessage = m => recevoir(JSON.parse(m.data));
   ws.onclose = () => {
     // Une socket périmée qui se referme après qu'une nouvelle est en place ne doit ni
     // relancer un branchement, ni faire clignoter l'état.
