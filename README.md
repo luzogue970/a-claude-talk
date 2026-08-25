@@ -5,9 +5,7 @@ aussi longtemps qu'il faut, puis il te **raconte** ce qu'il a fait — pas en li
 markdown à voix haute, mais en te briefant comme un collègue.
 
 > **Où regarder.** Tout le système vit dans **`voix/`** ; `outils/voix.fish` fournit les
-> raccourcis de shell. **`tts/` est l'ancien système**, conservé le temps de la transition et
-> gardé pour ses voix Piper — il ne participe à rien de ce qui est décrit ici, et il n'y a
-> aucune raison de le lire.
+> raccourcis de shell. C'est tout — il n'y a rien d'autre à lire.
 
 ## Architecture
 
@@ -1124,8 +1122,10 @@ n'entendait plus rien.
 ## Ce qui reste à faire
 
 - **Chemin 100 % local** (`VOIX_STT=local`, `VOIX_TTS=local`) : `faster-whisper` pour le
-  français, les voix Piper `fr_FR-*` déjà présentes dans `tts/voices/` pour la synthèse.
-  Nécessaire dès qu'on parle d'un code qui ne doit pas partir chez un tiers.
+  français, et des voix Piper `fr_FR-*` pour la synthèse — à télécharger depuis
+  [le dépôt de Piper](https://github.com/rhasspy/piper/blob/master/VOICES.md), elles ne sont
+  pas dans ce dépôt (268 Mo). Nécessaire dès qu'on parle d'un code qui ne doit pas partir
+  chez un tiers.
 - **Jamais testé avec un vrai micro** : tout ce qui précède est validé en texte et en
   headless. La première session au micro reste à faire, et c'est là que se jugera la
   qualité réelle de l'AEC sur les haut-parleurs de ce portable.
@@ -1136,5 +1136,5 @@ n'entendait plus rien.
   F0 — soit une dizaine de dollars par mois, plus que le STT. D'où la priorité de Piper.
 - **Fichiers non suivis par git** : `voix/journal.py`, `voix/intentions.py`,
   `voix/stt_local.py`, `voix/assistant.py` et les tests. Le dépôt est incomplet sans eux.
-- `tts/` est l'ancien système, gardé le temps de la transition. À supprimer ensuite.
+
 - Suivre la dépréciation du mode console de LiveKit (migration vers `lk agent console`).

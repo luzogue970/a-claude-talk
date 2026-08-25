@@ -10,27 +10,14 @@ venv/
 __pycache__/
 *.onnx
 *.onnx.json
-tts/voices/
-tts/samples/
-
-# lexiques obsoletes (remplaces par le prompt)
-tts/accents*.tsv
-tts/en2fr.tsv
 
 # etat runtime
 *.log
-tts/last-spoken
-tts/spoken-history.jsonl
-tts/mic-profile.json
-tts/current.pgid
-tts/playing-until
-tts/phase
-tts/auto-enabled
-tts/mic-muted
-tts/skip-next
-tts/disabled
-tts/voice.running
-tts/voice.pid
 
 # transcripts des conversations : ils citent le contenu des projets
 conversations/
+
+# tts/ : l'ancien systeme, retire du depot (il reste dans l'historique git). Ce qui subsiste
+# sur le disque n'a rien a faire ici — dont azure.conf, qui contient une cle en clair, et
+# voices/, 268 Mo de voix Piper gardees pour la synthese locale a venir.
+tts/

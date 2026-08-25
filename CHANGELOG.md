@@ -7,6 +7,20 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.7.0] — 2026-08-25
+
+### Retire — l'ancien systeme `tts/`
+
+Quinze fichiers, 2 131 lignes, entierement remplaces par `voix/`. Verifie avant de retirer :
+aucune reference depuis `voix/` ni `outils/`, sauf vers `tts/voices/` qui n'etait pas suivi.
+
+- Retire du depot, conserve dans l'historique git.
+- `.gitignore` consolide : une seule regle `tts/`. Ce qui reste sur le disque contient
+  `azure.conf`, une cle en clair — mieux vaut une regle large qu'une liste a maintenir.
+- Les voix Piper (268 Mo) restent sur le disque et n'ont jamais ete dans le depot. Le README
+  pointe maintenant vers leur source amont, puisqu'on ne peut plus dire « elles sont la ».
+- Le depot passe de 40 a 25 fichiers suivis. Il n'y a plus qu'un endroit a lire.
+
 ## [1.6.0] — 2026-08-25
 
 ### Corrige — le depot etait incomplet pour une installation neuve

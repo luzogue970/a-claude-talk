@@ -550,7 +550,7 @@ def _tts():
         )
     raise RuntimeError(
         "TTS indisponible. Soit VOIX_TTS=azure avec AZURE_SPEECH_KEY, soit brancher "
-        "les voix Piper fr_FR-* de tts/voices/ ici (voir README)."
+        "des voix Piper fr_FR-* ici (voir README)."
     )
 
 
