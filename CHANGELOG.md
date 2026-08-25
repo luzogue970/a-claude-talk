@@ -7,6 +7,27 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.5.0] — 2026-08-25
+
+### Ajoute — transcripts, etats de conversation et reprise complete
+
+Une conversation finie ne laissait rien : le tableau vit en memoire, la voix
+passe, et au lancement suivant on repartait de zero.
+
+- Un fichier Markdown par conversation, ecrit de facon incrementale : une coupure
+  ne perd que le tour en cours.
+- Index append-only : reecrire a chaque tour inviterait a le corrompre, ajouter ne
+  peut laisser qu'une ligne incomplete, que le lecteur ignore.
+- Trois etats, dont « interrompue » : l'autorite est le PID, pas un marqueur de
+  fermeture qu'un `kill -9` n'ecrit jamais. Double verification, parce qu'un PID
+  libere est reattribue.
+- `dossier_de_session()` : Claude Code range ses sessions PAR repertoire, et
+  reprendre depuis le mauvais dossier ne donne pas une erreur mais une session
+  introuvable — donc une conversation qui repart de zero en silence.
+- `rejouer_session()` : l'historique remis en forme de conversation. Une premiere
+  version publiait chaque appel d'outil, soit 247 lignes de bruit sur soixante
+  tours ; un tour tient maintenant en trois lignes.
+
 ## [0.4.0] — 2026-08-25
 
 ### Ajoute — fenetres de rate limit en pourcentage, et cout par tour
