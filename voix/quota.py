@@ -26,10 +26,13 @@ CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
 
 # Only the windows worth a glance. seven_day_opus is null on a Team seat — the weekly
 # bucket covers every model there — so it is shown only when the account reports it.
+# Le libelle dit la FONCTION de la fenetre, pas sa taille. « 5h » laissait croire qu'il
+# restait cinq heures, alors que c'est la largeur du seau glissant : mesure faite, la fenetre
+# affichee « 5h » se reinitialisait dans 1 h 10. Le temps restant se lit maintenant a cote.
 FENETRES = [
-    ("five_hour", "5h"),
-    ("seven_day", "semaine"),
-    ("seven_day_opus", "semaine Opus"),
+    ("five_hour", "session", "fenêtre glissante de 5 heures"),
+    ("seven_day", "semaine", "fenêtre glissante de 7 jours"),
+    ("seven_day_opus", "semaine Opus", "fenêtre de 7 jours, Opus seulement"),
 ]
 JOURS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
 PALIERS = (50, 75, 90)
@@ -62,6 +65,7 @@ def _quand(iso: str | None) -> str:
 INTERVALLE = 300.0
 ECART_MINIMUM = 60.0   # even a post-turn refresh will not call more often than this
 REPLI_MAX = 1800.0
+RELANCE_DEBUT = 15.0   # tant qu'on n'a rien lu du tout, on reessaie a ce rythme
 
 
 class Quota:
@@ -121,12 +125,20 @@ class Quota:
         self._reporter(ECART_MINIMUM)
 
         fenetres = []
-        for cle, libelle in FENETRES:
+        for cle, libelle, taille in FENETRES:
             bloc = donnees.get(cle)
             if not isinstance(bloc, dict) or bloc.get("utilization") is None:
                 continue
             pct = float(bloc["utilization"])
-            fenetres.append({"cle": libelle, "pct": pct, "reset": _quand(bloc.get("resets_at"))})
+            fenetres.append({
+                "cle": libelle, "pct": pct,
+                "reset": _quand(bloc.get("resets_at")),
+                # L'horodatage ABSOLU part au navigateur : il peut alors decompter tout seul,
+                # sans un seul appel reseau de plus. Une echeance connue n'a pas besoin d'etre
+                # redemandee pour etre affichee en temps reel.
+                "reset_iso": bloc.get("resets_at") or "",
+                "taille": taille,
+            })
             self._alerter(libelle, pct)
         self.fenetres = fenetres
         if self.tableau and fenetres:
@@ -199,22 +211,89 @@ class Quota:
             bouts.append(f"{e['cle']} {signe} pt ({e['pct']:.0f} %)")
         return " · ".join(bouts)
 
+    @staticmethod
+    def reste(iso: str | None) -> str:
+        """Le temps qui reste avant reinitialisation, dit comme on le dirait."""
+        if not iso:
+            return ""
+        try:
+            t = datetime.fromisoformat(iso)
+        except ValueError:
+            return ""
+        secondes = (t - datetime.now(timezone.utc)).total_seconds()
+        if secondes <= 0:
+            return "à l'instant"
+        minutes = int(secondes // 60)
+        if minutes < 60:
+            return f"{minutes} min"
+        heures, mins = divmod(minutes, 60)
+        if heures < 24:
+            return f"{heures} h {mins:02d}"
+        return f"{heures // 24} j {heures % 24} h"
+
+    @classmethod
+    def reste_parle(cls, iso: str | None) -> str:
+        """Le meme delai, mais dit correctement. Lu par une synthese vocale : « 1 h 09 »
+        s'entend « un h zero neuf »."""
+        if not iso:
+            return ""
+        try:
+            t = datetime.fromisoformat(iso)
+        except ValueError:
+            return ""
+        minutes = int((t - datetime.now(timezone.utc)).total_seconds() // 60)
+        if minutes <= 0:
+            return ""
+        if minutes < 60:
+            return f"{minutes} minute" + ("s" if minutes > 1 else "")
+        heures, mins = divmod(minutes, 60)
+        if heures >= 24:
+            jours, h = divmod(heures, 24)
+            dit = f"{jours} jour" + ("s" if jours > 1 else "")
+            return dit + (f" et {h} heure" + ("s" if h > 1 else "") if h else "")
+        dit = "une heure" if heures == 1 else f"{heures} heures"
+        if mins:
+            dit += f" et {mins} minute" + ("s" if mins > 1 else "")
+        return dit
+
     def resume(self) -> str:
         if not self.fenetres:
             return "indisponible"
-        return " · ".join(f"{f['cle']} {f['pct']:.0f} %" for f in self.fenetres)
+        return " · ".join(
+            f"{f['cle']} {f['pct']:.0f} %"
+            + (f" ({self.reste(f.get('reset_iso'))})" if f.get("reset_iso") else "")
+            for f in self.fenetres)
 
     def resume_parle(self) -> str:
         """"5h 1 %" reads badly out loud; spell it."""
         if not self.fenetres:
             return "je n'arrive pas à lire le quota"
-        dits = {"5h": "la fenêtre de cinq heures", "semaine": "la semaine",
+        dits = {"session": "la fenêtre de session", "semaine": "la semaine",
                 "semaine Opus": "la semaine Opus"}
-        bouts = [f"{dits.get(f['cle'], f['cle'])} est à {f['pct']:.0f} pour cent"
-                 for f in self.fenetres]
+        bouts = []
+        for f in self.fenetres:
+            bout = f"{dits.get(f['cle'], f['cle'])} est à {f['pct']:.0f} pour cent"
+            # Le temps restant est ce qui decide s'il faut lever le pied maintenant ou non :
+            # il a plus de valeur parle que le pourcentage seul. Formate a part, parce que
+            # « dans 1 heures 09 » n'est pas du francais — et c'est lu a voix haute.
+            r = self.reste_parle(f.get("reset_iso"))
+            if r:
+                bout += f", elle se renouvelle dans {r}"
+            bouts.append(bout)
         return " et ".join(bouts) + "."
 
     async def boucle(self):
+        """Le rythme de fond.
+
+        Tant qu'AUCUNE lecture n'a abouti, on reessaie vite : la lecture de demarrage peut
+        echouer (429, jeton en cours de rafraichissement, reseau), et attendre cinq minutes
+        laissait l'en-tete vide sans que rien ne l'explique — c'est ce qui donnait
+        l'impression que les pastilles ne s'affichaient « pas tout le temps ».
+        """
+        while not self.fenetres:
+            await asyncio.sleep(RELANCE_DEBUT)
+            if await self.rafraichir(force=True):
+                break
         while True:
             await asyncio.sleep(self.intervalle)
             await self.rafraichir()

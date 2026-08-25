@@ -124,6 +124,26 @@ Azure transformait « MQL » en « kubedka » et « un fichier point MD » en «
 Au lancement, une page s'ouvre sur `http://127.0.0.1:7788` (loopback uniquement — ce flux
 transporte le contenu de ton code).
 
+### Les fenêtres de quota
+
+Deux pastilles dans l'en-tête : `session 47 % · 1 h 08` et `semaine 78 % · 11 h 49`.
+
+Le libellé disait avant `5h`, ce qui laissait croire qu'il restait cinq heures. C'est la
+**largeur** du seau glissant, pas le temps restant : mesuré, la fenêtre affichée « 5h » se
+réinitialisait dans 1 h 08. Le nom dit maintenant sa fonction, et le temps restant est affiché
+à côté ; l'infobulle rappelle la taille réelle et l'heure exacte de réinitialisation.
+
+**Le décompte avance sans une seule requête de plus.** Le serveur envoie l'échéance
+*absolue* (`resets_at`), et la page décompte localement, une fois par 30 s — une échéance
+connue n'a pas besoin d'être redemandée pour être affichée en temps réel. Le pourcentage, lui,
+n'est relu qu'aux moments utiles : à la fin de chaque tour et toutes les cinq minutes.
+
+**Elles s'affichent dès le début.** Si la première lecture échoue — 429, jeton en cours de
+rafraîchissement, réseau — la boucle réessaie toutes les 15 s jusqu'à la première réussite,
+au lieu d'attendre son cycle de cinq minutes. C'est ce délai qui donnait l'impression qu'elles
+ne s'affichaient « pas tout le temps ». Et tant qu'aucune lecture n'est arrivée, une pastille
+en pointillés dit `quota…` : une en-tête vide laisse croire à une panne.
+
 Elle commence par un **panneau de configuration** : projet, modèle et effort, porte-parole,
 mode de permission, compte Claude qui paie, moteur de reconnaissance et nombre de termes
 biaisés, voix de synthèse, détecteur de fin de tour, seuils d'interruption, état de

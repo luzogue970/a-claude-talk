@@ -340,6 +340,60 @@ dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passe
 dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
      'et renvoie vers le bouton du decompte');
 
+// ---- fenetres de quota : le temps restant, pas la taille -------------------------------
+titre('pastilles de quota');
+const zoneQ = document.getElementById('compteurs');
+
+quota = []; majCompteurs();
+dire(/quota…/.test(zoneQ.innerHTML),
+     'aucune lecture encore : on le dit au lieu de laisser un vide');
+
+const dans = min => new Date(Date.now() + min * 60000 + 5000).toISOString();
+quota = [
+  { cle: 'session', pct: 47, reset: '15:19', reset_iso: dans(69),
+    taille: 'fenêtre glissante de 5 heures' },
+  { cle: 'semaine', pct: 78, reset: 'mar. 26/08', reset_iso: dans(710),
+    taille: 'fenêtre glissante de 7 jours' },
+];
+majCompteurs();
+dire(!/quota…/.test(zoneQ.innerHTML), 'des donnees : le marqueur d attente disparait');
+dire(/session/.test(zoneQ.innerHTML) && /47 %/.test(zoneQ.innerHTML),
+     'la pastille nomme la fenetre et son pourcentage');
+dire(/1 h 09/.test(zoneQ.innerHTML),
+     'et le TEMPS RESTANT, pas la taille de la fenetre');
+dire(/11 h 50/.test(zoneQ.innerHTML), 'idem pour la semaine');
+dire(!/>5h</.test(zoneQ.innerHTML), 'plus aucune trace du libelle trompeur « 5h »');
+dire(/renouvelée dans 1 h 09/.test(zoneQ.innerHTML),
+     'l infobulle explique ce que le chiffre veut dire');
+dire(/glissante de 5 heures/.test(zoneQ.innerHTML),
+     'et rappelle la taille reelle de la fenetre');
+// Deux paliers : tiede a 70, chaud a 90. Une pastille qui change de couleur trop tot
+// devient un bruit qu'on apprend a ignorer.
+dire(/class="q tiede"/.test(zoneQ.innerHTML), 'a 78 % la fenetre est tiede');
+quota[1].pct = 92; majCompteurs();
+dire(/class="q chaud"/.test(zoneQ.innerHTML), 'a 92 % elle devient chaude');
+quota[1].pct = 40; majCompteurs();
+dire(!/tiede|chaud/.test(zoneQ.innerHTML), 'a 40 % aucune alerte');
+quota[1].pct = 78; majCompteurs();
+
+// le formatage sur toute la plage
+const cas = [[3, '3 min'], [59, '59 min'], [60, '1 h 00'], [125, '2 h 05'],
+             [1500, '1 j 1 h'], [-5, 'maintenant']];
+let bon = true, detail = [];
+for (const [min, attendu] of cas) {
+  const obtenu = resteAvant(dans(min));
+  if (obtenu !== attendu) bon = false;
+  detail.push(min + '->' + obtenu);
+}
+dire(bon, 'formatage du delai : ' + detail.join(', '));
+dire(resteAvant('') === '' && resteAvant('pas une date') === '',
+     'une echeance absente ou illisible ne casse rien');
+
+// aucun appel reseau pour decompter : c est tout l interet
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+majCompteurs(); majCompteurs();
+dire(envoyes.length === 0, 'le decompte n envoie aucune requete');
+
 // ---- delai d envoi reglable -------------------------------------------------------------
 titre('delai d envoi');
 remplirDelais([{s:2},{s:3},{s:5},{s:8},{s:10},{s:15},{s:20}], 5, 12.5);

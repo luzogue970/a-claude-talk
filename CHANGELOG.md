@@ -7,6 +7,33 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.4.0] — 2026-08-25
+
+### Corrige — la pastille annonçait la taille de la fenetre, pas le temps restant
+
+`5h` laissait croire qu'il restait cinq heures. C'est la LARGEUR du seau glissant : mesure
+faite, la fenetre affichee « 5h » se reinitialisait dans 1 h 08.
+
+- Le libelle dit la fonction (`session`, `semaine`) et le temps restant est affiche a cote.
+- L'infobulle rappelle la taille reelle et l'heure exacte de reinitialisation.
+- La forme parlee est formatee a part : « dans une heure et neuf minutes », parce que
+  « 1 h 09 » s'entend « un h zero neuf ».
+
+### Corrige — les pastilles ne s'affichaient pas toujours des le debut
+
+Si la premiere lecture echouait (429, jeton en cours de rafraichissement, reseau), la boucle
+attendait son cycle de cinq minutes avant de reessayer.
+
+- Relance toutes les 15 s tant qu'aucune lecture n'a abouti.
+- Une pastille en pointilles dit `quota…` en attendant : une en-tete vide laisse croire a
+  une panne.
+
+### Ajoute — un decompte en temps reel sans une requete de plus
+
+Le serveur envoie l'echeance ABSOLUE ; la page decompte localement une fois par 30 s. Une
+echeance connue n'a pas besoin d'etre redemandee pour etre affichee en temps reel. Le
+pourcentage reste relu aux seuls moments utiles : fin de tour et toutes les cinq minutes.
+
 ## [1.3.0] — 2026-08-25
 
 ### Ajoute — retenir d'office ce qui est dit pendant une tache

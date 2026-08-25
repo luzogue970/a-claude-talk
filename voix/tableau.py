@@ -272,8 +272,13 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 .e-speaking{color:var(--voix);border-color:var(--voix)}
 #compteurs{display:flex;gap:8px;align-items:center;
   color:var(--faible);font-size:12px;font-variant-numeric:tabular-nums}
-.q{border:1px solid var(--bord);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.q{border:1px solid var(--bord);border-radius:999px;padding:2px 9px;white-space:nowrap;
+  display:inline-flex;gap:5px;align-items:baseline}
 .q b{font-weight:650;color:var(--texte)}
+/* Le temps restant : present, mais secondaire au pourcentage. */
+.q i{font-style:normal;color:#6e7681;font-size:11px}
+.q.chaud i{color:#d99f9a}
+.q.vide{border-style:dashed;color:#5a636e}
 .q.tiede{border-color:#8a6d1f} .q.tiede b{color:#e3b341}
 .q.chaud{border-color:var(--erreur)} .q.chaud b{color:#ffb3ad}
 #micro,#arreter{background:transparent;color:var(--faible);border:1px solid var(--bord);
@@ -739,16 +744,47 @@ const fmtJetons = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)} k`
 
 // Sur un siege entreprise le montant en dollars ne veut rien dire ; ce qui contraint le
 // travail, c'est la fenetre de rate limit. L'en-tete affiche donc les pourcentages.
+// Le temps qui reste avant reinitialisation, calcule ICI a partir de l'echeance absolue
+// envoyee par le serveur. Une echeance connue n'a pas besoin d'etre redemandee pour etre
+// affichee en temps reel : le pourcentage se rafraichit aux moments utiles, le decompte
+// avance tout seul, et le reseau ne bouge pas.
+function resteAvant(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  const min = Math.floor((t - Date.now()) / 60000);
+  if (min <= 0) return "maintenant";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h < 24) return `${h} h ${String(m).padStart(2, "0")}`;
+  return `${Math.floor(h / 24)} j ${h % 24} h`;
+}
+
 function majCompteurs() {
   const pastilles = quota.map(f => {
     const c = f.pct >= 90 ? "chaud" : f.pct >= 70 ? "tiede" : "";
-    const reinit = f.reset ? ` — réinit. ${ech(f.reset)}` : "";
-    return `<span class="q ${c}" title="${ech(f.cle)}${reinit}">${ech(f.cle)} <b>${f.pct.toFixed(0)} %</b></span>`;
+    const reste = resteAvant(f.reset_iso);
+    // « 5h » laissait croire qu'il restait cinq heures : c'etait la LARGEUR de la fenetre.
+    // Le nom dit maintenant sa fonction, et le temps restant est affiche a cote.
+    const detail = [ech(f.taille || f.cle)];
+    if (reste) detail.push(`renouvelée dans ${reste}`);
+    if (f.reset) detail.push(`soit à ${ech(f.reset)}`);
+    return `<span class="q ${c}" title="${detail.join(" — ")}">${ech(f.cle)} `
+         + `<b>${f.pct.toFixed(0)} %</b>`
+         + (reste ? `<i>${ech(reste)}</i>` : "") + `</span>`;
   }).join("");
   const gauche = `${actions} action${actions > 1 ? "s" : ""}`
     + (jetons ? ` · ${fmtJetons(jetons)} jetons` : "");
-  document.getElementById("compteurs").innerHTML = `<span>${gauche}</span>${pastilles}`;
+  // Tant qu'aucune lecture n'est arrivee, on le DIT : une en-tete vide laissait croire a une
+  // panne alors que la premiere lecture etait simplement en cours.
+  const attente = quota.length ? "" : `<span class="q vide">quota…</span>`;
+  document.getElementById("compteurs").innerHTML =
+    `<span>${gauche}</span>${pastilles}${attente}`;
 }
+
+// Le decompte avance seul, une fois par minute : c'est la granularite affichee, donc rien de
+// plus fin n'aurait d'effet visible — et c'est zero requete.
+setInterval(() => { if (quota.length) majCompteurs(); }, 30000);
 
 const ech = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
