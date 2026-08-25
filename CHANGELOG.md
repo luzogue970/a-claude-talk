@@ -7,6 +7,21 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.4.0] — 2026-08-25
+
+### Ajoute — fenetres de rate limit en pourcentage, et cout par tour
+
+Sur un siege entreprise le montant en dollars ne veut rien dire : ce qui
+contraint le travail, c'est la fenetre de rate limit.
+
+- Lecture de `/api/oauth/usage` avec le jeton OAuth relu a chaque appel (la CLI le
+  rafraichit, un jeton en cache devient invalide).
+- Repli exponentiel jusqu'a 30 min sur 429, et la derniere lecture connue est
+  conservee plutot qu'effacee : un pourcentage un peu vieux vaut mieux qu'un vide.
+- Ecart de fenetre par tour. L'API renvoie des points ENTIERS, donc un tour court
+  affiche « +-0 » : c'est mesure, pas casse. Et la fenetre etant partagee entre
+  sessions, le libelle dit « fenetre », jamais « cout ».
+
 ## [0.3.0] — 2026-08-25
 
 ### Ajoute — repli local faster-whisper quand le cloud lache
