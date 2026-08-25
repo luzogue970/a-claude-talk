@@ -21,9 +21,12 @@ from livekit.agents import AgentSession  # noqa: E402
 import config  # noqa: E402
 from agent import Voix  # noqa: E402
 from porte_parole import PorteParole  # noqa: E402
+from quota import Quota  # noqa: E402
+from tableau import Tableau  # noqa: E402
 from worker import Worker  # noqa: E402
 
 dit: list[str] = []
+demandes: list[str] = []
 
 
 async def main():
@@ -33,12 +36,16 @@ async def main():
     agent: Voix | None = None
 
     async def on_permission(action, libelle):
+        demandes.append(action)
         print(f"  [permission] « je veux {action}. Je le fais ? » -> le test repond oui")
         return True
 
-    worker = Worker(on_permission=on_permission)
+    tableau = Tableau(port=7799, ouvrir=False)
+    worker = Worker(on_permission=on_permission, tableau=tableau)
     await worker.start()
-    agent = Voix(worker, pp)
+    q = Quota(tableau)
+    await q.rafraichir()
+    agent = Voix(worker, pp, tableau, q)
 
     # No stt/tts: the run below uses the text modality, so the audio ends are not needed.
     session = AgentSession(
@@ -88,8 +95,35 @@ async def main():
     await asyncio.sleep(1.5)
     await tour("t'en es où ?", False)
 
-    print("=== 3. commande locale instantanee : arret ===")
-    await tour("stop", False)
+    print(f"=== 3. mode auto ({config.PERMISSION}) : ecriture sans demander ===")
+    essai = os.path.join(config.WORKDIR, "_essai_auto.md")
+    if os.path.isfile(essai):
+        os.remove(essai)
+    await tour("Cree un fichier _essai_auto.md contenant juste le mot bonjour.", True)
+    for _ in range(20):  # l'ecriture peut aboutir juste apres le debrief
+        if os.path.isfile(essai):
+            break
+        await asyncio.sleep(0.5)
+    print(f"  fichier cree            : {os.path.isfile(essai)}")
+    print(f"  permissions demandees   : {len(demandes)} (doit etre 0 en mode auto)")
+    outils = [n for n, _ in worker.journal.outils]
+    print(f"  outils du tour          : {outils}")
+    if os.path.isfile(essai):
+        os.remove(essai)
+
+    print("=== 4. les ordres locaux, sur des formulations libres ===")
+    for phrase in ("utilise un modele plus rapide pour cette tache", "change de modele",
+                   "tu peux couper le micro s'il te plait", "t'en es ou",
+                   "j'ai consomme combien de tokens", "repete", "chut", "arrete tout"):
+        await tour(phrase, False)
+
+    from collections import Counter
+    compte = Counter(e["genre"] for e in tableau.histoire)
+    print(f"\n=== tableau : {len(tableau.histoire)} evenements ===")
+    for genre, n in compte.most_common():
+        print(f"   {genre:12} {n}")
+    await q.fermer()
+    await tableau.arreter()
 
     pompe.cancel()
     await worker.stop()

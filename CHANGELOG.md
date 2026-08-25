@@ -7,6 +7,23 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.9.0] — 2026-08-25
+
+### Tests — harnais sans navigateur et invariants du serveur
+
+`node --check` valide la syntaxe, pas l'execution : il n'avait pas vu qu'un
+`addEventListener` place avant la declaration de sa variable tuait tout le
+script au chargement — page blanche, sans rien pour l'expliquer.
+
+- `test_front.js` extrait le script de `tableau.py`, lui donne un DOM minimal et
+  verifie les invariants qui MENTENT a l'utilisateur quand ils cassent : un
+  indicateur qui tourne sur rien, un mot fige, un decompte bloque a zero, une
+  dictee qui ecrase une correction tapee.
+- `test_tableau.py` : une commande qui leve ne tue pas la WebSocket, couper le
+  micro marche hors activite, une dictee retenue ne sort pas dans le flux.
+- Six bugs reels trouves par ce harnais, dont deux que la relecture avait laisses
+  passer.
+
 ## [0.8.1] — 2026-08-25
 
 ### Interne — « Hey Claude » verse au depot, desactive
