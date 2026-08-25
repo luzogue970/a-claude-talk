@@ -31,3 +31,6 @@ tts/skip-next
 tts/disabled
 tts/voice.running
 tts/voice.pid
+
+# transcripts des conversations : ils citent le contenu des projets
+conversations/
