@@ -44,10 +44,14 @@ livekit-agents==1.6.10
 livekit-api==1.2.0
 livekit-blingfire==1.1.0
 livekit-local-inference==0.2.7
+livekit-plugins-assemblyai==1.6.10
 livekit-plugins-azure==1.6.10
 livekit-plugins-deepgram==1.6.10
+livekit-plugins-gladia==1.6.10
+livekit-plugins-groq==1.6.10
 livekit-plugins-openai==1.6.10
 livekit-plugins-silero==1.6.10
+livekit-plugins-speechmatics==1.6.10
 livekit-plugins-turn-detector==1.6.10
 livekit-protocol==1.1.22
 markdown-it-py==4.2.0

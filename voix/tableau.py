@@ -252,6 +252,35 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #pupitre button{background:transparent;border:1px solid var(--toi);border-radius:999px;
   color:#9ecbff;padding:2px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
 #pupitre button:hover{background:#132133}
+
+/* Qui transcrit, en ce moment. C'est la premiere question qu'on se pose quand une
+   transcription est mauvaise, et la reponse n'etait nulle part. */
+#moteur{border:1px solid var(--bord);border-radius:999px;padding:2px 10px;font-size:11.5px;
+  color:var(--faible);cursor:pointer;white-space:nowrap;display:none;
+  gap:5px;align-items:center}
+#moteur.montre{display:inline-flex}
+#moteur:hover{border-color:#4b5563;color:var(--texte)}
+#moteur.replie{border-color:var(--outil);color:#e3b341}
+#moteur::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--voix)}
+#moteur.replie::before{background:var(--outil)}
+
+/* Le choix du moteur : une liste avec ce que donne chaque palier gratuit. Sans cette
+   information, choisir revient a tirer au sort. */
+.avec-choix{position:relative;display:inline-flex}
+#choix-moteur{position:absolute;top:calc(100% + 8px);left:0;z-index:30;min-width:430px;
+  background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:11px 13px;
+  box-shadow:0 12px 32px #00000080;font-size:11.5px;color:var(--faible)}
+#choix-moteur[hidden]{display:none}
+#choix-moteur .m{display:grid;grid-template-columns:22px 1fr auto;gap:8px;
+  align-items:baseline;padding:4px 3px;border-radius:5px}
+#choix-moteur .m:hover{background:#1f242c}
+#choix-moteur .nom{color:var(--texte);font-weight:650}
+#choix-moteur .quoi{color:var(--faible)}
+#choix-moteur .rang{color:#5a636e;font-variant-numeric:tabular-nums}
+#choix-moteur .absent{opacity:.5}
+#choix-moteur .pied{border-top:1px solid var(--bord);margin-top:8px;padding-top:8px;
+  line-height:1.5}
+#choix-moteur .pied b{color:var(--texte)}
 h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:flex;gap:8px;align-items:center}
 
@@ -570,6 +599,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   </span>
 
   <span class="zone zone-direct">
+  <span class="avec-choix">
+    <span id="moteur" title="moteur de reconnaissance vocale"></span>
+    <div id="choix-moteur" hidden></div>
+  </span>
   <span id="compte" title="temps avant envoi automatique">
     <span id="reste"></span>
     <button id="retenir-vite" type="button"
@@ -1573,6 +1606,20 @@ function recevoir(e) {
     // ligne existante au lieu d'en créer une seconde, sinon un tour laisserait deux traces
     // pour un seul événement.
     if (e.genre === "tour_quota") { completerTour(e); return; }
+    if (e.genre === "moteurs_stt") {
+      inventaireMoteurs = e.liste || [];
+      chaineMoteurs = e.chaine || [];
+      moteurImpose = !!e.impose;
+      const tete = inventaireMoteurs.find(m => m.cle === e.actif);
+      majMoteur(tete ? tete.libelle : e.actif, false);
+      const b = document.getElementById("choix-moteur");
+      if (b && !b.hidden) dessinerChoix();
+      return;
+    }
+    if (e.genre === "moteur_actif") {
+      majMoteur(e.libelle, (e.tombes || []).length > 0);
+      return;
+    }
     if (e.genre === "pupitre") { majPupitre(e); return; }
     if (e.genre === "parole_fin") { outillerParole(e); return; }
     if (e.genre === "lecture") {
@@ -1623,6 +1670,78 @@ function recevoir(e) {
     }
     ajouter(e);
 }
+
+// --- qui transcrit, en ce moment -------------------------------------------------------
+// C'est la première question qu'on se pose quand une transcription est mauvaise, et la
+// réponse n'était nulle part. La pastille dit le moteur actif ; la liste dit ce que chaque
+// palier gratuit donne, sans quoi choisir revient à tirer au sort.
+const pastilleMoteur = document.getElementById("moteur");
+let inventaireMoteurs = [], chaineMoteurs = [], moteurImpose = false;
+
+function majMoteur(actif, replie) {
+  if (!actif) { pastilleMoteur.className = ""; return; }
+  pastilleMoteur.className = "montre" + (replie ? " replie" : "");
+  pastilleMoteur.textContent = actif;
+  pastilleMoteur.title = replie
+    ? actif + " — repli : le moteur de tête ne répond plus (clic pour choisir)"
+    : actif + " — moteur de reconnaissance (clic pour choisir)";
+}
+
+// Mettre un moteur en tête sans jeter les autres : le reste garde son ordre derrière. Une
+// fonction nommée plutôt qu'une ligne dans un gestionnaire de clic — c'est la seule vraie
+// règle de cet écran, et elle mérite d'être vérifiable.
+function ordreAvecTete(tete) {
+  if (!tete) return "";
+  const suite = chaineMoteurs.filter(c => c !== tete);
+  return [tete, ...suite].join(",");
+}
+
+function dessinerChoix() {
+  const b = document.getElementById("choix-moteur");
+  const lignes = inventaireMoteurs.map(m => {
+    const rang = m.rang == null ? "" : String(m.rang + 1);
+    const etat = m.dispo
+      ? (m.rang == null ? "hors chaîne" : "rang " + rang)
+      : "pas de clé";
+    return `<div class="m${m.dispo ? "" : " absent"}">`
+      + `<span class="rang">${ech(rang)}</span>`
+      + `<span><span class="nom">${ech(m.libelle)}</span> — `
+      + `<span class="quoi">${ech(m.gratuit)}`
+      + (m.streaming ? "" : " · sans streaming")
+      + (m.note ? " · " + ech(m.note) : "") + `</span></span>`
+      + `<span class="rang">${ech(etat)}</span></div>`;
+  }).join("");
+  const dispo = inventaireMoteurs.filter(m => m.dispo).map(m => m.cle);
+  b.innerHTML = lignes + `<div class="pied">`
+    + `<b>Ordre par défaut</b> : les quotas mensuels d'abord — ils reviennent, autant les `
+    + `dépenser — puis les crédits uniques, puis le local, illimité mais lent.<br>`
+    + (moteurImpose
+        ? `<b>VOIX_STT est posé dans l'environnement</b> : il gagne sur tout choix fait ici.`
+        : `<b>Choisir ici</b> vaut pour le prochain lancement : le moteur ne peut pas changer `
+          + `en cours de session.`)
+    + `<div class="tout-rien" style="margin-top:8px">`
+    + `<button type="button" id="moteur-defaut">ordre par défaut</button>`
+    + dispo.map(c => `<button type="button" data-tete="${ech(c)}">`
+        + `${ech((inventaireMoteurs.find(m => m.cle === c) || {}).libelle)} en tête</button>`).join("")
+    + `</div></div>`;
+
+  b.querySelector("#moteur-defaut").onclick = () => envoyerCmd({ cmd: "moteur_stt", ordre: "" });
+  for (const bouton of [...b.querySelectorAll("[data-tete]")]) {
+    bouton.onclick = () => envoyerCmd({
+      cmd: "moteur_stt", ordre: ordreAvecTete(bouton.getAttribute("data-tete")) });
+  }
+}
+
+pastilleMoteur.onclick = ev => {
+  ev.stopPropagation();
+  const b = document.getElementById("choix-moteur");
+  b.hidden = !b.hidden;
+  if (!b.hidden) dessinerChoix();
+};
+addEventListener("click", ev => {
+  const b = document.getElementById("choix-moteur");
+  if (b && !b.hidden && !b.contains(ev.target) && ev.target !== pastilleMoteur) b.hidden = true;
+});
 
 // --- les conversations en parallèle -----------------------------------------------------
 // Une seule écoute à la fois. Le reste continue de travailler : le micro est la seule

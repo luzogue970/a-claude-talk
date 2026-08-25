@@ -67,8 +67,14 @@ function elem(nom) {
     },
   };
 }
+// Les ids reellement presents dans le balisage. Un getElementById qui inventait un element
+// pour n'importe quel id masquait les chemins de creation paresseuse : le code croyait avoir
+// deja son panneau et ne l'initialisait jamais.
+globalThis.__ids = new Set((globalThis.__html || "").match(/id="[^"]+"/g)
+  ? (globalThis.__html.match(/id="[^"]+"/g) || []).map(s => s.slice(4, -1)) : []);
 globalThis.document = {
-  getElementById: id => __cache[id] || (__cache[id] = elem("#" + id)),
+  getElementById: id => __cache[id]
+    || (__ids.has(id) ? (__cache[id] = elem("#" + id)) : null),
   createElement: t => elem("<" + t + ">"),
   createTextNode: t => ({ nom: "#texte", textContent: t, children: [] }),
   body: { scrollHeight: 0 },

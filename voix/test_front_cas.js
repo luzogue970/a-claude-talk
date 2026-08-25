@@ -340,6 +340,66 @@ dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passe
 dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
      'et renvoie vers le bouton du decompte');
 
+// ---- quel moteur transcrit --------------------------------------------------------------
+titre('choix du moteur de reconnaissance');
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+
+const INV = [
+  { cle: 'speechmatics', libelle: 'Speechmatics', gratuit: '8 h/mois, renouvele',
+    renouvelable: true, streaming: true, note: 'meilleur WER', dispo: true, rang: 0 },
+  { cle: 'azure', libelle: 'Azure', gratuit: '5 h/mois au palier F0',
+    renouvelable: true, streaming: true, note: '', dispo: true, rang: 1 },
+  { cle: 'groq', libelle: 'Groq', gratuit: 'palier gratuit',
+    renouvelable: true, streaming: false, note: '', dispo: false, rang: null },
+  { cle: 'local', libelle: 'local (faster-whisper)', gratuit: 'illimite, hors ligne',
+    renouvelable: true, streaming: false, note: '', dispo: true, rang: 2 },
+];
+recevoir({ n: 950, genre: 'moteurs_stt', liste: INV,
+           chaine: ['speechmatics', 'azure', 'local'], actif: 'speechmatics', impose: false });
+dire(pastilleMoteur.className === 'montre', 'la pastille apparait');
+dire(pastilleMoteur.textContent === 'Speechmatics',
+     'et nomme le moteur en tete : ' + pastilleMoteur.textContent);
+dire(!/repli/.test(pastilleMoteur.title), 'sans mention de repli au depart');
+
+// une bascule : la pastille doit suivre, sinon elle annonce le moteur du demarrage a vie
+recevoir({ n: 951, genre: 'moteur_actif', cle: 'azure', libelle: 'Azure',
+           tombes: ['Speechmatics'] });
+dire(pastilleMoteur.textContent === 'Azure', 'apres bascule, elle nomme le nouveau');
+dire(pastilleMoteur.className.split(' ').includes('replie'),
+     'et se marque comme un repli');
+dire(/repli/.test(pastilleMoteur.title), 'l infobulle explique pourquoi');
+
+// la liste de choix
+const boite = document.getElementById('choix-moteur');
+boite.hidden = true;                       // ce que porte l attribut hidden du balisage
+pastilleMoteur.onclick({ stopPropagation: () => {} });
+dire(boite.hidden === false, 'le clic ouvre la liste');
+dire(/8 h\/mois/.test(boite.innerHTML) && /5 h\/mois/.test(boite.innerHTML),
+     'chaque moteur annonce son palier gratuit');
+dire(/sans streaming/.test(boite.innerHTML), 'et les moteurs batch sont signales');
+dire(/pas de cl/.test(boite.innerHTML), 'un moteur sans cle est marque comme tel');
+dire(/prochain lancement/.test(boite.innerHTML),
+     'le pied dit que le choix vaut au prochain lancement');
+
+// La regle qui compte, testee directement plutot qu'a travers un bouton construit par
+// innerHTML : mettre un moteur en tete ne doit pas jeter les autres.
+dire(ordreAvecTete('local') === 'local,speechmatics,azure',
+     'en tete : ' + ordreAvecTete('local'));
+dire(ordreAvecTete('speechmatics') === 'speechmatics,azure,local',
+     'le moteur deja en tete ne bouge pas : ' + ordreAvecTete('speechmatics'));
+dire(ordreAvecTete('inconnu') === 'inconnu,speechmatics,azure,local',
+     'un moteur hors chaine s ajoute devant sans rien perdre');
+dire(ordreAvecTete('') === '', 'sans moteur, aucun ordre');
+dire(/data-tete=/.test(boite.innerHTML), 'un bouton par moteur disponible est propose');
+dire(/moteur-defaut/.test(boite.innerHTML), 'et un retour a l ordre par defaut');
+
+// VOIX_STT impose : le dire, sinon on cliquerait sans effet
+recevoir({ n: 952, genre: 'moteurs_stt', liste: INV,
+           chaine: ['azure', 'local'], actif: 'azure', impose: true });
+dessinerChoix();
+dire(/VOIX_STT est pos/.test(document.getElementById('choix-moteur').innerHTML),
+     'une variable d environnement imposee est signalee');
+
 // ---- conversations en parallele ---------------------------------------------------------
 titre('pupitre : plusieurs conversations, un seul micro');
 socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;

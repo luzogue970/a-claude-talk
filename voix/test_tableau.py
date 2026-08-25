@@ -432,7 +432,7 @@ def tout_genre_affiche_a_un_filtre():
     hors_flux = {
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
         "ecoute", "retenir", "tour_quota", "_histoire",
-        "pupitre", "parole_fin", "lecture",
+        "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)

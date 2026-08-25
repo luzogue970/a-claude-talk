@@ -168,7 +168,7 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 | `VOIX_WORKER_EFFORT` | `xhigh` | `low` \| `medium` \| `high` \| `xhigh` \| `max` — réglable en cours de session depuis le tableau |
 | `VOIX_SPEAKER_MODEL` | `claude-haiku-4-5` | le porte-parole |
 | `VOIX_LANGUAGE` | `fr-FR` | STT et TTS |
-| `VOIX_STT` | `auto` | `auto` (Azure → Deepgram → local) \| `azure` \| `deepgram` \| `local` |
+| `VOIX_STT` | `auto` | `auto`, ou une liste ordonnée : `speechmatics,gladia,local` |
 | `DEEPGRAM_API_KEY` | vide | active le repli Deepgram ; sans elle la chaîne est Azure → local |
 | `VOIX_DEEPGRAM_MODELE` | `nova-3` | seul `nova-3` accepte le biais de vocabulaire (`keyterm`) |
 | `VOIX_DEEPGRAM_KEYTERM` | `1` | `0` coupe le biais si Deepgram le refusait en français |
@@ -1067,6 +1067,74 @@ construit à partir de maintenant.
 > ⚠️ **Au bureau, réfléchis avant.** Même avec les verrous, tout ce qui est reconnu comme de
 > la parole part chez Microsoft. Dans une boîte qui fait de l'analyse de binaires, ça se
 > discute — et le plafond limite la facture, pas l'exposition.
+
+## Choisir son moteur de reconnaissance
+
+Sept moteurs déclarés au même endroit (`voix/moteurs_stt.py`), tous avec un **palier gratuit
+réel**. Les chiffres datent d'août 2026 et viennent des pages de tarif des fournisseurs — ce
+sont des indications pour choisir, pas des garanties.
+
+| Moteur | Gratuit | Type | Streaming | Clé |
+|---|---|---|---|---|
+| **Speechmatics** | 8 h/mois, renouvelé, sans carte | mensuel | oui | `SPEECHMATICS_API_KEY` |
+| **Gladia** | 4 h/mois de temps réel, renouvelé | mensuel | oui | `GLADIA_API_KEY` |
+| **Azure** | 5 h/mois au palier F0 | mensuel | oui | `AZURE_SPEECH_KEY` |
+| **AssemblyAI** | 50 $ de crédits (~300 h) | crédit unique | oui | `ASSEMBLYAI_API_KEY` |
+| **Deepgram** | 200 $ de crédits | crédit unique | oui | `DEEPGRAM_API_KEY` |
+| **Groq** | palier gratuit, limites journalières | mensuel | **non** | `GROQ_API_KEY` |
+| **local** (faster-whisper) | illimité, hors ligne | — | non | aucune |
+
+**L'ordre par défaut suit une logique de budget** : les quotas **mensuels** d'abord — ils
+reviennent, autant les dépenser — puis les **crédits uniques**, qu'on garde pour quand les
+mensuels sont épuisés, puis le **local**, illimité mais lent. Le local ferme toujours la
+marche : c'est le seul qui ne peut pas manquer de crédit, donc le seul qui garantit qu'on ne
+devienne jamais sourd.
+
+Un moteur sans clé est retiré de la chaîne, pas une cause d'échec. Ajoute une clé, il entre
+à sa place ; enlève-la, il sort.
+
+**Le vocabulaire du projet survit à chaque bascule.** Chaque fournisseur a son propre nom pour
+le biais lexical — `additional_vocab`, `custom_vocabulary`, `keyterms_prompt`, `keyterm`,
+`phrase_list`, `prompt` — et `moteurs_stt.construire()` est le seul endroit qui connaît cette
+diversité. Sans ce biais, un sigle maison redevient « kubedka » au pire moment.
+
+### Le voir, et le changer
+
+L'en-tête porte une pastille qui nomme **le moteur qui transcrit en ce moment** — la première
+question qu'on se pose quand une transcription est mauvaise. Elle passe en orange quand la
+chaîne s'est replié sur un moteur de secours, et son infobulle dit pourquoi.
+
+Un clic ouvre la liste : chaque moteur avec son palier gratuit, son rang dans la chaîne, et
+s'il lui manque une clé. `Speechmatics en tête` le place devant **sans jeter les autres**, qui
+gardent leur ordre derrière.
+
+Le choix est **enregistré** dans `~/.config/claude-talk/stt.json` et vaut **au prochain
+lancement** : `AgentSession.stt` est en lecture seule, le moteur ne peut pas changer en cours
+de session. Le panneau le dit, plutôt que de laisser croire à un effet immédiat. `VOIX_STT`
+posé dans l'environnement gagne sur ce choix, et le panneau le signale aussi.
+
+### Le banc d'essai
+
+Les éditeurs publient tous des bancs où ils gagnent. Ce qui décide ici n'est pas un taux
+d'erreur moyen sur de l'anglais lu, c'est la performance **sur ton français technique** :
+
+```sh
+../.venv/bin/python voix/banc_stt.py                   # trois phrases de référence
+../.venv/bin/python voix/banc_stt.py ma-voix.wav        # ta voix — ce qui compte vraiment
+../.venv/bin/python voix/banc_stt.py --moteurs gladia,speechmatics
+```
+
+Il mesure le texte rendu mot pour mot, le **WER** (distance de Levenshtein sur les mots) et la
+latence, puis propose la ligne `VOIX_STT` correspondant au classement.
+
+Deux détails qui font la différence entre un banc utile et un banc trompeur :
+
+- **Une seconde de silence est ajoutée à la fin.** Sans elle le VAD ne voit jamais de fin de
+  parole, aucun segment ne se ferme, et le moteur rend une chaîne vide en 0,2 s — ce qui se lit
+  comme « il n'a rien compris » alors qu'on ne lui avait rien demandé.
+- **Un moteur qui ne répond pas est déclaré inutilisable, pas mauvais.** Un quota épuisé ferme
+  le flux sans transcription et sans exception ; noter 100 % d'erreur accuserait la qualité
+  pour un problème de crédit. Mesuré sur Azure, dont le palier F0 était épuisé.
 
 ## Quand Azure lâche
 

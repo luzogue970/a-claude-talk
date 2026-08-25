@@ -20,6 +20,7 @@ Run it:  python voix/agent.py console --input-device "..." --output-device "..."
 
 import asyncio
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -45,6 +46,7 @@ try:
 except ImportError:   # paquet absent d'un venv reconstruit : on doit rester audible
     deepgram = None
 
+import moteurs_stt
 import pupitre
 import stt_local
 
@@ -467,69 +469,36 @@ class Voix(Agent):
         return accord
 
 
-def _stt_azure():
-    # phrase_list biases the acoustic layer. Without it Azure fr-FR turned a three-letter
-    # in-house acronym into
-    # "kubedka" and "un fichier point MD" into "un point MD".
-    return azure.STT(
-        speech_key=config.AZURE_KEY,
-        speech_region=config.AZURE_REGION,
-        language=config.LANGUAGE,
-        phrase_list=config.phrase_list(),
-        explicit_punctuation=True,
-    )
-
-
-def _stt_deepgram():
-    """Le repli de même calibre qu'Azure.
-
-    keyterm est à nova-3 ce que phrase_list est à Azure : sans lui la bascule ferait perdre
-    le vocabulaire du projet au pire moment, et un sigle maison redeviendrait « kubedka » juste
-    parce qu'Azure a manqué de crédit."""
-    extra = {}
-    if config.DEEPGRAM_KEYTERM:
-        # Nova-3 plafonne le nombre de termes ; on garde les plus utiles.
-        extra["keyterm"] = config.phrase_list()[:50]
-    return deepgram.STT(
-        api_key=config.DEEPGRAM_KEY,
-        model=config.DEEPGRAM_MODELE,
-        language=config.LANGUAGE,
-        punctuate=True,
-        **extra,
-    )
-
-
 def _stt(vad):
-    """Azure, puis Deepgram, puis le moteur local.
+    """La chaîne de reconnaissance, assemblée depuis la table des moteurs.
 
-    FallbackAdapter bascule tout seul quand le premier moteur échoue — c'est exactement le
-    trou qui a fait perdre une session entière : le quota Azure s'épuise, chaque phrase
-    rate, et rien ne prend le relais.
+    L'ordre par défaut suit une logique de budget : les quotas MENSUELS d'abord — ils
+    reviennent, autant les dépenser — puis les CRÉDITS uniques, qu'on garde pour quand les
+    mensuels sont épuisés, puis le local, illimité mais lent.
 
-    Deepgram est là parce que le filet local, lui, se sent : 4 à 5 s par phrase transforme
-    une conversation en échange de télégrammes. Entre Azure et Deepgram la bascule est
-    inaudible — deux moteurs en streaming, résultats intermédiaires, même ordre de latence.
-    Le local reste en queue pour le jour où les deux services sont coupés ensemble : lent
-    vaut mieux que sourd.
+    `FallbackAdapter` bascule tout seul quand un moteur échoue. C'est exactement le trou qui
+    avait fait perdre une session entière : le quota Azure s'épuise, chaque phrase rate, et
+    rien ne prend le relais.
 
-    config.chaine_stt() décide, ici on assemble seulement — pour que le panneau de
-    démarrage et l'agent ne puissent pas raconter deux histoires différentes."""
-    fabriques = {
-        "azure": _stt_azure,
-        "deepgram": _stt_deepgram,
-        "local": lambda: stt_local.local(vad),
-    }
-    chaine = config.chaine_stt()
-    if "deepgram" in chaine and deepgram is None:
-        chaine = [n for n in chaine if n != "deepgram"] or ["local"]
-        log.warning("clé Deepgram présente mais livekit-plugins-deepgram n'est pas installé "
-                    "(pip install livekit-plugins-deepgram) : repli retiré de la chaîne")
-    if chaine == ["local"] and config.STT_ENGINE == "auto":
-        log.warning("aucune clé cloud (Azure ni Deepgram) : reconnaissance locale seule, "
-                    "compter 4 à 5 s par phrase")
-    log.info("reconnaissance vocale : %s", " → ".join(chaine))
+    Un moteur dont la clé manque est retiré de la chaîne plutôt que de faire échouer la
+    première phrase. Le local ferme toujours la marche : c'est le seul qui ne peut pas manquer
+    de crédit, donc le seul qui garantit qu'on ne devienne jamais sourd.
+    """
+    chaine = moteurs_stt.chaine()
+    log.info("reconnaissance vocale : %s", moteurs_stt.resume())
+    if chaine == ["local"]:
+        log.warning("aucune clé de reconnaissance : moteur local seul, "
+                    "compter 4 à 5 s par phrase. Vois la section Prérequis du README.")
 
-    moteurs = [fabriques[nom]() for nom in chaine]
+    moteurs = []
+    for cle in chaine:
+        try:
+            moteurs.append(moteurs_stt.construire(cle, vad))
+        except Exception:
+            # Un moteur qui refuse de se construire ne doit pas emporter les autres.
+            log.warning("moteur « %s » inutilisable, retiré de la chaîne", cle, exc_info=True)
+    if not moteurs:
+        moteurs = [moteurs_stt.construire("local", vad)]
     if len(moteurs) == 1:
         return moteurs[0]
     return stt_api.FallbackAdapter(
@@ -623,6 +592,8 @@ async def entrypoint(ctx: JobContext):
     # de port devient la regle, et un panneau qui annonce une adresse ou personne ne repond
     # est pire que pas d'adresse du tout.
     valeurs["tableau"] = f"http://127.0.0.1:{tableau.port}"
+    valeurs["reconnaissance"] = (f"{moteurs_stt.resume()} · {config.LANGUAGE} · "
+                                 f"{len(config.phrase_list())} termes biaisés")
     valeurs["journal"] = conv.fichier.name
     if config.REPRENDRE:
         valeurs["reprise de"] = config.REPRENDRE
@@ -659,6 +630,11 @@ async def entrypoint(ctx: JobContext):
         # En tâche de fond : lire huit cents messages ne doit pas retarder le premier mot.
         asyncio.create_task(_rejouer_historique(config.REPRENDRE))
 
+    # Quel moteur transcrit, et lesquels sont disponibles. Publie tot : c'est la premiere
+    # question qu'on se pose quand une transcription est mauvaise.
+    tableau.publier("moteurs_stt", liste=moteurs_stt.inventaire(),
+                    chaine=moteurs_stt.chaine(), actif=moteurs_stt.chaine()[0],
+                    impose=bool(os.environ.get("VOIX_STT", "").strip()))
     tableau.publier("delais",
                     paliers=[{"s": p} for p in config.ECOUTE_PALIERS],
                     actuel=config.ECOUTE_MIN, plafond=config.plafond_ecoute())
@@ -675,6 +651,7 @@ async def entrypoint(ctx: JobContext):
     if isinstance(moteur_stt, stt_api.FallbackAdapter):
         # Le label est le chemin complet du module (livekit.plugins.azure.stt.STT), pas le
         # nom du plugin : on cherche donc le segment, pas une égalité.
+        tombes: set[str] = set()
         NOMS = (("azure", "Azure"), ("deepgram", "Deepgram"),
                 ("stream_adapter", "le moteur local"), ("whisper", "le moteur local"))
 
@@ -691,15 +668,25 @@ async def entrypoint(ctx: JobContext):
             if ev.available:
                 texte = f"reconnaissance : {nom} est de nouveau disponible"
             else:
-                jolis = {"azure": "Azure", "deepgram": "Deepgram",
-                         "local": "le moteur local"}
-                restants = [jolis[n] for n in config.chaine_stt() if jolis.get(n) != nom]
+                restants = [moteurs_stt.PAR_CLE[c].libelle
+                            for c in moteurs_stt.chaine()
+                            if moteurs_stt.PAR_CLE[c].libelle != nom]
                 suite = restants[0] if restants else "plus rien"
                 texte = (f"reconnaissance : {nom} est tombé, bascule sur {suite} "
                          f"(nouvelle tentative en arrière-plan)")
             log.warning("%s", texte)
             tableau.publier("erreur" if not ev.available else "log",
                             niveau="WARNING", source="stt", texte=texte)
+            # Le moteur ACTIF, recalcule : c'est le premier de la chaine encore debout.
+            # Sans ca le tableau continuerait d'annoncer celui du demarrage.
+            tombes.discard(nom) if ev.available else tombes.add(nom)
+            debout = [c for c in moteurs_stt.chaine()
+                      if moteurs_stt.PAR_CLE[c].libelle not in tombes]
+            tableau.publier("moteur_actif",
+                            cle=debout[0] if debout else None,
+                            libelle=(moteurs_stt.PAR_CLE[debout[0]].libelle
+                                     if debout else "aucun"),
+                            tombes=sorted(tombes))
 
     session = AgentSession(
         stt=moteur_stt,
@@ -805,11 +792,10 @@ async def entrypoint(ctx: JobContext):
         # devenait illisible et le vrai message se perdait dedans. On résume, une fois.
         if "Quota exceeded" in brut:
             cle = "quota-stt"
-            suivant = [n for n in config.chaine_stt() if n != "azure"]
+            suivant = [c for c in moteurs_stt.chaine() if c != "azure"]
             clair = ("quota Azure de transcription épuisé — le palier gratuit F0 s'arrête à "
-                     "5 h/mois, passer en S0 le supprime. Bascule sur "
-                     + ({"deepgram": "Deepgram", "local": "le moteur local (lent)"}
-                        .get(suivant[0], suivant[0]) if suivant else "rien"))
+                     "5 h/mois. Bascule sur "
+                     + (moteurs_stt.PAR_CLE[suivant[0]].libelle if suivant else "rien"))
         elif "stt" in brut.lower():
             cle, clair = "stt", f"reconnaissance vocale en échec : {brut[:180]}"
         else:
@@ -923,6 +909,23 @@ async def entrypoint(ctx: JobContext):
             if not await agent.relire(cle if isinstance(cle, str) else None):
                 tableau.publier("log", niveau="INFO", source="lecture",
                                 texte="ce texte n'est plus en mémoire")
+        elif nom == "moteur_stt":
+            # Le moteur ne peut pas changer a chaud : AgentSession.stt est en lecture seule.
+            # On enregistre donc le choix, applique au prochain lancement — et on le DIT,
+            # plutot que de laisser croire a un effet immediat.
+            ordre = donnees.get("ordre")
+            if ordre is not None and not isinstance(ordre, str):
+                return
+            moteurs_stt.enregistrer_preference(ordre or None)
+            nouvelle = moteurs_stt.chaine(ordre or None)
+            tableau.publier("moteurs_stt", liste=moteurs_stt.inventaire(),
+                            chaine=nouvelle, actif=nouvelle[0],
+                            impose=bool(os.environ.get("VOIX_STT", "").strip()),
+                            enregistre=True)
+            tableau.publier("ordre", texte=(
+                "reconnaissance : " + " → ".join(moteurs_stt.PAR_CLE[c].libelle
+                                                 for c in nouvelle)
+                + " — au prochain lancement (le moteur ne change pas à chaud)"))
         elif nom == "prendre_micro":
             # Prendre le micro pour CETTE conversation. Les autres se taisent d'elles-mêmes
             # en une seconde, par leur propre surveillance.

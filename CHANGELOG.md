@@ -7,6 +7,45 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.8.0] — 2026-08-25
+
+### Ajoute — sept moteurs de reconnaissance, tous avec un palier gratuit reel
+
+Veille d'aout 2026 sur ce qui existe. Quatre nouveaux moteurs, tous avec un plugin LiveKit de
+premiere main et un palier gratuit verifie : Speechmatics (8 h/mois renouvele, meilleur WER
+des bancs publics), Gladia (4 h/mois de temps reel), AssemblyAI (50 $ de credits), Groq
+(whisper-large-v3, sans streaming).
+
+- `voix/moteurs_stt.py` : une table unique. La chaine de repli, le selecteur du tableau, le
+  panneau de configuration et le banc d'essai en derivent — trois listes paralleles auraient
+  derive l'une de l'autre, c'est deja arrive avec les libelles de filtres.
+- L'ordre par defaut suit une logique de budget : quotas MENSUELS d'abord (ils reviennent),
+  CREDITS uniques ensuite (finis, on les garde), local en dernier (illimite, lent).
+- Le vocabulaire du projet survit a chaque bascule. Chaque fournisseur nomme differemment le
+  biais lexical — six noms differents — et un seul endroit connait cette diversite.
+- `config.chaine_stt()` supprimee : elle faisait doublon avec la table. Deux sources de
+  verite sur la meme question, c'est la panne qu'on cherche du mauvais cote.
+
+### Ajoute — voir et choisir le moteur qui transcrit
+
+- Une pastille nomme le moteur ACTIF, et suit les bascules du repli. Elle passe en orange
+  quand la chaine s'est replie, avec la raison en infobulle.
+- Un clic ouvre la liste : palier gratuit, rang dans la chaine, cle manquante. « X en tete »
+  place un moteur devant sans jeter les autres.
+- Le choix est enregistre hors du depot et vaut au prochain lancement : `AgentSession.stt`
+  est en lecture seule. Le panneau le dit plutot que de laisser croire a un effet immediat.
+
+### Ajoute — `voix/banc_stt.py`, un banc sur SA voix
+
+Les editeurs publient tous des bancs ou ils gagnent. Celui-ci mesure le texte rendu, le WER
+et la latence, sur des phrases de francais technique ou sur un enregistrement fourni.
+
+- Une seconde de silence ajoutee en fin : sans elle le VAD ne ferme aucun segment et le
+  moteur rend du vide en 0,2 s, ce qui se lit comme une mauvaise transcription.
+- Un moteur qui ne repond pas est declare INUTILISABLE, pas mauvais. Un quota epuise ferme le
+  flux sans exception ; noter 100 % d'erreur accuserait la qualite pour un probleme de credit.
+  Mesure sur Azure, dont le palier F0 etait epuise.
+
 ## [1.7.0] — 2026-08-25
 
 ### Retire — l'ancien systeme `tts/`
