@@ -205,6 +205,24 @@ PAGE = r"""<!doctype html>
   --permission:#ff7b72; --tour:#39c5cf;
 }
 *{box-sizing:border-box}
+
+/* Les barres de defilement natives cassaient l'ensemble : une gouttiere claire avec des
+   fleches, au milieu d'une interface sombre. Fines, sans fleches, et de la couleur des
+   bordures — elles se voient quand on les cherche et disparaissent sinon. */
+*{scrollbar-width:thin;scrollbar-color:#39414d transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2f3641;border-radius:99px;
+  border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#454f5d;background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-button{display:none}
+
+/* Une interface qui bouge doit bouger doucement. Un seul reglage plutot qu'une transition
+   recopiee sur chaque element — et 120 ms, assez pour etre percu, trop court pour attendre. */
+button,select,summary,input,textarea,.q,.act,.pip,#etat,#travail,#compte{
+  transition:background-color .12s ease,border-color .12s ease,color .12s ease,opacity .12s ease}
+:focus-visible{outline:2px solid var(--toi);outline-offset:1px}
 body{margin:0;background:var(--fond);color:var(--texte);
   font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(8px);
@@ -340,7 +358,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 #saisie{flex:1;min-width:0;background:var(--carte);color:var(--texte);
   border:1px solid var(--bord);border-radius:19px;padding:8px 15px;font:inherit;
   font-size:13px;line-height:1.5;outline:none;resize:none;overflow-y:auto;
-  display:block;height:36px;max-height:40vh;
+  display:block;height:36px;max-height:40vh;overflow-y:hidden;
   transition:height .12s ease-out,border-radius .12s ease-out,border-color .12s}
 /* Une seule ligne : la pastille arrondie du reste de l'interface. Plusieurs lignes : un coin
    plus sobre, sinon la boite ressemble a une gelule etiree. */
@@ -390,6 +408,10 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .g-toi .tape{color:var(--faible);font-size:11px;margin-right:5px}
 .ev{display:grid;grid-template-columns:62px 92px 14px 1fr;gap:12px;padding:7px 0;
   border-bottom:1px solid #1c2129;align-items:baseline}
+/* Seules les lignes qui arrivent VRAIMENT en direct s'animent. Animer le rejeu d'historique
+   lancerait cinq cents animations d'un coup, ce qui fait exactement l'effet inverse. */
+@keyframes pose{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.ev.neuve{animation:pose .16s ease-out}
 .t{color:#5a636e;font-size:11px;font-variant-numeric:tabular-nums;text-align:right}
 .badge{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
 .corps{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -410,8 +432,14 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .g-erreur .badge{color:var(--erreur)} .g-erreur .corps{color:#ffb3ad}
 /* Le passe rejoue est lisible mais visiblement passe : sans ca, relire soixante tours
    d'historique donne l'impression que tout vient de se produire. */
-.ev.passe{opacity:.55}
-.ev.passe .pip{display:none}
+/* Le passé rejoué est lisible mais visiblement passé. On ne descend pas plus bas que 0,7 :
+   à 0,55 le texte de Claude tombait à 3,8:1 de contraste, sous le minimum lisible. */
+.ev.passe{opacity:.7}
+/* PAS de display:none sur le pip d'une ligne passée. Dans une grille, display:none retire
+   l'element du flux : le corps glissait alors dans la colonne de 14 px prévue pour
+   l'indicateur, et 563 caracteres dans 14 px donnent UN CARACTERE PAR LIGNE — des lignes
+   de 7 400 px de haut. Un pip sans etat n'a ni bordure ni contenu : il est deja invisible,
+   il suffit de le laisser occuper sa cellule. */
 .g-reprise{border-bottom:1px solid var(--tour)}
 .g-reprise .badge{color:var(--tour)}
 .g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.02em}
@@ -855,6 +883,9 @@ function majActivite() {
 // s'ajouter — sinon on lit « bon bonj bonjou bonjour ».
 const AGREGE = new Set(["pensee", "texte", "voix"]);
 let dernier = null;
+// Vrai pendant le rejeu de l'historique : les lignes du passé ne s'animent pas, sinon une
+// reconnexion déclencherait cinq cents animations simultanées.
+let enRejeu = false;
 function ajouter(e) {
   if (e.genre === "config") { carteConfig(e); return; }
   // Un résultat vide sert à clore l'indicateur de son outil, pas à remplir le flux d'une
@@ -872,7 +903,8 @@ function ajouter(e) {
     dernier.querySelector(".corps").textContent += e.texte;
   } else {
     const ligne = document.createElement("div");
-    ligne.className = `ev g-${e.genre}` + (e.passe ? " passe" : "");
+    ligne.className = `ev g-${e.genre}` + (e.passe ? " passe" : "")
+                    + (enRejeu || e.passe ? "" : " neuve");
     ligne.dataset.g = e.genre;
     ligne.style.display = actifs.has(e.genre) ? "" : "none";
     // L'heure de l'horloge plutôt que des secondes depuis le lancement : « 14:23:07 » se
@@ -1329,6 +1361,9 @@ function ajusterHauteur() {
   const plafond = Math.round((window.innerHeight || 800) * 0.4);
   const voulue = Math.min(Math.max(champ.scrollHeight || HAUTEUR_MINI, HAUTEUR_MINI), plafond);
   champ.style.height = voulue + "px";
+  // La barre de defilement n'apparait qu'au plafond. Laisser `overflow-y:auto` en
+  // permanence affichait une gouttiere des la deuxieme ligne, pour rien.
+  champ.style.overflowY = voulue >= plafond ? "auto" : "hidden";
   champ.classList.toggle("une-ligne", voulue <= HAUTEUR_MINI + 2);
   reserverPlace();
 }
@@ -1400,7 +1435,9 @@ function brancher() {
       // c'est une resynchronisation, pas un affichage.
       e.evenements.forEach(ev => { if (ev.genre === "micro") microActif = ev.actif; });
       majMicro();
-      e.evenements.filter(ev => !dejaVu(ev)).forEach(ajouter);
+      enRejeu = true;
+      try { e.evenements.filter(ev => !dejaVu(ev)).forEach(ajouter); }
+      finally { enRejeu = false; }
       return;
     }
     if (dejaVu(e)) return;

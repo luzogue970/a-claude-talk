@@ -629,7 +629,13 @@ cd voix
 ../.venv/bin/python test_conversation.py  # journal, etats, reprise
 ../.venv/bin/python test_tableau.py       # invariants du serveur du tableau
 node test_front.js                        # le front, sans navigateur
+node test_rendu.js                        # la mise en page, dans Chrome
 ```
+
+`test_rendu.js` rend la page dans Chrome et mesure la géométrie réelle. Il existe parce que
+`test_front.js` stube le DOM et ne mesure donc aucune mise en page : il a laissé passer un
+bug où le corps des messages tombait dans une colonne de 14 px. Sans Chrome installé, il
+s'abstient au lieu d'échouer.
 
 `test_front.js` extrait le `<script>` de `tableau.py`, lui donne un DOM minimal et vérifie les
 invariants qui, quand ils cassent, **mentent à l'utilisateur** : un indicateur qui tourne
@@ -666,6 +672,27 @@ savoir ce qui avait réellement été envoyé.
 La ligne est maintenant publiée par chaque branche qui **consomme** l'énoncé — réponse à une
 permission, ordre local, envoi au worker — et jamais en amont. Une dictée retenue ne produit
 qu'une ligne `dictée`.
+
+### « Un caractère par ligne » — display:none dans une grille
+
+L'historique rejoué était illisible : chaque message s'affichait sur une colonne d'un
+caractère de large, sur des lignes de 7 400 px de haut.
+
+La cause tient en une ligne de CSS : `.ev.passe .pip{display:none}`, ajoutée pour masquer
+l'indicateur des lignes du passé. Dans une grille, **`display:none` ne masque pas — il retire
+l'élément du flux**. Le corps du message glissait donc dans la colonne de 14 px prévue pour
+l'indicateur, et 563 caractères dans 14 px donnent exactement ce qui était décrit.
+
+La règle était inutile : un indicateur sans état n'a ni bordure ni contenu, il est déjà
+invisible. Il suffit de le laisser occuper sa cellule.
+
+Deux leçons appliquées :
+
+- **Le stub ne voit pas la mise en page.** `test_rendu.js` mesure maintenant dans Chrome, et
+  vérifie que la colonne de texte fait plus de 400 px et qu'aucune ligne ne dépasse 300 px de
+  haut. Le bug a été réintroduit pour confirmer que le test le rattrape : il le rattrape.
+- **L'opacité du passé était trop basse.** À 0,55 le texte de Claude tombait à 3,8:1 de
+  contraste, sous le minimum lisible ; à 0,7 il est à 5,4:1.
 
 ### Le clic avalé — la vraie cause du « bouton qui ne marche pas du premier coup »
 

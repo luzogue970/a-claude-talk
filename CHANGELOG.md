@@ -7,6 +7,30 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.1.2] — 2026-08-25
+
+### Corrige — l'historique rejoue s'affichait sur un caractere de large
+
+`.ev.passe .pip{display:none}` retirait l'indicateur du flux de la grille : le corps du
+message glissait dans la colonne de 14 px prevue pour lui, et 563 caracteres dans 14 px
+donnent un caractere par ligne, sur des lignes de 7 400 px de haut.
+
+- La regle est retiree : un indicateur sans etat est deja invisible, il suffit de le laisser
+  occuper sa cellule.
+- L'opacite du passe monte de 0,55 a 0,7 : a 0,55 le texte de Claude tombait a 3,8:1 de
+  contraste, sous le minimum lisible ; il est maintenant a 5,4:1.
+- `voix/test_rendu.js` mesure desormais la geometrie dans Chrome. Le stub de `test_front.js`
+  ne pouvait pas voir ce bug. Verifie en reintroduisant la regle : le test la rattrape.
+
+### Ajoute — une interface qui bouge doucement
+
+- Barres de defilement fines, sans fleches, de la couleur des bordures : les natives
+  ouvraient une gouttiere claire au milieu d'une interface sombre.
+- Le champ de saisie n'affiche sa barre qu'une fois plafonne, plus des la deuxieme ligne.
+- Transitions de 120 ms sur tout ce qui reagit, declarees une fois plutot que recopiees.
+- Les lignes qui arrivent en direct se posent au lieu d'apparaitre d'un coup — et seulement
+  celles-la : animer un rejeu lancerait cinq cents animations simultanees.
+
 ## [1.1.1] — 2026-08-25
 
 ### Ajoute — expliquer « retenir » sur place
