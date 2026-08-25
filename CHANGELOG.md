@@ -7,6 +7,28 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.1.0] — 2026-08-25
+
+### Ajoute — filtres du flux regroupes en familles
+
+Dix-huit boutons alignes ne disaient ni ce qu'ils montraient ni pourquoi on voudrait les
+couper : il fallait les avoir ecrits pour s'en souvenir.
+
+- Quatre familles, chacune une liste deroulante : Conversation, Travail, Commandes, Systeme.
+- Une phrase par ligne, qui dit a quoi elle sert — le choix se fait sans documentation.
+- Le compteur de la pastille (`4/5`) et son style disent l'etat de la famille sans l'ouvrir.
+- `tout` / `rien` par famille : couper cinq lignes ne demande plus cinq clics.
+
+### Corrige — une ligne « session » invisible pour toujours
+
+Le genre `session` arrivait dans le flux sans figurer dans les libelles : sa ligne etait donc
+creee avec `display:none`, et aucun filtre ne pouvait la montrer.
+
+- Libelle, explication et defaut sont declares au meme endroit ; une deuxieme liste aurait
+  derive de la premiere, et c'est exactement ce qui s'etait produit.
+- Un test lit les deux cotes dans la source (ce qui est publie, ce qui est declare) et refuse
+  tout ecart. Recopier la liste dans le test n'aurait jamais vu l'oubli.
+
 ## [1.0.0] — 2026-08-25
 
 ### Documentation — README complet et CHANGELOG

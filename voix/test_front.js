@@ -29,7 +29,14 @@ function elem(nom) {
     nom, className: "", textContent: "", innerHTML: "", title: "", value: "",
     disabled: false, hidden: false, placeholder: "", style: {}, children: [],
     dataset: {}, _q: {},
-    appendChild(c) { this.children.push(c); },
+    appendChild(c) { this.children.push(c); return c; },
+    append(...cs) { for (const c of cs) this.children.push(c); },
+    querySelectorAll(sel) {
+      // seul selecteur utilise par la page : les familles ouvertes
+      if (sel === "details[open]") return this.children.filter(c => c.open);
+      return [];
+    },
+    contains(n) { return n === this || this.children.some(c => c.contains && c.contains(n)); },
     // Une LISTE par type : le DOM reel garde tous les ecouteurs, et n'en garder qu'un
     // masquait le fait que le champ en a deux sur keydown (Echap et Entree).
     addEventListener(t, f) { ((this._ev = this._ev || {})[t] ||= []).push(f); },
@@ -63,6 +70,7 @@ function elem(nom) {
 globalThis.document = {
   getElementById: id => __cache[id] || (__cache[id] = elem("#" + id)),
   createElement: t => elem("<" + t + ">"),
+  createTextNode: t => ({ nom: "#texte", textContent: t, children: [] }),
   body: { scrollHeight: 0 },
 };
 globalThis.window = { innerHeight: 800, scrollY: 0, scrollTo() {} };
@@ -134,6 +142,60 @@ suite('reflexion reprise entre deux outils', [
 suite('outil encore en vol : doit tourner', [
   { genre: 'outil', nom: 'Bash', cible: 'npm test', id: 't1' },
 ], ['outil:t1']);
+
+// ---- filtres regroupes en familles ------------------------------------------------------
+titre('filtres par famille');
+dire(GROUPES.length === 4, GROUPES.length + ' familles : '
+     + GROUPES.map(f => f.nom).join(', '));
+dire(barre.children.length === GROUPES.length,
+     'une liste deroulante par famille (' + barre.children.length + ')');
+
+// chaque genre declare porte un libelle ET une explication
+const tousGenres = GROUPES.flatMap(f => f.genres);
+dire(tousGenres.every(e => e.lib && e.quoi),
+     tousGenres.length + ' genres, tous avec libelle et explication');
+dire(tousGenres.every(e => LIB[e.g] === e.lib),
+     'les libelles de badge derivent des familles (source unique)');
+dire(new Set(tousGenres.map(e => e.g)).size === tousGenres.length,
+     'aucun genre declare dans deux familles');
+
+// le defaut : trois genres bruyants masques
+const caches = tousGenres.filter(e => e.cache).map(e => e.g).sort();
+dire(JSON.stringify(caches) === JSON.stringify(['log', 'partiel', 'resultat']),
+     'masques par defaut : ' + caches.join(', '));
+dire(caches.every(g => !actifs.has(g)), 'et ils ne sont effectivement pas actifs');
+
+// le compteur de la famille se lit sans l ouvrir
+const famTravail = barre.children[1];
+const resumeTravail = famTravail.children[0];
+dire(resumeTravail.children[1].textContent === '4/5',
+     'compteur de « Travail » : ' + resumeTravail.children[1].textContent
+     + ' (resultat masque)');
+
+// decocher une case masque les lignes du flux
+flux.children.length = 0; dernier = null; vuJusqua = 0;
+ajouter({ n: 700, genre: 'outil', nom: 'Read', cible: 'a.py', h: '12:00:00' });
+const ligneOutil = flux.children[flux.children.length - 1];
+dire(ligneOutil.style.display === '', 'une ligne « outil » est visible au depart');
+const panneauTravail = famTravail.children[1];
+const caseOutil = panneauTravail.children.find(
+  c => c.children.some(x => x.textContent === 'outil')).children[0];
+caseOutil.checked = false; caseOutil.onchange();
+dire(ligneOutil.style.display === 'none', 'decochee, la ligne disparait');
+dire(resumeTravail.children[1].textContent === '3/5',
+     'et le compteur suit : ' + resumeTravail.children[1].textContent);
+caseOutil.checked = true; caseOutil.onchange();
+dire(ligneOutil.style.display === '', 'recochee, elle revient');
+
+// tout / rien
+const [btnTout, btnRien] = panneauTravail.children[panneauTravail.children.length - 1].children;
+btnRien.onclick();
+dire(resumeTravail.children[1].textContent === '0/5', '« rien » coupe la famille entiere');
+dire(resumeTravail.classList.contains('vide'), 'et la pastille se marque vide');
+btnTout.onclick();
+dire(resumeTravail.children[1].textContent === '5/5', '« tout » la rallume entiere');
+dire(resumeTravail.classList.contains('pleine'), 'et la pastille se marque pleine');
+btnRien.onclick(); btnTout.onclick();
 
 // ---- l'heure de l'horloge ---------------------------------------------------------------
 titre('colonne de gauche');

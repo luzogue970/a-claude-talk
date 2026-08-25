@@ -212,6 +212,31 @@ lignes apparaissaient sans qu'on sache si elles tournaient encore, avaient about
   machine n'est pas morte. Tirage par sac mélangé, donc les quarante passent avant qu'un
   seul revienne.
 
+### Les filtres, par famille
+
+Dix-huit boutons alignés ne disaient ni ce qu'ils montraient ni pourquoi on voudrait les
+couper : il fallait les avoir écrits pour s'en souvenir. Ils sont regroupés en quatre familles,
+chacune une liste déroulante :
+
+| Famille | Ce qu'on y trouve |
+|---|---|
+| **Conversation** | ce qui a été dit, d'un côté comme de l'autre |
+| **Travail** | ce que Claude fait pendant qu'il travaille |
+| **Commandes** | ce que tu pilotes, à la voix ou depuis la page |
+| **Système** | l'état de la machinerie — utile quand quelque chose cloche |
+
+Chaque ligne porte **une phrase qui dit à quoi elle sert** (« la sortie des outils — souvent
+longue »), donc le choix se fait sans documentation. Le compteur de la pastille (`4/5`) et son
+style disent l'état de la famille sans l'ouvrir : pleine, partielle, ou entièrement coupée.
+`tout` / `rien` évitent cinq clics pour couper une famille de cinq lignes.
+
+**Une seule source de vérité.** Le libellé du badge, l'explication et le défaut sont déclarés
+au même endroit. Une deuxième liste aurait dérivé de la première — et c'était déjà arrivé : le
+genre `session` arrivait dans le flux sans figurer dans les libellés, donc sa ligne était créée
+avec `display:none` et **aucun filtre ne pouvait la montrer**. Un test lit maintenant les deux
+côtés dans la source (ce qui est publié, ce qui est déclaré) et refuse tout écart ; recopier la
+liste dans le test n'aurait jamais vu l'oubli.
+
 ### La marque, et pourquoi elle ne bouge pas
 
 Le logo est une **gerbe radiale à douze rayons effilés**, aux longueurs alternées. Même famille

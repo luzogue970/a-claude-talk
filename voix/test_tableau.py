@@ -21,7 +21,9 @@ puisque *rouvrir* passait par l'objet session capture dans l'entrypoint.
 import asyncio
 import json
 import logging
+import re
 import sys
+from pathlib import Path
 
 import aiohttp
 
@@ -302,6 +304,44 @@ def le_rejeu_ne_garde_que_ce_qui_se_relit():
          f"et l'ordre est celui de la lecture : {[e['genre'] for e in evs3[:3]]}")
 
 
+def tout_genre_affiche_a_un_filtre():
+    """Un genre qui arrive dans le flux DOIT etre declare dans une famille de filtres.
+
+    Sinon sa ligne est creee avec `display:none` (parce qu'il n'est pas dans les actifs) et
+    aucune case ne peut la montrer : elle est invisible pour toujours. C'est arrive au genre
+    « session », publie par le worker et absent des libelles.
+
+    On lit les deux cotes dans la source : ce qui est publie d'un cote, ce qui est declare de
+    l'autre. Un test qui recopierait la liste ne verrait jamais l'oubli.
+    """
+    print("\n=== chaque genre affiche a un filtre ===")
+    racine = Path(__file__).parent
+
+    publies = set()
+    for fichier in ("agent.py", "worker.py", "quota.py", "tableau.py"):
+        texte = (racine / fichier).read_text(encoding="utf-8")
+        publies |= set(re.findall(r'(?:publier|_voir)\(\s*"([a-z_]+)"', texte))
+
+    page = (racine / "tableau.py").read_text(encoding="utf-8")
+    declares = set(re.findall(r'\{\s*g:\s*"([a-z_]+)"', page))
+    # Les genres traites avant `ajouter()` n'apparaissent jamais comme ligne du flux : ils
+    # pilotent l'interface au lieu de s'y afficher.
+    hors_flux = {
+        "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
+        "ecoute", "dictee", "retenir", "tour_quota", "_histoire",
+    }
+    attendus = publies - hors_flux
+    manquants = sorted(attendus - declares)
+    dire(not manquants,
+         f"{len(attendus)} genres affiches, tous filtrables"
+         + (f" — MANQUENT : {manquants}" if manquants else ""))
+
+    inutiles = sorted(declares - publies)
+    dire(not inutiles,
+         "aucun filtre pour un genre jamais publie"
+         + (f" — EN TROP : {inutiles}" if inutiles else ""))
+
+
 async def principal():
     logging.disable(logging.CRITICAL)  # le traceback attendu n'a pas a polluer la sortie
     await une_commande_qui_leve_ne_tue_pas_la_socket()
@@ -309,6 +349,7 @@ async def principal():
     await une_dictee_retenue_ne_sort_pas_dans_le_flux()
     await la_retenue_d_un_tour_ne_vaut_que_pour_lui()
     le_plafond_suit_le_plancher()
+    tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1

@@ -288,10 +288,41 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #retenir-vite:hover{background:#1f2d3f;color:#cde3ff}
 #compte.rattrape #reste{color:#c3a6f5}
 #compte.rattrape #retenir-vite{display:none}
+/* Les filtres, par famille. Dix-huit boutons alignes ne disaient ni ce qu'ils montraient ni
+   pourquoi on voudrait les couper. Une liste deroulante par famille, avec une phrase par
+   ligne, se lit sans documentation. */
 #filtres{display:flex;gap:6px;flex-wrap:wrap}
-#filtres button{background:transparent;color:var(--faible);border:1px solid var(--bord);
-  border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:inherit}
-#filtres button.on{color:var(--texte);border-color:#4b5563;background:#1f242c}
+.famille{position:relative}
+.famille summary{list-style:none;cursor:pointer;user-select:none;
+  background:transparent;color:var(--faible);border:1px solid var(--bord);
+  border-radius:999px;padding:2px 11px;font-size:12px;white-space:nowrap;
+  display:inline-flex;gap:5px;align-items:center}
+.famille summary::-webkit-details-marker{display:none}
+.famille summary::after{content:"▾";font-size:9px;opacity:.6}
+.famille summary:hover{border-color:#4b5563;color:var(--texte)}
+.famille summary b{font-weight:650;font-variant-numeric:tabular-nums;font-size:11px}
+/* L'etat de la famille se lit sans l'ouvrir : tout affiche, rien affiche, ou partiel. */
+.famille summary.pleine{color:var(--texte);border-color:#4b5563;background:#1f242c}
+.famille summary.vide{color:#5a636e;border-style:dashed}
+.famille[open] summary{border-color:var(--toi);color:#9ecbff}
+
+.famille .panneau{position:absolute;top:calc(100% + 6px);left:0;z-index:20;min-width:340px;
+  background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:10px 12px;
+  box-shadow:0 12px 32px #00000073}
+.famille .aide{margin:0 0 8px;font-size:11.5px;color:var(--faible);line-height:1.4}
+.famille label{display:grid;grid-template-columns:auto 78px 1fr;gap:8px;align-items:baseline;
+  padding:4px 2px;cursor:pointer;border-radius:5px}
+.famille label:hover{background:#1f242c}
+.famille label input{margin:0;accent-color:var(--toi);cursor:pointer}
+.famille .nom{font-size:12px;font-weight:650;color:var(--texte);
+  text-transform:uppercase;letter-spacing:.03em}
+.famille .quoi{font-size:11.5px;color:var(--faible);line-height:1.4}
+.famille .tout-rien{display:flex;gap:6px;margin-top:9px;padding-top:8px;
+  border-top:1px solid var(--bord)}
+.famille .tout-rien button{background:transparent;color:var(--faible);
+  border:1px solid var(--bord);border-radius:999px;padding:2px 12px;font-size:11.5px;
+  cursor:pointer;font-family:inherit}
+.famille .tout-rien button:hover{border-color:#4b5563;color:var(--texte)}
 main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 
 /* Écrire au lieu de parler. Utile quand le micro est coupé, quand le mot est trop
@@ -454,15 +485,53 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   </form>
 </div>
 <script>
-const LIB = {
-  toi:"toi", partiel:"toi…", voix:"claude", pensee:"réflexion", texte:"écrit",
-  outil:"outil", resultat:"résultat", permission:"permission", tour:"tour",
-  quota_seuil:"quota", micro:"micro", arret:"arrêt", ordre:"ordre local", modele:"modèle",
-  reprise:"reprise",
-  erreur:"erreur", log:"log",
-};
-const CACHE_PAR_DEFAUT = new Set(["log", "partiel", "resultat"]);
-const actifs = new Set(Object.keys(LIB).filter(g => !CACHE_PAR_DEFAUT.has(g)));
+// --- les familles de lignes -------------------------------------------------------------
+// Dix-huit boutons alignes ne disent ni ce qu'ils montrent ni pourquoi on voudrait les
+// couper : il fallait les avoir ecrits pour s'en souvenir. Regroupes par famille, avec une
+// phrase par ligne, le filtre devient lisible sans documentation.
+//
+// Source unique : le libelle du badge, l'explication et le defaut sont declares ICI. Une
+// deuxieme liste aurait derive de celle-ci, et c'est deja arrive — le genre « session »
+// arrivait dans le flux sans figurer dans les libelles, donc sa ligne etait creee
+// invisible et AUCUN filtre ne pouvait la montrer.
+const GROUPES = [
+  { nom: "Conversation", aide: "ce qui a été dit, d'un côté comme de l'autre", genres: [
+    { g: "toi",     lib: "toi",      quoi: "tes messages — une ligne par message pris en compte" },
+    { g: "partiel", lib: "toi…",     quoi: "la transcription en cours, avant validation", cache: true },
+    { g: "voix",    lib: "claude",   quoi: "ce que Claude dit à voix haute" },
+  ]},
+  { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
+    { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
+    { g: "texte",    lib: "écrit",     quoi: "ce qu'il écrit, avant réécriture pour la voix" },
+    { g: "outil",    lib: "outil",     quoi: "chaque action : lecture, édition, commande" },
+    { g: "resultat", lib: "résultat",  quoi: "la sortie des outils — souvent longue", cache: true },
+    { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
+  ]},
+  { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [
+    { g: "ordre",      lib: "ordre local", quoi: "un ordre exécuté ici, jamais transmis à Claude" },
+    { g: "micro",      lib: "micro",       quoi: "ouverture et coupure du micro" },
+    { g: "arret",      lib: "arrêt",       quoi: "arrêt du travail en cours" },
+    { g: "modele",     lib: "modèle",      quoi: "changement de modèle, permanent ou d'un tour" },
+    { g: "effort",     lib: "effort",      quoi: "changement du niveau d'effort" },
+    { g: "permission", lib: "permission",  quoi: "une autorisation demandée, et ta réponse" },
+  ]},
+  { nom: "Système", aide: "l'état de la machinerie — utile quand quelque chose cloche", genres: [
+    { g: "session",     lib: "session", quoi: "l'identifiant de session, celui qui sert à reprendre" },
+    { g: "reprise",     lib: "reprise", quoi: "le rechargement d'une conversation précédente" },
+    { g: "quota_seuil", lib: "quota",   quoi: "franchissement d'un palier de rate limit" },
+    { g: "erreur",      lib: "erreur",  quoi: "ce qui a échoué" },
+    { g: "log",         lib: "log",     quoi: "le journal technique de LiveKit et des modules", cache: true },
+  ]},
+];
+
+const LIB = {};
+const actifs = new Set();
+for (const fam of GROUPES) {
+  for (const e of fam.genres) {
+    LIB[e.g] = e.lib;
+    if (!e.cache) actifs.add(e.g);
+  }
+}
 const flux = document.getElementById("flux");
 const barre = document.getElementById("filtres");
 let suivre = true, actions = 0, jetons = 0, quota = [];
@@ -477,17 +546,92 @@ function dejaVu(e) {
   return false;
 }
 
-for (const g of Object.keys(LIB)) {
-  const b = document.createElement("button");
-  b.textContent = LIB[g];
-  b.className = actifs.has(g) ? "on" : "";
-  b.onclick = () => {
-    actifs.has(g) ? actifs.delete(g) : actifs.add(g);
-    b.className = actifs.has(g) ? "on" : "";
-    for (const el of flux.children) el.style.display = actifs.has(el.dataset.g) ? "" : "none";
-  };
-  barre.appendChild(b);
+// Une liste deroulante par famille. <details> porte l'ouverture et la fermeture sans une
+// ligne de JS ; on ne code que ce qui a du sens metier : l'etat des cases et le compteur.
+function appliquerFiltres() {
+  for (const el of flux.children) {
+    if (el.dataset.g) el.style.display = actifs.has(el.dataset.g) ? "" : "none";
+  }
 }
+
+for (const fam of GROUPES) {
+  const bloc = document.createElement("details");
+  bloc.className = "famille";
+
+  const titre = document.createElement("summary");
+  const compteur = document.createElement("b");
+  const majCompteur = () => {
+    const n = fam.genres.filter(e => actifs.has(e.g)).length;
+    compteur.textContent = `${n}/${fam.genres.length}`;
+    // Une famille entierement coupee doit se voir sans l'ouvrir.
+    titre.classList.toggle("vide", n === 0);
+    titre.classList.toggle("pleine", n === fam.genres.length);
+  };
+  titre.append(document.createTextNode(fam.nom + " "), compteur);
+  titre.title = fam.aide;
+  bloc.appendChild(titre);
+
+  const panneau = document.createElement("div");
+  panneau.className = "panneau";
+
+  const aide = document.createElement("p");
+  aide.className = "aide";
+  aide.textContent = fam.aide;
+  panneau.appendChild(aide);
+
+  const cases = [];
+  for (const e of fam.genres) {
+    const ligne = document.createElement("label");
+    const boite = document.createElement("input");
+    boite.type = "checkbox";
+    boite.checked = actifs.has(e.g);
+    boite.onchange = () => {
+      boite.checked ? actifs.add(e.g) : actifs.delete(e.g);
+      majCompteur();
+      appliquerFiltres();
+    };
+    cases.push({ boite, g: e.g });
+    const nom = document.createElement("span");
+    nom.className = "nom";
+    nom.textContent = e.lib;
+    const quoi = document.createElement("span");
+    quoi.className = "quoi";
+    quoi.textContent = e.quoi;
+    ligne.append(boite, nom, quoi);
+    panneau.appendChild(ligne);
+  }
+
+  // « tout / rien » : sans ca, couper une famille de cinq lignes demande cinq clics.
+  const barreTout = document.createElement("div");
+  barreTout.className = "tout-rien";
+  for (const [libelle, veut] of [["tout", true], ["rien", false]]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = libelle;
+    b.onclick = () => {
+      for (const c of cases) {
+        c.boite.checked = veut;
+        veut ? actifs.add(c.g) : actifs.delete(c.g);
+      }
+      majCompteur();
+      appliquerFiltres();
+    };
+    barreTout.appendChild(b);
+  }
+  panneau.appendChild(barreTout);
+
+  bloc.appendChild(panneau);
+  majCompteur();
+  barre.appendChild(bloc);
+}
+
+// Un clic ailleurs referme les listes : elles recouvrent le flux, et rester ouvertes en
+// lisant est exactement ce qui gene.
+addEventListener("click", ev => {
+  for (const d of barre.querySelectorAll("details[open]")) {
+    if (!d.contains(ev.target)) d.open = false;
+  }
+});
 
 const fmtJetons = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)} k` : String(n);
 
