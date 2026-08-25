@@ -7,6 +7,32 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [0.7.0] — 2026-08-25
+
+### Ajoute — tableau de bord temps reel dans le navigateur
+
+En `bypassPermissions`, plus rien n'arrete un appel d'outil : la seule chose
+entre « ca marche » et « qu'est-ce qu'il vient de faire » est la visibilite.
+Un fichier HTML servi par aiohttp, un WebSocket, aucune etape de build.
+
+- Panneau de configuration au lancement : les valeurs EN VIGUEUR, pas une copie qui
+  derive.
+- Cycle de vie de chaque action : un indicateur qui tourne, puis un verdict. Tout
+  ce qui s'allume a un chemin garanti pour s'eteindre — resolution, fin de tour,
+  interruption, perte de connexion, ou garde-fou temporel.
+- Barre de saisie : ecrire au lieu de parler. Le champ est un `textarea` qui suit
+  son contenu, parce qu'une longue dictee sortait du champ et devenait
+  incorrigible.
+- Decompte avant envoi, selecteurs de modele, d'effort et de delai, bandeau de
+  cogitation, heure de l'horloge en colonne.
+- File de commandes : un clic ne disparait plus quand la socket est morte. C'etait
+  la cause du « bouton qui ne marche pas du premier coup ».
+- Rejeu d'historique idempotent : chaque evenement porte un numero, la page ignore
+  ce qu'elle affiche deja. Sans ca, trois reconnexions donnaient trois copies de
+  la session.
+- File bornee par client avec un seul ecrivain. La version precedente creait une
+  tache asyncio par evenement et par client : 1,5 Go de RSS sur deux jours.
+
 ## [0.6.0] — 2026-08-25
 
 ### Ajoute — modele a chaud, effort par reconstruction, correlation des outils
