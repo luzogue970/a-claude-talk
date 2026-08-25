@@ -154,6 +154,18 @@ ECOUTE_MAX = float(os.environ.get("VOIX_ECOUTE_MAX", "0") or 0) or None
 # pouvoir descendre plus court ou monter plus long sans toucher a la configuration.
 ECOUTE_PALIERS = (2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0)
 
+# Retenir automatiquement ce qui est dit PENDANT que Claude travaille.
+#
+# Sans ca, parler pendant une tache empile un second message : le worker l'accepte, repond
+# « note, j'ajoute ca », et il part sans qu'on ait relu quoi que ce soit. Or c'est exactement
+# le moment ou l'on parle pour reagir a ce qu'on voit passer — donc le moment ou une phrase
+# mal transcrite ou mal formulee coute le plus cher.
+#
+# Ce qui continue de passer, delibérement : les ordres locaux (« arrete », « coupe le micro »)
+# et les reponses a une demande de permission. Les parquer dans une boite serait absurde —
+# ce sont des reactions, pas des taches a relire.
+RETENIR_SI_OCCUPE = os.environ.get("VOIX_RETENIR_OCCUPE", "1") not in ("0", "non", "false")
+
 # Le plafond suit le plancher au lieu d'etre fixe. Sinon regler le plancher a 15 s le
 # placerait au-dessus d'un plafond de 12 s, et la fenetre « phrase inachevee » deviendrait
 # plus COURTE que la fenetre normale — un reglage qui se retourne contre celui qui le fait.
@@ -273,6 +285,11 @@ def resume() -> dict:
             f"{len(phrase_list())} termes biaisés"
         ),
         "synthèse": f"{TTS_ENGINE} · {AZURE_VOICE if TTS_ENGINE == 'azure' else 'piper'}",
+        "dictée": (
+            ("retenue dans la barre pendant que Claude travaille"
+             if RETENIR_SI_OCCUPE else "envoyée même pendant une tâche")
+            + " · le bouton « retenir » la retient tout le temps"
+        ),
         "fin de tour": (
             f"{DETECTEUR_TOUR} (local) · envoi après {ECOUTE_MIN:g} s de silence, "
             f"jusqu'à {plafond_ecoute():g} s si la phrase semble inachevée "

@@ -230,6 +230,104 @@ async def la_retenue_d_un_tour_ne_vaut_que_pour_lui():
     dire("ENVOYE" in vus, f"le tour SUIVANT part normalement : {vus}")
 
 
+async def la_retenue_pendant_le_travail():
+    """Parler pendant que Claude travaille ne doit rien envoyer — sauf ce qui doit passer.
+
+    Le probleme : le worker acceptait le second message, repondait « note, j'ajoute ca », et
+    il partait sans qu'on ait rien relu. Or c'est le moment ou l'on parle pour REAGIR a ce
+    qu'on voit passer, donc celui ou une phrase mal transcrite coute le plus cher.
+
+    Ce qui doit continuer de passer : les ordres locaux et les reponses a une permission. Ce
+    sont des reactions, pas des taches a relire — les parquer dans une boite serait absurde,
+    et « arrete » parqué serait dangereux.
+    """
+    print("\n=== retenue automatique pendant une tache ===")
+    import asyncio
+    vus = []
+
+    class FauxTableau:
+        def publier(self, genre, **d):
+            vus.append((genre, d))
+
+    class Worker:
+        def __init__(self, occupe):
+            self.occupe = occupe
+
+        async def envoyer(self, t):
+            vus.append(("ENVOYE", {}))
+
+        async def interrompre(self):
+            vus.append(("INTERROMPU", {}))
+
+    def ctx(texte):
+        class I:
+            role = "user"
+            text_content = texte
+        class C:
+            items = [I()]
+        return C()
+
+    class Entree:
+        def __init__(self):
+            self.audio_enabled = True
+
+        def set_audio_enabled(self, v):
+            self.audio_enabled = v
+
+    class Session:
+        def __init__(self):
+            self.input = Entree()
+
+        def interrupt(self):
+            vus.append(("COUPE-PAROLE", {}))
+
+    async def tour(texte, occupe, **etat):
+        vus.clear()
+        # _session_directe plutot que .session : Agent.session est une propriete en lecture
+        # seule, et c'est justement la raison d'exister de Voix.sess.
+        v = faux_voix(tableau=FauxTableau(), worker=Worker(occupe),
+                      _session_directe=Session(), **etat)
+        async for _ in v.llm_node(ctx(texte), None, None):
+            pass
+        return [g for g, _ in vus]
+
+    # une tache est en cours : la phrase est retenue, rien ne part
+    g = await tour("ajoute aussi un export CSV", occupe=True)
+    dire("dictee" in g and "ENVOYE" not in g, f"occupe -> retenu, rien envoye : {g}")
+    auto = next(d for n, d in vus if n == "dictee")
+    dire(auto.get("auto") is True, "la ligne dit que c'est automatique, pas un reglage")
+    dire("toi" not in g, "aucune ligne « toi » : le message n'a pas ete pris en compte")
+
+    # au repos, la meme phrase part normalement
+    g = await tour("ajoute aussi un export CSV", occupe=False)
+    dire("ENVOYE" in g and "toi" in g, f"au repos -> envoye : {g}")
+
+    # LE point : un ordre local doit passer MEME pendant une tache
+    g = await tour("coupe le micro", occupe=True)
+    dire("ordre" in g and "dictee" not in g,
+         f"« coupe le micro » passe pendant une tache : {g}")
+    g = await tour("stop", occupe=True)
+    dire("ordre" in g and "INTERROMPU" in g and "dictee" not in g,
+         f"« stop » passe et interrompt vraiment : {g}")
+
+    # et une reponse a une permission aussi
+    boucle = asyncio.get_running_loop()
+    attente = boucle.create_future()
+    g = await tour("oui", occupe=True, permission_en_cours=attente)
+    dire("dictee" not in g and attente.done() and attente.result() is True,
+         f"« oui » repond bien a la permission en attente : {g}")
+
+    # le reglage peut etre coupe
+    import config
+    ancien = config.RETENIR_SI_OCCUPE
+    config.RETENIR_SI_OCCUPE = False
+    try:
+        g = await tour("ajoute un export CSV", occupe=True)
+        dire("ENVOYE" in g, f"réglage coupé -> l'ancien comportement revient : {g}")
+    finally:
+        config.RETENIR_SI_OCCUPE = ancien
+
+
 def le_plafond_suit_le_plancher():
     print("\n=== plafond du delai d'envoi ===")
     import config
@@ -328,7 +426,7 @@ def tout_genre_affiche_a_un_filtre():
     # pilotent l'interface au lieu de s'y afficher.
     hors_flux = {
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
-        "ecoute", "dictee", "retenir", "tour_quota", "_histoire",
+        "ecoute", "retenir", "tour_quota", "_histoire",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
@@ -348,6 +446,7 @@ async def principal():
     couper_le_micro_ne_depend_plus_de_l_activite()
     await une_dictee_retenue_ne_sort_pas_dans_le_flux()
     await la_retenue_d_un_tour_ne_vaut_que_pour_lui()
+    await la_retenue_pendant_le_travail()
     le_plafond_suit_le_plancher()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()

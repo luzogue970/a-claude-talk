@@ -107,6 +107,7 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 | `DEEPGRAM_API_KEY` | vide | active le repli Deepgram ; sans elle la chaîne est Azure → local |
 | `VOIX_DEEPGRAM_MODELE` | `nova-3` | seul `nova-3` accepte le biais de vocabulaire (`keyterm`) |
 | `VOIX_DEEPGRAM_KEYTERM` | `1` | `0` coupe le biais si Deepgram le refusait en français |
+| `VOIX_RETENIR_OCCUPE` | `1` | retenir ce qui est dit pendant que Claude travaille ; `0` rétablit l'envoi immédiat |
 | `VOIX_ECOUTE_MIN` | `5.0` | silence (s) avant envoi du tour — réglable depuis le tableau ; le défaut LiveKit est 0,3 s |
 | `VOIX_JOURNAL` | `<projet>/conversations` | où sont écrits les transcripts et l'index |
 | `VOIX_ECOUTE_MAX` | *(déduit)* | plafond « phrase inachevée » — vide, il suit le plancher (× 2,5) |
@@ -242,6 +243,10 @@ chacune une liste déroulante :
 | **Travail** | ce que Claude fait pendant qu'il travaille |
 | **Commandes** | ce que tu pilotes, à la voix ou depuis la page |
 | **Système** | l'état de la machinerie — utile quand quelque chose cloche |
+
+Quatre genres sont masqués par défaut, parce qu'ils sont bruyants sans être informatifs :
+`log` (journal technique), `partiel` (la transcription en cours), `resultat` (la sortie des
+outils) et `micro` (son état change souvent et ne raconte rien de la conversation).
 
 Chaque ligne porte **une phrase qui dit à quoi elle sert** (« la sortie des outils — souvent
 longue »), donc le choix se fait sans documentation. Le compteur de la pastille (`4/5`) et son
@@ -393,6 +398,22 @@ plus *courte* que la fenêtre normale : un réglage qui se retourne contre celui
 
 Une valeur venue de la configuration et absente des paliers reste proposée dans la liste :
 le sélecteur doit afficher ce qui est réellement en vigueur, pas le palier le plus proche.
+
+**Retenu d'office pendant une tâche.** Parler pendant que Claude travaille ne l'envoie plus :
+le message se dépose dans la barre. Sans ça, le worker acceptait le second message, répondait
+« noté, j'ajoute ça », et il partait sans qu'on ait rien relu — or c'est précisément le moment
+où l'on parle pour *réagir* à ce qu'on voit passer, donc celui où une phrase mal transcrite
+coûte le plus cher.
+
+Ce qui continue de passer, délibérément : **les ordres locaux** (« arrête », « coupe le
+micro ») et **les réponses à une demande de permission**. Ce sont des réactions, pas des
+tâches à relire — et un « arrête » parqué dans une boîte serait dangereux. Trois tests
+verrouillent ces exemptions.
+
+Le bouton `retenir` passe en **pointillés orange** dès qu'une tâche démarre, avant que tu
+parles : découvrir après coup que son message n'est pas parti est la pire façon de l'apprendre.
+La ligne `retenu` du flux dit laquelle des deux raisons s'applique — ton réglage, ou le travail
+en cours. `VOIX_RETENIR_OCCUPE=0` rétablit l'ancien comportement.
 
 **Comprendre « retenir » sans documentation.** Un `ⓘ` à côté de la bascule ouvre une
 explication de quatre paragraphes : ce que le mode fait, quand il sert, que les ordres

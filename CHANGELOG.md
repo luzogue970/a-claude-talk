@@ -7,6 +7,32 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.3.0] — 2026-08-25
+
+### Ajoute — retenir d'office ce qui est dit pendant une tache
+
+Parler pendant que Claude travaille ne l'envoie plus : le message se depose dans la barre.
+Sans ca, le worker acceptait le second message, repondait « note, j'ajoute ca », et il partait
+sans qu'on ait rien relu — or c'est precisement le moment ou l'on parle pour REAGIR a ce qu'on
+voit passer, donc celui ou une phrase mal transcrite coute le plus cher.
+
+- Continuent de passer, deliberement : les ordres locaux (« arrete », « coupe le micro ») et
+  les reponses a une demande de permission. Ce sont des reactions, pas des taches a relire —
+  et un « arrete » parque serait dangereux. Trois tests verrouillent ces exemptions.
+- Le bouton « retenir » passe en pointilles des qu'une tache demarre, AVANT qu'on parle :
+  decouvrir apres coup que son message n'est pas parti est la pire facon de l'apprendre.
+- `VOIX_RETENIR_OCCUPE=0` retablit l'envoi immediat.
+
+### Ajoute — une ligne « retenu » dans le flux
+
+Un message retenu ne laissait aucune trace : on pouvait croire avoir parle pour rien. La ligne
+dit le texte et laquelle des deux raisons s'applique — le reglage, ou le travail en cours.
+
+### Modifie — les lignes « micro » sont masquees par defaut
+
+Leur etat change souvent et ne raconte rien de la conversation. Quatrieme genre masque, avec
+le journal technique, la transcription en cours et la sortie des outils.
+
 ## [1.2.0] — 2026-08-25
 
 ### Ajoute — passe d'ergonomie sur toute la page

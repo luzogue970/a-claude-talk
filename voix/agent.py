@@ -213,9 +213,20 @@ class Voix(Agent):
         # et « coupe le micro » ne sont pas des tâches à relire, et les parquer dans une boîte
         # pour ensuite appuyer sur Entrée n'aurait aucun sens.
         rattrape, self._retenir_ce_tour = self._retenir_ce_tour, False
-        if (self.retenir or rattrape) and not tape:
-            # Pas de ligne « toi » : rien n'a été envoyé. Le texte attend dans la barre.
-            self._voir("dictee", texte=texte)
+        # Retenue automatique pendant que Claude travaille. Sans elle, parler pendant une
+        # tâche empile un second message : le worker l'accepte, répond « noté, j'ajoute ça »,
+        # et il part sans qu'on ait rien relu. Or c'est justement le moment où l'on parle pour
+        # réagir à ce qu'on voit passer — donc celui où une phrase mal transcrite coûte le
+        # plus cher.
+        #
+        # Placée APRÈS les permissions et les ordres locaux : « arrête » et « oui » doivent
+        # continuer de passer, ce sont des réactions, pas des tâches à relire.
+        auto = config.RETENIR_SI_OCCUPE and self.worker.occupe
+        if (self.retenir or rattrape or auto) and not tape:
+            # Pas de ligne « toi » : rien n'a été envoyé. Le texte attend dans la barre, et la
+            # ligne « retenu » dit pourquoi — sinon on croit avoir parlé pour rien.
+            self._voir("dictee", texte=texte,
+                       auto=bool(auto and not (self.retenir or rattrape)))
             return
 
         vu()

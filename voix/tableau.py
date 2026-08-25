@@ -409,6 +409,9 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
   white-space:nowrap;display:inline-flex;gap:7px;align-items:center}
 #retenir:hover{border-color:#4b5563;color:var(--texte)}
 #retenir.on{border-color:var(--toi);color:#9ecbff;background:#132133}
+/* Retenue subie, pas choisie : en pointillés, pour la distinguer d'un réglage volontaire. */
+#retenir.auto{border-color:var(--outil);border-style:dashed;color:#e3b341}
+#retenir.auto::before{background:currentColor;opacity:.8}
 #retenir::before{content:"";width:8px;height:8px;border-radius:50%;
   background:currentColor;opacity:.35}
 #retenir.on::before{opacity:1}
@@ -458,6 +461,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
    l'indicateur, et 563 caracteres dans 14 px donnent UN CARACTERE PAR LIGNE — des lignes
    de 7 400 px de haut. Un pip sans etat n'a ni bordure ni contenu : il est deja invisible,
    il suffit de le laisser occuper sa cellule. */
+.g-dictee .badge{color:var(--outil)} .g-dictee .corps{color:#e8d9a8}
 .g-reprise{border-bottom:1px solid var(--tour)}
 .g-reprise .badge{color:var(--tour)}
 .g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.02em}
@@ -596,6 +600,7 @@ const GROUPES = [
     { g: "toi",     lib: "toi",      quoi: "tes messages — une ligne par message pris en compte" },
     { g: "partiel", lib: "toi…",     quoi: "la transcription en cours, avant validation", cache: true },
     { g: "voix",    lib: "claude",   quoi: "ce que Claude dit à voix haute" },
+    { g: "dictee",  lib: "retenu",   quoi: "dit mais pas envoyé — ça attend dans la barre" },
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
     { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
@@ -606,7 +611,7 @@ const GROUPES = [
   ]},
   { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [
     { g: "ordre",      lib: "ordre local", quoi: "un ordre exécuté ici, jamais transmis à Claude" },
-    { g: "micro",      lib: "micro",       quoi: "ouverture et coupure du micro" },
+    { g: "micro",      lib: "micro",       quoi: "ouverture et coupure du micro", cache: true },
     { g: "arret",      lib: "arrêt",       quoi: "arrêt du travail en cours" },
     { g: "modele",     lib: "modèle",      quoi: "changement de modèle, permanent ou d'un tour" },
     { g: "effort",     lib: "effort",      quoi: "changement du niveau d'effort" },
@@ -807,6 +812,11 @@ function corps(e) {
     }
     case "log":
       return `<span style="opacity:.7">${ech(e.source)}</span> ${ech(e.texte)}`;
+    case "dictee":
+      return ech(e.texte)
+        + (e.auto
+            ? `<span class="apres">retenu : Claude travaillait</span>`
+            : `<span class="apres">retenu à ta demande</span>`);
     case "session":
       // Sans ce cas la ligne s'affichait VIDE : l'événement porte `id`, pas `texte`. Or
       // c'est précisément l'identifiant qu'on vient chercher pour reprendre.
@@ -1114,6 +1124,7 @@ function majTravail() {
     if (minuteur) { clearInterval(minuteur); minuteur = null; }
     selEffort.disabled = false;
     selEffort.title = "niveau d'effort de réflexion";
+    majRetenir();
     majCogitation();
     return;
   }
@@ -1123,6 +1134,7 @@ function majTravail() {
   btnStop.disabled = false;
   selEffort.disabled = true;
   selEffort.title = "tâche en cours — l'effort ne peut changer qu'entre deux tâches";
+  majRetenir();
   majCogitation();
 }
 // --- le bandeau de cogitation -----------------------------------------------------------
@@ -1337,11 +1349,16 @@ btnRetenirVite.onclick = () => {
 
 const btnRetenir = document.getElementById("retenir");
 function majRetenir() {
-  btnRetenir.className = retenir ? "on" : "";
-  btnRetenir.textContent = retenir ? "retenu" : "retenir";
+  // Pendant une tâche, la retenue s'applique d'office. Le bouton le dit AVANT qu'on parle :
+  // découvrir après coup que son message n'est pas parti est la pire façon de l'apprendre.
+  const auto = !retenir && debutTravail != null;
+  btnRetenir.className = retenir ? "on" : (auto ? "auto" : "");
+  btnRetenir.textContent = retenir ? "retenu" : (auto ? "retenu ·" : "retenir");
   btnRetenir.title = (retenir
     ? "la dictée reste dans la barre — tu relis, tu corriges, tu envoies"
-    : "la dictée part dès que tu as fini de parler") + " (touche r)";
+    : auto
+      ? "Claude travaille : ce que tu dis est retenu dans la barre, pas envoyé"
+      : "la dictée part dès que tu as fini de parler") + " (touche r)";
 }
 function basculerRetenir() {
   retenir = !retenir;
@@ -1505,7 +1522,12 @@ function recevoir(e) {
       return;
     }
     // Déposé pour relecture : la dictée devient définitive dans la barre, à toi de jouer.
-    if (e.genre === "dictee") { poserDictee(e.texte || "", true); champ.focus(); return; }
+    if (e.genre === "dictee") {
+      poserDictee(e.texte || "", true);
+      champ.focus();
+      ajouter(e);            // et une ligne, sinon rien ne dit qu'on a parlé pour rien
+      return;
+    }
     // Parti chez Claude : la barre n'a plus à porter le texte.
     if (e.genre === "toi" && !e.tape) { viderDictee(); }
     if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }

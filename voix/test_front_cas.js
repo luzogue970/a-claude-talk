@@ -76,7 +76,9 @@ dire(new Set(tousGenres.map(e => e.g)).size === tousGenres.length,
 
 // le defaut : trois genres bruyants masques
 const caches = tousGenres.filter(e => e.cache).map(e => e.g).sort();
-dire(JSON.stringify(caches) === JSON.stringify(['log', 'partiel', 'resultat']),
+// Les quatre genres bruyants : le journal technique, la transcription en cours, la sortie
+// des outils, et l'etat du micro — qui change souvent et ne raconte rien de la conversation.
+dire(JSON.stringify(caches) === JSON.stringify(['log', 'micro', 'partiel', 'resultat']),
      'masques par defaut : ' + caches.join(', '));
 dire(caches.every(g => !actifs.has(g)), 'et ils ne sont effectivement pas actifs');
 
