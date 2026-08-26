@@ -143,14 +143,18 @@ else:
     print('  pour changer : « ecouter ici » sur le tableau de la conversation voulue')
 "
 end
-function vvconv --description "Historique des conversations vocales"
+function vvconv --description "Conversations lancees depuis ici (--tout pour toutes)"
     set -l py (__voix_py); or return 1
-    # Le dossier courant decide de l'ordre : ce qu'on veut voir en tapant la commande, c'est
-    # ce qu'on a fait ICI. Le formatage vit dans journal.apercu(), pas dans ce heredoc.
+    # Le dossier courant decide de ce qu'on voit : depuis la racine, tout ; depuis un projet,
+    # ce projet et ses sous-dossiers. Le formatage vit dans journal.apercu(), pas ici.
+    set -l tout False
+    if contains -- --tout $argv; or contains -- -a $argv
+        set tout True
+    end
     $py -c "
 import sys; sys.path.insert(0, '$VOIX_RACINE/voix')
 import journal
-print(chr(10).join(journal.apercu(25, ici='$PWD')))
+print(chr(10).join(journal.apercu(25, ici='$PWD', tout=$tout)))
 "
 end
 function __voix_avertir_actives --description "Prevenir si une session tourne deja"

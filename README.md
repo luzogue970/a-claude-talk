@@ -585,7 +585,8 @@ Chaque conversation laisse deux choses, qui ne servent pas à la même chose :
 L'écriture est incrémentale : une coupure de courant ne perd que le tour en cours.
 
 ```fish
-vvconv              # lister
+vvconv              # ce qui a été lancé depuis ici (et sous ici)
+vvconv --tout       # tout, où que ce soit
 vvreprendre 1       # reprendre (rang, identifiant de session, ou bout de nom de fichier)
 vvlire 1            # relire le transcript
 ```
@@ -611,9 +612,21 @@ session lui-même (la source d'autorité, et elle marche aussi pour les conversa
 Si le compte est à zéro, il le dit avant de lancer : mieux vaut le savoir que de parler dix
 minutes à une session amnésique. Le dossier reste forçable : `vvreprendre 1 /chemin/du/projet`.
 
-`vvconv` classe **les conversations du dossier courant d'abord** : la question qu'on se pose
-en tapant la commande est « qu'est-ce que j'ai fait dans CE projet », et un tri purement
-chronologique les noie sous celles de tous les autres.
+`vvconv` ne montre que **ce qui a été lancé depuis le dossier courant ou l'un de ses
+descendants** : depuis la racine tu vois tout, depuis un projet tu ne vois que lui. La question
+qu'on se pose en tapant la commande est « qu'est-ce que j'ai fait dans CE projet », et une
+liste globale les noie sous celles de tous les autres.
+
+Un descendant affiche son **sous-chemin relatif** (`./bridge`), parce que depuis la racine d'un
+projet ce qu'on veut savoir est dans quel sous-dossier, pas le chemin complet.
+
+Le nombre de conversations masquées est **toujours annoncé**, avec `vvconv --tout` pour les
+voir : une liste qui raccourcit sans le dire se lit comme une perte de données.
+
+Deux choses ne sont **pas** filtrées, et c'est délibéré : `actives()` arbitre le micro entre
+toutes les conversations vivantes où qu'elles soient, et `vvreprendre <identifiant>` doit
+marcher depuis n'importe quel dossier — sinon reprendre une conversation demanderait de savoir
+d'où elle a été lancée, ce qui est justement l'information qu'on vient chercher.
 
 ```
   ── ce dossier : /home/…/dev/claude-talk ──

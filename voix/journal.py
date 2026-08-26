@@ -169,12 +169,23 @@ def etat(d: dict) -> str:
     return "fermée" if d.get("fin") else "interrompue"
 
 
-def historique(limite: int = 20, ici: str | None = None) -> list[dict]:
+def historique(limite: int = 20, ici: str | None = None,
+               sous_arbre: bool = False) -> list[dict]:
     """Les conversations, dedupliquees par fichier, celles d'ICI d'abord.
 
     Le tri repond a la question qu'on se pose vraiment en tapant la commande : « qu'est-ce
     que j'ai fait dans CE projet ». Une liste triee seulement par date noie les conversations
     du dossier courant sous celles de tous les autres.
+
+    `sous_arbre` restreint au dossier courant ET a ses descendants : depuis la racine on voit
+    tout, depuis un projet on ne voit que lui. C'est un choix d'AFFICHAGE, donc desactive par
+    defaut — deux appelants ne doivent surtout pas etre filtres :
+
+    - `actives()` arbitre le micro entre TOUTES les conversations vivantes, ou qu'elles
+      soient ; filtrer la rendrait aveugle a celle qui detient le micro ailleurs.
+    - `resoudre()` sert a `vvreprendre <identifiant>`, qui doit marcher depuis n'importe quel
+      dossier — sinon reprendre une conversation demanderait de savoir d'ou elle a ete lancee,
+      ce qui est precisement l'information qu'on vient chercher.
     """
     if not INDEX.is_file():
         return []
@@ -195,7 +206,12 @@ def historique(limite: int = 20, ici: str | None = None) -> list[dict]:
         d["etat"] = etat(d)
         chemin = d.get("chemin")
         if chemin:
-            d["ici"] = os.path.realpath(chemin) == ici
+            reel = os.path.realpath(chemin)
+            d["ici"] = reel == ici
+            # Descendant : le separateur evite qu'« /a/bc » passe pour un enfant d'« /a/b ».
+            d["sous"] = (os.path.relpath(reel, ici)
+                         if reel.startswith(ici + os.sep) else "")
+            d["portee"] = d["ici"] or bool(d["sous"])
         else:
             # Conversations anterieures a l'enregistrement du chemin. Le nom du projet est le
             # seul indice disponible : c'est le nom du dossier de travail, donc la comparaison
@@ -203,9 +219,17 @@ def historique(limite: int = 20, ici: str | None = None) -> list[dict]:
             # que l'affichage ne presente pas une deduction comme un fait.
             d["ici"] = bool(d.get("projet")) and d["projet"] == os.path.basename(ici)
             d["suppose"] = d["ici"]
-    # « d'ici » d'abord, puis la plus recemment active. Le booleen inverse parce que le tri
-    # est descendant.
-    lignes.sort(key=lambda d: (d["ici"], d.get("maj", "")), reverse=True)
+            d["sous"] = ""
+            # Sans chemin enregistre, on ne peut pas savoir si c'est un descendant. On ne le
+            # garde donc que si le nom du projet correspond — deviner plus large reviendrait
+            # a polluer la vue d'un projet avec l'historique de tous les autres.
+            d["portee"] = d["ici"]
+    if sous_arbre:
+        lignes = [d for d in lignes if d.get("portee")]
+    # « d'ici » d'abord, puis les descendants, puis la plus recemment active. Les booleens
+    # sont inverses parce que le tri est descendant.
+    lignes.sort(key=lambda d: (d["ici"], bool(d.get("sous")), d.get("maj", "")),
+                reverse=True)
     return lignes[:limite]
 
 
@@ -382,13 +406,28 @@ def _quand(iso: str | None, relatif: bool = False) -> str:
     return t.strftime("%d/%m %H:%M")
 
 
-def apercu(limite: int = 15, ici: str | None = None) -> list[str]:
+def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list[str]:
     """La liste, mise en forme. Ici plutot que dans le script fish : une logique d'affichage
-    enfouie dans un heredoc n'est ni relisible ni testable."""
+    enfouie dans un heredoc n'est ni relisible ni testable.
+
+    Par defaut, restreinte au dossier courant et a ses descendants : depuis la racine on voit
+    tout, depuis un projet on ne voit que lui. `tout` leve la restriction — et le nombre de
+    conversations masquees est toujours annonce, parce qu'une liste qui raccourcit sans le
+    dire se lit comme une perte de donnees.
+    """
     ici = os.path.realpath(ici or os.getcwd())
-    lignes = historique(limite, ici)
+    lignes = historique(limite, ici, sous_arbre=not tout)
+    caches = 0
+    if not tout:
+        # Compte sur l'ensemble, pas sur la page : « 3 masquees » alors qu'il y en a 40 serait
+        # un chiffre faux presente comme exact.
+        caches = len(historique(10_000, ici)) - len(historique(10_000, ici, sous_arbre=True))
     if not lignes:
-        return ["  aucune conversation enregistrée"]
+        vide = ["  aucune conversation lancée depuis ici"]
+        if caches:
+            vide += ["", f"  {caches} ailleurs sur la machine — « vvconv --tout » les montre,",
+                     "  ou place-toi plus haut dans l'arborescence."]
+        return vide if caches else ["  aucune conversation enregistrée"]
 
     sortie: list[str] = []
     vivantes = [d for d in lignes if d["etat"] == "en cours"]
@@ -400,10 +439,16 @@ def apercu(limite: int = 15, ici: str | None = None) -> list[str]:
 
     section = None
     for i, d in enumerate(lignes, 1):
-        titre = "ce dossier" if d["ici"] else "autres dossiers"
+        if d["ici"]:
+            titre = "ce dossier"
+        elif d.get("sous"):
+            titre = "sous-dossiers"
+        else:
+            titre = "ailleurs"
         if titre != section:
             section = titre
-            sortie += [f"  ── {titre}" + (f" : {ici}" if d["ici"] else "") + " ──", ""]
+            sortie += [f"  ── {titre}" + (f" : {ici}" if titre == "ce dossier" else "") + " ──",
+                       ""]
 
         etiquette = {"en cours": "● en cours", "fermée": "○ fermée",
                      "interrompue": "◍ interrompue"}[d["etat"]]
@@ -419,7 +464,11 @@ def apercu(limite: int = 15, ici: str | None = None) -> list[str]:
             droite = f"dernier signe  {_quand(d.get('maj'))}"
         sortie.append(f"      début     {_quand(d.get('debut'))}      {droite}")
         sortie.append(f"      {d.get('tours', 0)} tour(s) · {d.get('modele') or '?'}")
-        if d.get("chemin"):
+        if d.get("sous"):
+            # Le sous-chemin relatif plutot que l'absolu : depuis la racine d'un projet, ce
+            # qu'on veut savoir est « dans quel sous-dossier », pas le chemin complet.
+            sortie.append(f"      ./{d['sous']}")
+        elif d.get("chemin"):
             sortie.append(f"      {d['chemin']}")
         elif d.get("suppose"):
             sortie.append("      chemin non enregistré — rapproché d'ici par le nom du projet")
@@ -431,6 +480,8 @@ def apercu(limite: int = 15, ici: str | None = None) -> list[str]:
 
     sortie += ["  reprendre : vvreprendre 1   (ou l'identifiant de session)",
                "  relire    : vvlire 1"]
+    if caches:
+        sortie.append(f"  {caches} conversation(s) hors de ce dossier — « vvconv --tout »")
     return sortie
 
 

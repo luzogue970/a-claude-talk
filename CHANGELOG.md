@@ -7,6 +7,29 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.9.0] — 2026-08-26
+
+### Modifie — `vvconv` se limite au dossier courant et a ses descendants
+
+Depuis la racine on voit tout, depuis un projet on ne voit que lui. La liste triait « ici
+d'abord » mais montrait quand meme l'historique de tous les autres projets.
+
+- Un descendant affiche son sous-chemin relatif (`./bridge`) : depuis la racine d'un projet,
+  ce qu'on veut savoir est dans quel sous-dossier, pas le chemin complet.
+- Le nombre de conversations masquees est toujours annonce, avec `vvconv --tout` pour les
+  voir. Une liste qui raccourcit sans le dire se lit comme une perte de donnees.
+- Le piege du prefixe est traite : « /a/projet-autre » commence par « /a/projet » sans en
+  etre un descendant. Une comparaison de chaines naive l'aurait melange au mauvais projet.
+- Le filtre est desactive par defaut dans `historique()`, parce que DEUX appelants ne doivent
+  pas l'appliquer : `actives()` arbitre le micro entre toutes les conversations vivantes ou
+  qu'elles soient, et `resoudre()` sert a reprendre par identifiant depuis n'importe ou.
+  Filtrer la premiere la rendrait aveugle, la seconde inutilisable.
+- Les conversations sans chemin enregistre restent rapprochees par le nom du projet : sans
+  chemin on ne peut pas savoir si c'est un descendant, et deviner plus large reviendrait a
+  polluer la vue d'un projet avec l'historique des autres.
+
+`voix/test_journal.py` verrouille ces cas, dont les deux appelants a ne pas filtrer.
+
 ## [1.8.0] — 2026-08-25
 
 ### Ajoute — sept moteurs de reconnaissance, tous avec un palier gratuit reel
