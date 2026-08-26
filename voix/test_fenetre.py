@@ -19,6 +19,7 @@ Ce qui doit rester vrai, et que ces tests verifient :
 """
 
 import asyncio
+import re
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,7 @@ def neuve(occupe=False, delai=0.15):
     """Une Voix minimale, avec un delai court pour que les tests restent rapides."""
     import agent as A
     v = A.Voix.__new__(A.Voix)              # sans __init__ : il monte un vrai Agent LiveKit
+    v._amorcer_etat()                       # le meme amorçage que la vraie construction
     v.worker = FauxWorker(occupe)
     v.tableau = FauxTableau()
     v.quota = None
@@ -298,6 +300,25 @@ async def principal():
     v.appliquer_micro(publier=False)
     dire(v._fenetre is None and v.sess.commis == 0,
          "micro coupe sans rien avoir dit : aucun tour vide n'est fabrique")
+
+    # --- le talon ne peut pas deriver de la vraie construction ---------------------------
+    # Ce qui a casse deux suites : appliquer_micro a commence a lire self._dit, et les talons
+    # construits par __new__ ne l'avaient pas. L'AttributeError tombait loin de sa cause.
+    # _amorcer_etat existe pour ça ; encore faut-il que __init__ n'ajoute rien a cote.
+    print("\n=== le talon reste complet ===")
+    import inspect
+    src_init = inspect.getsource(A.Voix.__init__)
+    src_amorce = inspect.getsource(A.Voix._amorcer_etat)
+    poses_init = set(re.findall(r"self\.(_?\w+)\s*(?::[^=]+)?=", src_init))
+    poses_amorce = set(re.findall(r"self\.(_?\w+)\s*(?::[^=]+)?=", src_amorce))
+    # Les dependances injectees sont posees par __init__ et n'ont rien a faire dans l'amorçage.
+    injectees = {"worker", "porte_parole", "tableau", "quota", "conv"}
+    hors = sorted(poses_init - poses_amorce - injectees)
+    dire(not hors,
+         "tout etat interne passe par _amorcer_etat"
+         + (f" — POSE AILLEURS : {hors}" if hors else ""))
+    dire(len(poses_amorce) >= 8,
+         f"et l'amorçage couvre bien l'etat interne ({len(poses_amorce)} champs)")
 
     print(f"\n  {ok} ok, {ko} echec(s)")
     return 1 if ko else 0

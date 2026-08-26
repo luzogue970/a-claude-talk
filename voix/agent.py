@@ -102,6 +102,20 @@ class Voix(Agent):
         self.tableau = tableau
         self.quota = quota
         self.conv = conversation
+        self._amorcer_etat()
+
+    def _amorcer_etat(self) -> None:
+        """Tout l'etat interne, en un seul endroit.
+
+        Extrait de __init__ pour une raison concrete : les tests construisent des Voix
+        partielles avec `Voix.__new__` — un motif legitime, monter un vrai Agent LiveKit
+        demanderait une session complete — et chaque champ nouveau les cassait une par une,
+        avec une AttributeError loin de sa cause. Un seul endroit a tenir a jour, et les
+        talons appellent la meme fonction que la vraie construction.
+
+        Ne touche PAS aux dependances injectees (worker, tableau, quota) : un test qui veut un
+        faux worker doit pouvoir le poser sans qu'on le lui reecrive.
+        """
         self.permission_en_cours: asyncio.Future | None = None
         self._debut_tour: float | None = None
         self._dernier_debrief: str | None = None

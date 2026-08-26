@@ -42,6 +42,7 @@ def faux_voix(**etat):
     from agent import Voix   # importe ici : agent charge tout le venv, inutile a l'import
 
     v = Voix.__new__(Voix)
+    v._amorcer_etat()          # le meme amorçage que la vraie construction
     v.tableau = None
     v.worker = None
     v.conv = None

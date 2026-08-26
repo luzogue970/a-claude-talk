@@ -163,6 +163,9 @@ def principal():
 
     def agent(voulu, tenu):
         v = Voix.__new__(Voix)
+        # Le meme amorçage que la vraie construction : sans ça, chaque champ nouveau dans
+        # l'agent cassait ce talon avec une AttributeError loin de sa cause.
+        v._amorcer_etat()
         v.tableau = None
         v.worker = type("W", (), {"occupe": False})()
         v._session_directe = Session()
