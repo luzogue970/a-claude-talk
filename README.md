@@ -1312,6 +1312,34 @@ rang de qualité tranche. Chaîne réelle sur cette machine :
 Le local ferme toujours la marche : c'est le seul qui ne peut pas manquer de crédit, donc le
 seul qui garantit qu'on ne devienne jamais sourd.
 
+### Micro coupé : plus un octet ne part
+
+La question se pose vraiment, parce qu'on paie à la seconde d'audio : **quand le micro est
+coupé, le son ne part-il vraiment plus ?** La réponse est oui, et elle est *vérifiée* plutôt
+qu'affirmée — `voix/test_micro_coupe.py` pousse dix secondes d'audio micro coupé et compte zéro
+trame sortie.
+
+La chaîne compte cinq maillons, et un seul suffirait à tout laisser passer : `appliquer_micro` →
+`set_audio_enabled(False)` → `on_detached()` → `ConsoleAudioInput._attached = False` →
+`push_frame` jette la trame. Le test vérifie aussi que la coupure n'est pas un **héritage
+vide** : `TcpAudioInput`, l'autre mode console (celui de `lk agent`), n'implémente ni
+`on_attached` ni `on_detached` — la méthode de base est alors sans effet et couper le micro ne
+couperait plus rien. Si ce test devient rouge après une mise à jour de LiveKit, c'est que
+couper le micro ne coupe plus la dépense.
+
+**Micro ouvert, en revanche, tout part — en continu.** `AgentActivity.push_audio` transmet
+chaque trame sans aucun filtre VAD ; le seul remplacement prévu est du silence pendant l'écho
+du haut-parleur. C'est la conception du streaming, pas un défaut : la reconnaissance a besoin
+d'un flux continu pour garder son contexte. Mais la conséquence se paie — **chaque seconde de
+micro ouvert est facturée, qu'on parle ou non**, et une vidéo qui parle en fond est transcrite.
+
+C'est pourquoi le compteur mesure le *temps micro ouvert* : c'est exactement ce qui coûte.
+
+**La veille** (`VOIX_MICRO_VEILLE`, 300 s) coupe le micro après cinq minutes sans **aucune**
+parole détectée, l'annonce, et nomme le chemin du retour. Parler remet le compteur à zéro, donc
+réfléchir à voix haute avec des pauses de trente secondes ne déclenche rien. Elle vise le seul
+cas où l'on perd vraiment des heures : s'être levé en oubliant de couper.
+
 ### Combien il reste, sur chaque palier
 
 Aucun fournisseur ne dit combien il reste sans aller voir sa console. Le jour où le quota

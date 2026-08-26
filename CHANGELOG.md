@@ -7,6 +7,45 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.15.0] — 2026-08-27
+
+### Verifie — micro coupe, plus un octet ne part vers le nuage
+Prouve sur les vrais objets et non par lecture de code : appliquer_micro →
+set_audio_enabled(False) → on_detached → ConsoleAudioInput._attached=False → la trame est
+jetee. Dix secondes d'audio poussees micro coupe, zero trame sortie.
+
+Le test verifie aussi que la coupure n'est pas un heritage vide : `TcpAudioInput`, l'autre mode
+console, n'implemente ni on_attached ni on_detached — couper le micro n'y couperait rien. Si ce
+test devient rouge, c'est que couper le micro ne coupe plus la depense.
+
+### Ajoute — une veille qui coupe le micro oublie
+Micro ouvert, l'audio part en CONTINU : `push_audio` transmet chaque trame sans filtre VAD.
+C'est la conception du streaming, mais chaque seconde de micro ouvert est facturee et une video
+en fond est transcrite. La veille coupe apres cinq minutes sans aucune parole detectee, l'annonce
+et nomme le chemin du retour. Parler remet le compteur a zero.
+
+### Corrige — une cle presente dans le fichier etait ignoree en silence
+Ecrite « export CLE="..." » dans un fichier qui utilise « CLE=valeur », elle devenait une
+variable nommee « export CLE » : AssemblyAI affichait « pas de cle » alors que la cle etait la.
+Le parseur accepte desormais les deux formes.
+
+### Ajoute — reprendre une conversation recharge tout son historique
+Cliquer dans le selecteur vide le flux puis rejoue ce que Claude Code a ecrit sur disque. La
+reprise automatique de `vv` rejoue aussi — sans ça, le contexte etait complet cote Claude et la
+page restait vide, soit l'impression de conversation neuve qu'on venait de corriger.
+
+### Corrige — le panneau des moteurs elargissait la page de 124 px
+Ancre a droite et borne a la fenetre, avec defilement interne. Le test de rendu mesure le
+debordement horizontal panneaux ouverts ET remplis, et rejoue la mesure en fenetre de 860 px.
+
+### Change — la zone de saisie prend la place qu'elle merite
+52 px et 14,5 px de texte au lieu de 36 et 13, fond detache, halo au focus, micro a 48 px. Elle
+grandit toujours avec le contenu : plus visible, pas plus envahissante.
+
+### Change — des icones qui disent quelque chose dans le selecteur
+Une pastille dont la forme porte l'information autant que la couleur, avec son sens en
+infobulle, et une puce « ↻ 7 » pour les reprises.
+
 ## [1.14.0] — 2026-08-27
 
 ### Corrige — les conversations ne se dedoublent plus (et ne se dedoublaient pas vraiment)
