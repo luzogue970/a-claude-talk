@@ -342,6 +342,113 @@ def le_plafond_suit_le_plancher():
              f"plancher {plancher:g} s -> plafond {plafond:g} s (strictement au-dessus)")
 
 
+async def l_etat_survit_a_l_eviction():
+    """Les selecteurs ne doivent JAMAIS etre vides, quelle que soit la longueur de la session.
+
+    Le bug, reproduit : `config`, `modeles`, `efforts`, `delais` et `moteurs_stt` sont publies
+    au demarrage, donc ils sont les PREMIERS dans une file bornee — et donc les premiers
+    evinces. Sur une conversation longue (ou apres un rejeu d'historique de 1 200 lignes), une
+    page ouverte ensuite ne recevait plus rien de tout ca : panneau de configuration absent,
+    listes vides, impossible de changer de modele ou de delai. Les conversations courtes
+    n'etaient pas touchees, ce qui rendait le defaut incomprehensible.
+
+    La cause de fond : un etat n'est pas un evenement. « Quels modeles existent » reste vrai
+    tant que personne ne le change ; « un outil a demarre » appartient a un instant.
+    """
+    print("\n=== l'etat survit a une session longue ===")
+    import json
+    from tableau import Tableau, MEMOIRE, ETATS
+
+    t = Tableau(port=7893, ouvrir=False)
+    url = await t.demarrer()
+    try:
+        # Le demarrage se fait AVANT toute connexion : c'est le cas reel, et c'est celui qui
+        # cassait, parce que la capture etait placee apres le retour « aucun client ».
+        depart = {
+            "config": {"valeurs": {"projet": "/home/x/insnap"}},
+            "modeles": {"liste": [{"cle": "opus", "libelle": "Opus 5"}], "actuel": "opus"},
+            "efforts": {"liste": [{"cle": "xhigh", "libelle": "tres eleve"}],
+                        "actuel": "xhigh"},
+            "delais": {"paliers": [{"s": 3}, {"s": 5}], "actuel": 5.0, "plafond": 12.5},
+            "moteurs_stt": {"liste": [{"cle": "local", "libelle": "local"}],
+                            "chaine": ["local"], "actif": "local"},
+        }
+        for genre, d in depart.items():
+            t.publier(genre, **d)
+        dire(all(g in t.etat for g in depart),
+             "l'etat est retenu meme sans client connecte")
+
+        for i in range(MEMOIRE + 300):
+            t.publier("outil", nom="Bash", cible=f"c{i}", id=f"t{i}")
+        dans_flux = {e["genre"] for e in t.histoire}
+        dire(not (set(depart) & dans_flux),
+             "apres une session longue, l'etat a bien disparu du flux (c'est normal)")
+        dire(all(g in t.etat for g in depart),
+             "mais il est toujours la, hors de la file bornee")
+
+        recus, lignes = {}, 0
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                while True:
+                    try:
+                        m = await asyncio.wait_for(ws.receive(), timeout=2)
+                    except asyncio.TimeoutError:
+                        break
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_etat":
+                        recus[d["evenement"]["genre"]] = d["evenement"]
+                    elif d.get("genre") == "_histoire":
+                        lignes += len(d["evenements"])
+        manque = [g for g in depart if g not in recus]
+        dire(not manque,
+             f"une page ouverte APRES retrouve tout son etat"
+             + (f" — MANQUENT {manque}" if manque else ""))
+        dire(recus.get("modeles", {}).get("liste"),
+             "et les listes ne sont pas vides")
+        dire(lignes > 0, f"le flux suit, par lots ({lignes} lignes)")
+
+        # le plus recent gagne : un changement de modele ne doit pas etre annule par l'ancien
+        t.publier("modeles", liste=[{"cle": "sonnet"}], actuel="sonnet")
+        dire(json.loads(t.etat["modeles"])["actuel"] == "sonnet",
+             "un etat republie remplace le precedent")
+
+        dire("outil" not in ETATS and "toi" not in ETATS,
+             "les vrais evenements ne sont pas traites comme de l'etat")
+    finally:
+        await t.arreter()
+
+
+def un_moteur_sans_direct_est_annonce():
+    """Un moteur qui ne transcrit qu'a la fin doit le DIRE.
+
+    Sinon rien ne s'ecrit pendant qu'on parle, le texte apparait plusieurs secondes plus tard
+    sans explication, et « retenir » n'a rien a relire au moment de decider. Trois symptomes
+    pour une seule cause, et aucun moyen de la deviner depuis l'interface.
+    """
+    print("\n=== un moteur sans texte en direct s'annonce ===")
+    import moteurs_stt as M
+
+    sans = [m for m in M.MOTEURS if not m.direct]
+    dire(len(sans) == 2 and {m.cle for m in sans} == {"groq", "local"},
+         f"deux moteurs sans direct : {[m.cle for m in sans]}")
+    dire(all("fin" in m.note or "direct" in m.note for m in sans),
+         "et leur note l'explique")
+
+    avec = [m for m in M.MOTEURS if m.direct]
+    dire(all(m.streaming for m in avec),
+         "tout moteur avec du direct fait aussi du streaming (l'inverse est faux)")
+    local = M.PAR_CLE["local"]
+    dire(local.streaming and not local.direct,
+         "le local EST un flux mais SANS resultats intermediaires — c'est cette nuance "
+         "qui rendait le comportement incomprehensible")
+
+    inv = {m["cle"]: m for m in M.inventaire()}
+    dire(inv["local"]["direct"] is False and inv["azure"]["direct"] is True,
+         "la capacite est exposee au tableau, qui peut donc l'afficher")
+
+
 def tout_genre_affiche_a_un_filtre():
     """Un genre qui arrive dans le flux DOIT etre declare dans une famille de filtres.
 
@@ -367,7 +474,7 @@ def tout_genre_affiche_a_un_filtre():
     hors_flux = {
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
         "ecoute", "retenir", "tour_quota", "_histoire",
-        "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif",
+        "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif", "transcrit",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
@@ -455,6 +562,8 @@ async def principal():
     await la_retenue_d_un_tour_ne_vaut_que_pour_lui()
     await la_retenue_pendant_le_travail()
     le_plafond_suit_le_plancher()
+    await l_etat_survit_a_l_eviction()
+    un_moteur_sans_direct_est_annonce()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")

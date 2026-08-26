@@ -26,6 +26,13 @@ log = logging.getLogger("voix.tableau")
 # cours : une page ouverte en cours de route doit montrer les deux.
 MEMOIRE = 3000
 
+# Les genres qui decrivent un ETAT plutot qu'un instant. Ils survivent a l'eviction du flux et
+# sont renvoyes a chaque nouvelle connexion, avant l'historique.
+ETATS = frozenset({
+    "config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
+    "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
+})
+
 
 class Tableau:
     def __init__(self, port: int = 7788, ouvrir: bool = True, on_commande=None):
@@ -48,6 +55,13 @@ class Tableau:
         # ignorer ce qu'elle affiche deja. Sans ca, trois reconnexions donnaient trois copies
         # de la session — panneau de configuration compris.
         self._n = 0
+        # L'ETAT, garde a part du flux. Un etat n'est pas un evenement : « quels modeles
+        # existent » reste vrai tant que personne ne le change, alors qu'« un outil a demarre »
+        # appartient a un instant. Les melanger avait une consequence precise et mesuree : ces
+        # lignes sont les PREMIERES publiees, donc les premieres evincees d'une file bornee.
+        # Sur une conversation longue, une page ouverte ensuite se retrouvait sans panneau de
+        # configuration et avec des selecteurs VIDES.
+        self.etat: dict[str, str] = {}
 
     # --- publication ---------------------------------------------------------
     def publier(self, genre: str, **donnees):
@@ -66,9 +80,14 @@ class Tableau:
             **donnees,
         }
         self.histoire.append(evenement)
+        charge = json.dumps(evenement, ensure_ascii=False, default=str)
+        if genre in ETATS:
+            # AVANT le retour « aucun client » : l'etat de demarrage est publie alors que le
+            # navigateur n'est pas encore connecte, et c'est precisement celui qu'on doit
+            # retenir. Le placer apres ne l'enregistrait jamais.
+            self.etat[genre] = charge
         if not self.clients:
             return
-        charge = json.dumps(evenement, ensure_ascii=False, default=str)
         for file in list(self.clients.values()):
             try:
                 file.put_nowait(charge)
@@ -123,6 +142,11 @@ class Tableau:
             # Par lots de 200 : une reprise complete fait plus de mille evenements, et une
             # trame WebSocket unique de plusieurs centaines de kilo-octets se heurte aux
             # limites du navigateur comme d'aiohttp. Le client les traite dans l'ordre.
+            # L'etat d'abord : c'est ce qui rend la page utilisable. Le flux ensuite, et il
+            # peut manquer sans que rien ne casse.
+            for charge in self.etat.values():
+                await ws.send_str(f'{{"genre": "_etat", "evenement": {charge}}}')
+
             passe = list(self.histoire)
             for i in range(0, len(passe) or 1, 200):
                 await ws.send_str(json.dumps(
@@ -1027,7 +1051,9 @@ function toutClore(raison) {
 // transcription partielle jamais suivie d'une finale (faux positif du VAD, barge-in), et la
 // réflexion peut être coupée net par une déconnexion. Sans échéance, la pastille resterait
 // allumée sur un système inerte.
-const GARDE = { stt: 4000, pensee: 30000 };
+// 12 s pour la transcription : le moteur local met 4 a 7 s, et un garde-fou de 4 s eteignait
+// le signal EN PLEINE attente — la page redevenait muette juste avant que le texte arrive.
+const GARDE = { stt: 12000, pensee: 30000 };
 const echeances = {};
 function battre(nom) {
   clearTimeout(echeances[nom]);
@@ -1036,11 +1062,17 @@ function battre(nom) {
 
 const zoneActivite = document.getElementById("activite");
 const LIB_ACT = { stt: "transcription", pensee: "réflexion", voix: "parole" };
+// Sur un moteur sans texte en direct, l'attente de transcription est la seule chose qui se
+// passe pendant plusieurs secondes. Sans ce libellé, la page semble figée puis du texte
+// apparaît sans explication — c'est exactement ce qui rendait le comportement incompréhensible.
+let sttDirect = true;
 function majActivite() {
   const outils = [...encours.keys()].filter(c => c.startsWith("outil:")).length;
   const bouts = [];
   for (const nom of ["stt", "pensee", "voix"]) {
-    if (encours.has(nom)) bouts.push(`<span class="act ${nom}">${LIB_ACT[nom]}</span>`);
+    if (!encours.has(nom)) continue;
+    const lib = (nom === "stt" && !sttDirect) ? "transcription (fin de phrase)" : LIB_ACT[nom];
+    bouts.push(`<span class="act ${nom}">${lib}</span>`);
   }
   if (outils) {
     bouts.push(`<span class="act outil">${outils} outil${outils > 1 ? "s" : ""}</span>`);
@@ -1633,6 +1665,7 @@ function recevoir(e) {
       chaineMoteurs = e.chaine || [];
       moteurImpose = !!e.impose;
       const tete = inventaireMoteurs.find(m => m.cle === e.actif);
+      if (e.direct != null) sttDirect = !!e.direct;
       majMoteur(tete ? tete.libelle : e.actif, false);
       const b = document.getElementById("choix-moteur");
       if (b && !b.hidden) dessinerChoix();
@@ -1640,6 +1673,19 @@ function recevoir(e) {
     }
     if (e.genre === "moteur_actif") {
       majMoteur(e.libelle, (e.tombes || []).length > 0);
+      return;
+    }
+    if (e.genre === "transcrit") {
+      if (e.actif) {
+        if (e.direct != null) sttDirect = !!e.direct;
+        // On réutilise la clé « stt » du cycle de vie : la pastille existe déjà, elle
+        // n'attendait qu'un signal qu'un moteur batch ne donne jamais.
+        if (!encours.has("stt")) marquer("stt", document.createElement("span"));
+        battre("stt");
+      } else {
+        clearTimeout(echeances.stt);
+        resoudre("stt", "ok");
+      }
       return;
     }
     if (e.genre === "pupitre") { majPupitre(e); return; }
@@ -1704,9 +1750,15 @@ function majMoteur(actif, replie) {
   if (!actif) { pastilleMoteur.className = ""; return; }
   pastilleMoteur.className = "montre" + (replie ? " replie" : "");
   pastilleMoteur.textContent = actif;
-  pastilleMoteur.title = replie
-    ? actif + " — repli : le moteur de tête ne répond plus (clic pour choisir)"
-    : actif + " — moteur de reconnaissance (clic pour choisir)";
+  // « sans direct » se lit d'un coup d'œil : c'est ce qui explique qu'aucun texte ne
+  // s'écrive pendant qu'on parle.
+  pastilleMoteur.textContent = actif + (sttDirect ? "" : " · sans direct");
+  pastilleMoteur.title = (replie
+    ? actif + " — repli : le moteur de tête ne répond plus"
+    : actif + " — moteur de reconnaissance")
+    + (sttDirect ? "" : " · ne transcrit qu'à la fin de la phrase, donc rien ne s'écrit "
+                        + "pendant que tu parles et « retenir » n'a rien à relire")
+    + " (clic pour choisir)";
 }
 
 // Mettre un moteur en tête sans jeter les autres : le reste garde son ordre derrière. Une
@@ -1862,7 +1914,13 @@ function brancher() {
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
     viderFile();
   };
-  ws.onmessage = m => recevoir(JSON.parse(m.data));
+  ws.onmessage = m => {
+    const d = JSON.parse(m.data);
+    // L'état arrive dans une enveloppe pour être distingué du flux, mais il traverse le même
+    // routage : un second chemin aurait fini par diverger.
+    if (d.genre === "_etat") { recevoir(d.evenement); return; }
+    recevoir(d);
+  };
   ws.onclose = () => {
     // Une socket périmée qui se referme après qu'une nouvelle est en place ne doit ni
     // relancer un branchement, ni faire clignoter l'état.

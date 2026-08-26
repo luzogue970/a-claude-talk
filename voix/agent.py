@@ -639,7 +639,18 @@ async def entrypoint(ctx: JobContext):
     # question qu'on se pose quand une transcription est mauvaise.
     tableau.publier("moteurs_stt", liste=moteurs_stt.inventaire(),
                     chaine=moteurs_stt.chaine(), actif=moteurs_stt.chaine()[0],
+                    direct=moteurs_stt.tete().direct,
                     impose=bool(os.environ.get("VOIX_STT", "").strip()))
+    # Un moteur sans resultats intermediaires ne rend son texte QU'A LA FIN, apres que le tour
+    # est parti. Consequence concrete : rien ne s'ecrit pendant qu'on parle, le texte semble
+    # apparaitre sans raison, et « retenir » ne sert a rien puisqu'il n'y a rien a relire au
+    # moment de decider. Le dire au lancement plutot que de laisser chercher.
+    if not moteurs_stt.tete().direct:
+        tableau.publier("erreur", texte=(
+            f"{moteurs_stt.tete().libelle} ne transcrit qu'à la fin de chaque phrase : "
+            "aucun texte ne s'écrira pendant que tu parles, et « retenir » n'aura rien à "
+            "relire. Une clé Speechmatics ou Gladia (gratuites, renouvelées) rétablit "
+            "l'écriture en direct — clic sur la pastille du moteur."))
     tableau.publier("delais",
                     paliers=[{"s": p} for p in config.ECOUTE_PALIERS],
                     actuel=config.ECOUTE_MIN, plafond=config.plafond_ecoute())
@@ -758,6 +769,8 @@ async def entrypoint(ctx: JobContext):
         # qui est le seul endroit connaissant le texte consolidé du tour.
         # Les résultats intermédiaires arrivent entiers et grandissants : ils remplacent.
         tableau.publier("partiel", texte=ev.transcript, final=bool(ev.is_final))
+        if ev.is_final:
+            tableau.publier("transcrit", actif=False)
 
     @session.on("agent_state_changed")
     def _etat(ev):
@@ -772,6 +785,10 @@ async def entrypoint(ctx: JobContext):
         if str(ev.new_state) == "speaking":
             tableau.publier("ecoute", actif=False, parle=True)
         elif str(ev.old_state) == "speaking":
+            # La transcription commence ici. Avec un moteur sans texte en direct, c'est la
+            # SEULE chose qui se passe pendant plusieurs secondes : sans ce signal, la page
+            # semble figée puis du texte apparaît sans explication.
+            tableau.publier("transcrit", actif=True, direct=moteurs_stt.tete().direct)
             # Le silence commence ici, pas avant : c'est la seule transition qui compte.
             # Lu depuis la session, pas depuis la constante : après un réglage, la
             # constante ne dit plus la vérité et le décompte mentirait.

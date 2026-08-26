@@ -1,3 +1,14 @@
+// Un compteur unique pour les evenements de test. Les numeros ecrits a la main rendaient
+// chaque section dependante de l'ordre des autres : `dejaVu` rejette un numero deja depasse,
+// donc inserer une section avec de gros numeros cassait silencieusement toutes celles d'apres.
+// Toujours au-dessus de ce que la page a deja vu : sinon `dejaVu` rejette l'evenement et la
+// section echoue pour une raison qui n'a rien a voir avec ce qu'elle teste.
+let __n = 0;
+const emettre = e => {
+  __n = Math.max(__n + 1, (typeof vuJusqua === 'number' ? vuJusqua : 0) + 1);
+  return recevoir(Object.assign({ n: __n, h: '12:00:00' }, e));
+};
+
 // Les cas de test du front. Fichier separe, et c'est le point : tant qu'ils vivaient dans
 // un template literal de test_front.js, chaque antislash y etait mange une fois de plus —
 // `\b` devenait un retour arriere, `\/` une simple barre oblique, et une regex parfaitement
@@ -340,6 +351,50 @@ dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passe
 dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
      'et renvoie vers le bouton du decompte');
 
+// ---- l attente de transcription est visible ---------------------------------------------
+titre('transcription : l attente ne doit pas etre muette');
+encours.clear();          // une section ne doit pas heriter de l'activite d'une autre
+majActivite();
+for (const k in echeances) clearTimeout(echeances[k]);
+sttDirect = true;
+
+emettre({ genre: 'transcrit', actif: true, direct: true });
+dire(encours.has('stt'), 'la pastille de transcription s allume a la fin de la parole');
+dire(/transcription</.test(zoneActivite.innerHTML),
+     'et elle dit « transcription » : ' + zoneActivite.innerHTML.replace(/<[^>]*>/g, ' ').trim());
+
+// un moteur sans direct : le libelle doit dire POURQUOI rien ne s ecrit
+emettre({ genre: 'transcrit', actif: false });
+dire(!encours.has('stt'), 'la transcription finie, la pastille s eteint');
+emettre({ genre: 'transcrit', actif: true, direct: false });
+dire(/fin de phrase/.test(zoneActivite.innerHTML),
+     'sans direct, elle annonce que le texte arrivera a la fin : '
+     + zoneActivite.innerHTML.replace(/<[^>]*>/g, ' ').trim());
+
+// le garde-fou doit couvrir la latence reelle du moteur local (4 a 7 s)
+dire(GARDE.stt >= 10000,
+     'le garde-fou laisse le temps a un moteur batch (' + GARDE.stt / 1000 + ' s)');
+emettre({ genre: 'transcrit', actif: false });
+
+// ---- la pastille du moteur dit s il y a du direct ---------------------------------------
+titre('pastille du moteur : le direct se lit d un coup d oeil');
+emettre({ genre: 'moteurs_stt',
+  liste: [{ cle: 'local', libelle: 'local (faster-whisper)', gratuit: 'illimite',
+            renouvelable: true, streaming: true, direct: false, note: '', dispo: true, rang: 0 }],
+  chaine: ['local'], actif: 'local', direct: false, impose: false });
+dire(/sans direct/.test(pastilleMoteur.textContent),
+     'un moteur sans direct est marque : « ' + pastilleMoteur.textContent + ' »');
+dire(/retenir/.test(pastilleMoteur.title),
+     'et l infobulle explique la consequence sur « retenir »');
+
+emettre({ genre: 'moteurs_stt',
+  liste: [{ cle: 'azure', libelle: 'Azure', gratuit: '5 h/mois', renouvelable: true,
+            streaming: true, direct: true, note: '', dispo: true, rang: 0 }],
+  chaine: ['azure'], actif: 'azure', direct: true, impose: false });
+dire(pastilleMoteur.textContent === 'Azure',
+     'avec du direct, aucune mention parasite : « ' + pastilleMoteur.textContent + ' »');
+dire(!/retenir/.test(pastilleMoteur.title), 'et pas d avertissement inutile');
+
 // ---- quel moteur transcrit --------------------------------------------------------------
 titre('choix du moteur de reconnaissance');
 socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
@@ -354,7 +409,7 @@ const INV = [
   { cle: 'local', libelle: 'local (faster-whisper)', gratuit: 'illimite, hors ligne',
     renouvelable: true, streaming: false, note: '', dispo: true, rang: 2 },
 ];
-recevoir({ n: 950, genre: 'moteurs_stt', liste: INV,
+emettre({ genre: 'moteurs_stt', liste: INV,
            chaine: ['speechmatics', 'azure', 'local'], actif: 'speechmatics', impose: false });
 dire(pastilleMoteur.className === 'montre', 'la pastille apparait');
 dire(pastilleMoteur.textContent === 'Speechmatics',
@@ -362,7 +417,7 @@ dire(pastilleMoteur.textContent === 'Speechmatics',
 dire(!/repli/.test(pastilleMoteur.title), 'sans mention de repli au depart');
 
 // une bascule : la pastille doit suivre, sinon elle annonce le moteur du demarrage a vie
-recevoir({ n: 951, genre: 'moteur_actif', cle: 'azure', libelle: 'Azure',
+emettre({ genre: 'moteur_actif', cle: 'azure', libelle: 'Azure',
            tombes: ['Speechmatics'] });
 dire(pastilleMoteur.textContent === 'Azure', 'apres bascule, elle nomme le nouveau');
 dire(pastilleMoteur.className.split(' ').includes('replie'),
@@ -394,7 +449,7 @@ dire(/data-tete=/.test(boite.innerHTML), 'un bouton par moteur disponible est pr
 dire(/moteur-defaut/.test(boite.innerHTML), 'et un retour a l ordre par defaut');
 
 // VOIX_STT impose : le dire, sinon on cliquerait sans effet
-recevoir({ n: 952, genre: 'moteurs_stt', liste: INV,
+emettre({ genre: 'moteurs_stt', liste: INV,
            chaine: ['azure', 'local'], actif: 'azure', impose: true });
 dessinerChoix();
 dire(/VOIX_STT est pos/.test(document.getElementById('choix-moteur').innerHTML),

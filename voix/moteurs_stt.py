@@ -37,6 +37,11 @@ class Moteur:
     gratuit: str                 # ce que donne le palier gratuit
     renouvelable: bool           # mensuel (on le depense) ou credit unique (on le garde)
     streaming: bool
+    # Le texte s'ecrit-il PENDANT qu'on parle ? C'est ce qui rend la relecture possible avant
+    # envoi. Un moteur sans resultats intermediaires ne rend son texte qu'a la fin, apres que
+    # le tour est parti — donc « retenir » devient inutilisable, et le texte semble apparaitre
+    # sans raison. Distinct de `streaming` : le local est un flux, sans interim pour autant.
+    direct: bool
     note: str = ""
 
     @property
@@ -51,26 +56,26 @@ class Moteur:
 # ensuite (finis, on les garde pour la suite), le local en dernier (illimite mais lent).
 MOTEURS: tuple[Moteur, ...] = (
     Moteur("speechmatics", "Speechmatics", "SPEECHMATICS_API_KEY",
-           "8 h/mois, renouvele, sans carte", True, True,
+           "8 h/mois, renouvele, sans carte", True, True, True,
            "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)"),
     Moteur("gladia", "Gladia", "GLADIA_API_KEY",
-           "4 h/mois de temps reel, renouvele", True, True,
+           "4 h/mois de temps reel, renouvele", True, True, True,
            "annonce par son editeur comme le meilleur sur le francais"),
     Moteur("azure", "Azure", "AZURE_SPEECH_KEY",
-           "5 h/mois au palier F0, renouvele", True, True,
+           "5 h/mois au palier F0, renouvele", True, True, True,
            "aussi utilise pour la synthese vocale"),
     Moteur("assemblyai", "AssemblyAI", "ASSEMBLYAI_API_KEY",
-           "50 $ de credits a l'inscription (~300 h)", False, True,
+           "50 $ de credits a l'inscription (~300 h)", False, True, True,
            "credit unique : garde-le pour quand les quotas mensuels sont epuises"),
     Moteur("deepgram", "Deepgram", "DEEPGRAM_API_KEY",
-           "200 $ de credits a l'inscription", False, True,
+           "200 $ de credits a l'inscription", False, True, True,
            "nova-3, tres faible latence"),
     Moteur("groq", "Groq", "GROQ_API_KEY",
-           "palier gratuit avec limites journalieres", True, False,
-           "whisper-large-v3 tres rapide, mais SANS streaming : il faut attendre la fin"),
+           "palier gratuit avec limites journalieres", True, False, False,
+           "whisper-large-v3 rapide, mais le texte n'arrive qu'a la fin de la phrase"),
     Moteur("local", "local (faster-whisper)", None,
-           "illimite, hors ligne", True, False,
-           "4 a 5 s par phrase ; l'audio ne quitte pas la machine"),
+           "illimite, hors ligne", True, True, False,
+           "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine"),
 )
 
 PAR_CLE = {m.cle: m for m in MOTEURS}
@@ -172,6 +177,11 @@ def chaine(demande: str | None = None) -> list[str]:
     return retenus
 
 
+def tete() -> Moteur:
+    """Le moteur qui transcrira, sauf panne."""
+    return PAR_CLE[chaine()[0]]
+
+
 def resume() -> str:
     """Ce que le panneau de configuration affiche au lancement."""
     c = chaine()
@@ -183,7 +193,7 @@ def inventaire() -> list[dict]:
     active = chaine()
     return [{
         "cle": m.cle, "libelle": m.libelle, "gratuit": m.gratuit,
-        "renouvelable": m.renouvelable, "streaming": m.streaming,
+        "renouvelable": m.renouvelable, "streaming": m.streaming, "direct": m.direct,
         "note": m.note, "dispo": m.dispo,
         "rang": active.index(m.cle) if m.cle in active else None,
     } for m in MOTEURS]

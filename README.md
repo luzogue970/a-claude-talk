@@ -210,6 +210,13 @@ au lieu d'attendre son cycle de cinq minutes. C'est ce délai qui donnait l'impr
 ne s'affichaient « pas tout le temps ». Et tant qu'aucune lecture n'est arrivée, une pastille
 en pointillés dit `quota…` : une en-tête vide laisse croire à une panne.
 
+**L'état n'est pas un événement.** `config`, `modeles`, `efforts`, `delais` et `moteurs_stt`
+sont gardés hors du flux et renvoyés à chaque connexion, avant l'historique. Sans cette
+séparation, ils étaient les *premiers* publiés donc les *premiers* évincés d'une file bornée :
+sur une conversation longue, une page ouverte ensuite se retrouvait sans panneau de
+configuration et avec des **sélecteurs vides**. Les conversations courtes n'étaient pas
+touchées, ce qui rendait le défaut incompréhensible.
+
 Elle commence par un **panneau de configuration** : projet, modèle et effort, porte-parole,
 mode de permission, compte Claude qui paie, moteur de reconnaissance et nombre de termes
 biaisés, voix de synthèse, détecteur de fin de tour, seuils d'interruption, état de
@@ -1142,6 +1149,30 @@ Le choix est **enregistré** dans `~/.config/claude-talk/stt.json` et vaut **au 
 lancement** : `AgentSession.stt` est en lecture seule, le moteur ne peut pas changer en cours
 de session. Le panneau le dit, plutôt que de laisser croire à un effet immédiat. `VOIX_STT`
 posé dans l'environnement gagne sur ce choix, et le panneau le signale aussi.
+
+### Texte en direct, ou texte à la fin
+
+Tous les moteurs ne se valent pas sur ce point, et c'est **le** critère de confort :
+
+| | |
+|---|---|
+| **avec direct** | Speechmatics, Gladia, Azure, AssemblyAI, Deepgram — le texte s'écrit pendant que tu parles |
+| **sans direct** | Groq, local — le texte n'arrive **qu'à la fin** de la phrase |
+
+Sans direct, trois symptômes apparaissent, et ils ont tous la même cause :
+
+- rien ne s'écrit pendant que tu parles ;
+- le texte apparaît quatre à sept secondes plus tard, sans que rien n'ait bougé entre-temps ;
+- **`retenir` n'a rien à relire** au moment de décider, puisque le texte n'est pas encore là.
+
+Le local *est* un flux (`streaming=True`) mais **sans résultats intermédiaires**
+(`interim_results=False`) — c'est cette nuance qui rendait le comportement incompréhensible.
+
+Trois choses le rendent maintenant lisible : la pastille du moteur affiche **`· sans direct`**
+avec la conséquence en infobulle, une pastille **`transcription (fin de phrase)`** s'allume
+pendant l'attente — sinon la page semble figée puis du texte apparaît sans raison — et le
+lancement publie un avertissement qui dit quoi faire : une clé Speechmatics ou Gladia,
+gratuites et renouvelées, rétablit l'écriture en direct.
 
 ### Le banc d'essai
 

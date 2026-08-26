@@ -7,6 +7,45 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.11.0] — 2026-08-26
+
+### Corrige — selecteurs vides et panneau absent sur les conversations longues
+
+Reproduit : `config`, `modeles`, `efforts`, `delais` et `moteurs_stt` sont publies au
+demarrage, donc ils sont les PREMIERS dans une file bornee — et donc les premiers evinces. Sur
+une conversation longue, ou apres un rejeu de 1 200 lignes, une page ouverte ensuite ne
+recevait plus rien de tout ca. Les conversations courtes n'etaient pas touchees, ce qui rendait
+le defaut incomprehensible.
+
+La cause de fond : **un etat n'est pas un evenement**. « Quels modeles existent » reste vrai
+tant que personne ne le change ; « un outil a demarre » appartient a un instant.
+
+- L'etat est garde a part et renvoye a chaque connexion, avant l'historique.
+- La capture se fait AVANT le retour « aucun client » : l'etat de demarrage est publie alors
+  que le navigateur n'est pas encore connecte, et c'est precisement celui qu'on doit retenir.
+  Mon premier correctif etait place apres, donc ne servait jamais — le test l'a attrape.
+
+### Corrige — le texte qui n'apparait pas, ou seulement a la fin
+
+Trois symptomes, une seule cause : le moteur local a `interim_results=False`. Il EST un flux,
+mais sans resultats intermediaires — cette nuance rendait le comportement incomprehensible.
+Rien ne s'ecrivait en parlant, le texte apparaissait 4 a 7 s plus tard, et « retenir » n'avait
+rien a relire au moment de decider.
+
+- La capacite « texte en direct » est declaree par moteur, distincte du streaming.
+- La pastille du moteur affiche « · sans direct », avec la consequence en infobulle.
+- Une pastille « transcription (fin de phrase) » s'allume pendant l'attente : sans elle la
+  page semblait figee puis du texte apparaissait sans raison.
+- Le garde-fou de cette pastille passe de 4 a 12 s : a 4 s il s'eteignait EN PLEINE attente,
+  juste avant l'arrivee du texte.
+- Le lancement avertit et dit quoi faire : une cle Speechmatics ou Gladia rend le direct.
+
+### Interne — les tests ne dependent plus de leur ordre
+
+Les numeros d'evenements ecrits a la main rendaient chaque section dependante des autres :
+`dejaVu` rejette un numero deja depasse, donc inserer une section cassait silencieusement
+toutes celles d'apres. Un compteur auto-corrigeant remplace les valeurs en dur.
+
 ## [1.10.0] — 2026-08-26
 
 ### Modifie — l'historique rejoue n'est plus grise, et garde tout
