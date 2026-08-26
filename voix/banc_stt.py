@@ -152,17 +152,31 @@ async def _par_flux(moteur, trames) -> str:
     from livekit.agents import stt as stt_api
     flux = moteur.stream()
     morceaux: list[str] = []
+    dernier_partiel = ""
 
     async def recolter():
+        nonlocal dernier_partiel
         async for ev in flux:
-            if ev.type == stt_api.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
-                t = ev.alternatives[0].text.strip()
-                if t:
-                    morceaux.append(t)
+            if not ev.alternatives:
+                continue
+            t = ev.alternatives[0].text.strip()
+            if ev.type == stt_api.SpeechEventType.FINAL_TRANSCRIPT and t:
+                morceaux.append(t)
+            elif ev.type == stt_api.SpeechEventType.INTERIM_TRANSCRIPT and t:
+                # Garde le dernier intermediaire : certains plugins delèguent la fin de tour
+                # au detecteur de LiveKit, absent d'un banc. Ils transcrivent parfaitement
+                # mais n'emettent jamais de FINAL — mesure sur Speechmatics, qui rendait
+                # « Renomme la variable qui gere le silence dans config » en intermediaire
+                # tout en paraissant inutilisable. Sans ce repli, le banc condamnait un
+                # moteur pour un defaut du banc.
+                dernier_partiel = t
 
     tache = asyncio.create_task(recolter())
     for t in trames:
         flux.push_frame(t)
+        # Cadence proche du reel : pousser 60 trames d'un coup ne laisse pas le temps aux
+        # moteurs de renvoyer leurs intermediaires, et faussait la latence mesuree.
+        await asyncio.sleep(0.01)
     flux.end_input()
     try:
         await asyncio.wait_for(tache, timeout=25)
@@ -174,6 +188,12 @@ async def _par_flux(moteur, trames) -> str:
     finally:
         await flux.aclose()
     if not morceaux:
+        if dernier_partiel:
+            # Marque : un intermediaire est par nature INCOMPLET — il a ete capture en cours
+            # de phrase. Le noter comme une mesure de qualite serait faux, et faux dans le
+            # sens le plus injuste : Speechmatics rendait 66 % de WER alors qu'il transcrivait
+            # parfaitement, simplement pas encore fini.
+            return "\x00PARTIEL\x00" + dernier_partiel
         # C'est le cas d'Azure a quota epuise : le flux se ferme aussitot, sans transcription
         # et sans exception. Sans ce garde-fou le banc notait 100 % d'erreur et accusait la
         # qualite du moteur, alors que le probleme etait le credit.
@@ -183,6 +203,13 @@ async def _par_flux(moteur, trames) -> str:
 
 
 async def principal(argv):
+    # Les plugins LiveKit prennent leur session HTTP dans le contexte du job. Hors job — et un
+    # banc n'en est pas un — ils levent « Attempted to use an http session outside of a job
+    # context ». On ouvre donc le contexte a la main, sinon la moitie des moteurs paraissent
+    # inutilisables alors que leur cle est bonne.
+    from livekit.agents.utils import http_context
+    http_context._new_session_ctx()
+
     fichiers: list[tuple[Path, str | None]] = []
     voulus = None
     args = []
@@ -229,6 +256,7 @@ async def principal(argv):
 
     resultats: dict[str, list] = {c: [] for c in dispos}
     echecs: dict[str, list] = {}
+    incomplets: set = set()
     for f, attendu in fichiers:
         trames, taux = _lire_wav(f)
         secondes = sum(t.samples_per_channel for t in trames) / taux - 1.0
@@ -241,6 +269,14 @@ async def principal(argv):
             if err:
                 print(f"     {nom:<22} ÉCHEC  {err}")
                 echecs.setdefault(cle, []).append(err)
+                continue
+            partiel = texte.startswith("\x00PARTIEL\x00")
+            if partiel:
+                texte = texte[len("\x00PARTIEL\x00"):]
+                # Hors classement : ces moteurs delèguent la fin de tour au detecteur de
+                # LiveKit, absent d'un banc. Ils marchent en session reelle.
+                print(f"     {nom:<22} {duree:5.2f} s  incomplet  « {texte} »")
+                incomplets.add(cle)
                 continue
             note = f"{wer:5.1f} % WER" if wer is not None else "    —     "
             print(f"     {nom:<22} {duree:5.2f} s  {note}  « {texte} »")
@@ -260,6 +296,11 @@ async def principal(argv):
         m = moteurs_stt.PAR_CLE[cle]
         note = f"{wer:5.1f} % WER" if wer is not None else "    —     "
         print(f"     {m.libelle:<22} {note}  {lat:5.2f} s   {m.gratuit}")
+    for cle in sorted(incomplets):
+        m = moteurs_stt.PAR_CLE[cle]
+        print(f"     {m.libelle:<22} non noté — il transcrit bien, mais délègue la fin de "
+              f"tour au détecteur de LiveKit,\n"
+              f"     {'':<22}   absent d'un banc. À juger en session réelle.")
     for cle, msgs in echecs.items():
         if not resultats.get(cle):
             # Aucun essai reussi : le moteur n'est pas mauvais, il n'a pas repondu. Le

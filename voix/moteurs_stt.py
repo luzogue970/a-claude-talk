@@ -43,6 +43,12 @@ class Moteur:
     # sans raison. Distinct de `streaming` : le local est un flux, sans interim pour autant.
     direct: bool
     note: str = ""
+    # Le palier gratuit en HEURES, exploitable par un compteur. `gratuit` dit la meme chose
+    # en français pour l'humain ; ce champ existe pour que le suivi de consommation puisse
+    # calculer un reste. None = illimite (local) ou non chiffrable (limites journalieres).
+    # Les credits en dollars sont convertis au tarif temps reel du fournisseur, d'ou des
+    # valeurs arrondies : un ordre de grandeur suffit pour voir venir l'epuisement.
+    quota_h: float | None = None
 
     @property
     def dispo(self) -> bool:
@@ -57,19 +63,19 @@ class Moteur:
 MOTEURS: tuple[Moteur, ...] = (
     Moteur("speechmatics", "Speechmatics", "SPEECHMATICS_API_KEY",
            "8 h/mois, renouvele, sans carte", True, True, True,
-           "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)"),
+           "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)", quota_h=8),
     Moteur("gladia", "Gladia", "GLADIA_API_KEY",
            "4 h/mois de temps reel, renouvele", True, True, True,
-           "annonce par son editeur comme le meilleur sur le francais"),
+           "annonce par son editeur comme le meilleur sur le francais", quota_h=4),
     Moteur("azure", "Azure", "AZURE_SPEECH_KEY",
            "5 h/mois au palier F0, renouvele", True, True, True,
-           "aussi utilise pour la synthese vocale"),
+           "aussi utilise pour la synthese vocale", quota_h=5),
     Moteur("assemblyai", "AssemblyAI", "ASSEMBLYAI_API_KEY",
            "50 $ de credits a l'inscription (~300 h)", False, True, True,
-           "credit unique : garde-le pour quand les quotas mensuels sont epuises"),
+           "credit unique : garde-le pour quand les quotas mensuels sont epuises", quota_h=330),
     Moteur("deepgram", "Deepgram", "DEEPGRAM_API_KEY",
            "200 $ de credits a l'inscription", False, True, True,
-           "nova-3, tres faible latence"),
+           "nova-3, tres faible latence", quota_h=430),
     Moteur("groq", "Groq", "GROQ_API_KEY",
            "palier gratuit avec limites journalieres", True, False, False,
            "whisper-large-v3 rapide, mais le texte n'arrive qu'a la fin de la phrase"),
@@ -102,7 +108,13 @@ def construire(cle: str, vad=None):
                             language=langue, punctuate=True, **extra)
     if cle == "speechmatics":
         from livekit.plugins import speechmatics
-        return speechmatics.STT(language=courte, additional_vocab=mots[:100])
+        from speechmatics.voice._models import AdditionalVocabEntry
+        # Pas une liste de chaines : le plugin attend des objets `AdditionalVocabEntry`.
+        # Mesure : passer des chaines leve « 'str' object has no attribute 'content' » — et
+        # ca cassait le moteur ENTIER, pas seulement le biais de vocabulaire.
+        return speechmatics.STT(
+            language=courte,
+            additional_vocab=[AdditionalVocabEntry(content=m) for m in mots[:100]])
     if cle == "gladia":
         from livekit.plugins import gladia
         return gladia.STT(languages=[courte], interim_results=True,

@@ -46,6 +46,7 @@ try:
 except ImportError:   # paquet absent d'un venv reconstruit : on doit rester audible
     deepgram = None
 
+import consommation
 import moteurs_stt
 import pupitre
 import stt_local
@@ -405,6 +406,10 @@ class Voix(Agent):
         except Exception:
             log.debug("micro non applicable pour l'instant", exc_info=True)
             return effectif
+        # Le quota ne se consomme que micro ouvert : c'est la seule mesure honnete de ce qui
+        # part vers le fournisseur. La mesurer ici plutot qu'a cote garantit qu'elle suit
+        # l'etat REEL du micro, pas l'intention.
+        consommation.micro(effectif)
         if publier:
             self._voir("micro", actif=effectif, voulu=self.micro_voulu, bail=bail)
         return effectif
@@ -664,6 +669,17 @@ async def entrypoint(ctx: JobContext):
     # Une bascule de moteur doit s'annoncer. Sans ça, la session où le quota Azure s'est
     # épuisé n'a laissé qu'un mur d'erreurs identiques et aucune ligne disant ce qui prenait
     # le relais — impossible de comprendre pourquoi tout était devenu lent.
+    # Qui transcrit MAINTENANT. Partage entre la bascule de repli, le compteur de quota et
+    # le gestionnaire d'erreurs : trois endroits qui doivent nommer le meme moteur, sinon le
+    # temps est impute a l'un et l'epuisement constate sur l'autre.
+    actif = {"cle": (moteurs_stt.chaine() or [None])[0]}
+    consommation.moteur_actif(actif["cle"])
+
+    def _publier_conso():
+        tableau.publier("consommation", moteurs=consommation.etat(moteurs_stt.MOTEURS))
+
+    _publier_conso()
+
     if isinstance(moteur_stt, stt_api.FallbackAdapter):
         # Le label est le chemin complet du module (livekit.plugins.azure.stt.STT), pas le
         # nom du plugin : on cherche donc le segment, pas une égalité.
@@ -698,11 +714,20 @@ async def entrypoint(ctx: JobContext):
             tombes.discard(nom) if ev.available else tombes.add(nom)
             debout = [c for c in moteurs_stt.chaine()
                       if moteurs_stt.PAR_CLE[c].libelle not in tombes]
+            actif["cle"] = debout[0] if debout else None
+            # Decoupe la mesure a la bascule : sans ca, le temps consomme par Azure avant sa
+            # chute serait impute au moteur qui prend le relais.
+            consommation.moteur_actif(actif["cle"])
+            if ev.available:
+                for c, m in moteurs_stt.PAR_CLE.items():
+                    if m.libelle == nom:
+                        consommation.oublier_epuise(c)
             tableau.publier("moteur_actif",
                             cle=debout[0] if debout else None,
                             libelle=(moteurs_stt.PAR_CLE[debout[0]].libelle
                                      if debout else "aucun"),
                             tombes=sorted(tombes))
+            _publier_conso()
 
     session = AgentSession(
         stt=moteur_stt,
@@ -812,6 +837,13 @@ async def entrypoint(ctx: JobContext):
         brut = str(getattr(ev, "error", ev))
         # Le quota Azure produisait une erreur toutes les quinze secondes : le tableau
         # devenait illisible et le vrai message se perdait dedans. On résume, une fois.
+        # Un quota epuise n'est pas une panne : il ne reviendra pas avant le mois prochain.
+        # Le constater ici, sur le moteur reellement actif, evite que le compteur continue
+        # d'annoncer des heures restantes sur un palier vide — ce qu'Azure a fait pendant
+        # des semaines.
+        if consommation.ressemble_a_un_quota(brut) and actif["cle"]:
+            consommation.constater_epuise(actif["cle"], brut)
+            _publier_conso()
         if "Quota exceeded" in brut:
             cle = "quota-stt"
             suivant = [c for c in moteurs_stt.chaine() if c != "azure"]

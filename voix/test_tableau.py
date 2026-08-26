@@ -475,9 +475,23 @@ def tout_genre_affiche_a_un_filtre():
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
         "ecoute", "retenir", "tour_quota", "_histoire",
         "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif", "transcrit",
+        "consommation",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
+
+    # Le pendant du meme oubli, de l'autre cote : un genre hors-flux qui pilote un morceau
+    # DURABLE de l'interface doit figurer dans ETATS, sinon il est evince du deque sur une
+    # longue conversation et le morceau reste vide a la reconnexion. C'est exactement ce qui
+    # a vide les selecteurs de modele et de delai pendant des semaines.
+    durables = {"config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
+                "consommation", "micro", "quota", "pupitre", "retenir", "travail", "etat"}
+    from tableau import ETATS
+    oublies = sorted(durables - set(ETATS))
+    dire(not oublies,
+         "les etats durables survivent a l'eviction du deque"
+         + (f" — MANQUENT dans ETATS : {oublies}" if oublies else ""))
+
     dire(not manquants,
          f"{len(attendus)} genres affiches, tous filtrables"
          + (f" — MANQUENT : {manquants}" if manquants else ""))

@@ -30,6 +30,7 @@ MEMOIRE = 3000
 # sont renvoyes a chaque nouvelle connexion, avant l'historique.
 ETATS = frozenset({
     "config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
+    "consommation",
     "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
 })
 
@@ -307,6 +308,16 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #choix-moteur .quoi{color:var(--faible)}
 #choix-moteur .rang{color:#5a636e;font-variant-numeric:tabular-nums}
 #choix-moteur .absent{opacity:.5}
+#choix-moteur .jauge{height:3px;border-radius:2px;background:#252b34;margin-top:5px;
+  overflow:hidden}
+#choix-moteur .jauge i{display:block;height:100%;background:var(--accent);
+  transition:width .4s ease}
+#choix-moteur .jauge.tendu i{background:#d8a657}
+#choix-moteur .jauge.vide i{background:#c9605e}
+#choix-moteur .reste{color:var(--faible);font-variant-numeric:tabular-nums;
+  white-space:nowrap;text-align:right}
+#choix-moteur .reste b{color:var(--texte);font-weight:650}
+#choix-moteur .reste .vide{color:#c9605e;font-weight:650}
 #choix-moteur .pied{border-top:1px solid var(--bord);margin-top:8px;padding-top:8px;
   line-height:1.5}
 #choix-moteur .pied b{color:var(--texte)}
@@ -1708,6 +1719,14 @@ function recevoir(e) {
       const tete = inventaireMoteurs.find(m => m.cle === e.actif);
       if (e.direct != null) sttDirect = !!e.direct;
       majMoteur(tete ? tete.libelle : e.actif, false);
+      majResteMoteur();
+      const b = document.getElementById("choix-moteur");
+      if (b && !b.hidden) dessinerChoix();
+      return;
+    }
+    if (e.genre === "consommation") {
+      consoMoteurs = e.moteurs || [];
+      majResteMoteur();
       const b = document.getElementById("choix-moteur");
       if (b && !b.hidden) dessinerChoix();
       return;
@@ -1814,6 +1833,31 @@ function majMoteur(actif, replie) {
 // Mettre un moteur en tête sans jeter les autres : le reste garde son ordre derrière. Une
 // fonction nommée plutôt qu'une ligne dans un gestionnaire de clic — c'est la seule vraie
 // règle de cet écran, et elle mérite d'être vérifiable.
+let consoMoteurs = [];
+
+// « 2 h 04 », « 37 min » — jamais « 7440 ». La meme regle que cote Python (consommation.duree),
+// volontairement dupliquee : le tableau doit rester lisible meme sur un etat rejoue d'une
+// version anterieure, sans dependre d'un champ pre-formate qui pourrait manquer.
+function dureeCourte(s) {
+  if (s == null) return "—";
+  s = Math.floor(s);
+  if (s >= 3600) return Math.floor(s / 3600) + " h " + String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  if (s >= 60) return Math.floor(s / 60) + " min";
+  return s + " s";
+}
+
+// Ce que la pastille dit au survol : le moteur en tête et ce qu'il lui reste. Sans ouvrir le
+// panneau, c'est la seule occasion de voir venir un quota qui se vide.
+function majResteMoteur() {
+  const tete = consoMoteurs.find(m => m.cle === (chaineMoteurs[0] || ""));
+  if (!tete) return;
+  const reste = tete.epuise ? "palier épuisé (constaté)"
+    : tete.palier_s ? "il reste ~" + dureeCourte(tete.reste_s) + " sur " + dureeCourte(tete.palier_s) + " ce " + (tete.renouvelable ? "mois" : "crédit")
+    : tete.gratuit;
+  pastilleMoteur.title = tete.libelle + " — " + reste
+    + "\nEstimation locale, mesurée micro ouvert. Cliquer pour tout voir.";
+}
+
 function ordreAvecTete(tete) {
   if (!tete) return "";
   const suite = chaineMoteurs.filter(c => c !== tete);
@@ -1827,18 +1871,36 @@ function dessinerChoix() {
     const etat = m.dispo
       ? (m.rang == null ? "hors chaîne" : "rang " + rang)
       : "pas de clé";
+    const c = consoMoteurs.find(x => x.cle === m.cle) || {};
+    // La jauge n'apparait que s'il y a un palier a jauger : une barre vide sur « illimite »
+    // laisserait croire a un quota qui n'existe pas.
+    const part = c.epuise ? 1 : (c.part || 0);
+    const classe = c.epuise || part >= 1 ? " vide" : part >= 0.8 ? " tendu" : "";
+    const jauge = c.palier_s
+      ? `<div class="jauge${classe}"><i style="width:${Math.round(part * 100)}%"></i></div>` : "";
+    const reste = c.epuise
+      ? `<span class="vide">épuisé</span><br>constaté`
+      : c.palier_s
+        ? `<b>${ech(dureeCourte(c.reste_s))}</b><br>de ${ech(dureeCourte(c.palier_s))}`
+        : c.consomme_s ? `${ech(dureeCourte(c.consomme_s))}<br>utilisé` : `illimité`;
     return `<div class="m${m.dispo ? "" : " absent"}">`
       + `<span class="rang">${ech(rang)}</span>`
       + `<span><span class="nom">${ech(m.libelle)}</span> — `
       + `<span class="quoi">${ech(m.gratuit)}`
       + (m.streaming ? "" : " · sans streaming")
-      + (m.note ? " · " + ech(m.note) : "") + `</span></span>`
-      + `<span class="rang">${ech(etat)}</span></div>`;
+      + (m.note ? " · " + ech(m.note) : "") + `</span>`
+      + (c.motif ? `<br><span class="quoi">refus : ${ech(String(c.motif).slice(0, 110))}</span>` : "")
+      + jauge + `</span>`
+      + `<span class="reste">${m.dispo ? reste : ech(etat)}</span></div>`;
   }).join("");
   const dispo = inventaireMoteurs.filter(m => m.dispo).map(m => m.cle);
   b.innerHTML = lignes + `<div class="pied">`
     + `<b>Ordre par défaut</b> : les quotas mensuels d'abord — ils reviennent, autant les `
     + `dépenser — puis les crédits uniques, puis le local, illimité mais lent.<br>`
+    + `<b>Les restes sont une estimation locale</b> : on compte le temps micro ouvert sur `
+    + `cette machine, depuis l'installation du compteur. Ce qui a été consommé ailleurs, ou `
+    + `avant, n'y est pas. « épuisé — constaté » est en revanche un fait : le fournisseur a `
+    + `refusé pour cause de quota.<br>`
     + (moteurImpose
         ? `<b>VOIX_STT est posé dans l'environnement</b> : il gagne sur tout choix fait ici.`
         : `<b>Choisir ici</b> vaut pour le prochain lancement : le moteur ne peut pas changer `
