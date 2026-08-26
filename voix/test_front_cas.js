@@ -899,5 +899,41 @@ envoyes.length = 0;
 microBasEl.onclick();
 dire(envoyes.some(o => o.cmd === 'micro'), 'le bouton du bas envoie bien l ordre micro');
 
+// ---- la sequence REELLE du moteur de tete ------------------------------------------------
+titre('la dictee suit AssemblyAI, mesure sur une vraie phrase');
+// Sequence relevee le 27/08 sur AssemblyAI, moteur de tete de la chaine. Le point qui compte :
+// il SEGMENTE. Chaque intermediaire repart de zero au lieu de grandir, donc un affichage qui
+// « remplace » perdrait tout le debut de la phrase a chaque nouveau segment. Trois segments
+// ici, et la barre doit finir par les porter tous les trois.
+champ.value = ''; champ.oninput();
+ouvrirDictee();
+const segs = [
+  'Renomme la variable qui gère le silence dans config.',
+  'Puis ajoute un test.',
+  'qui vérifie que la chaîne de repli garde le vocabulaire du projet.',
+];
+for (const seg of segs) {
+  poserDictee(seg, false);   // l intermediaire du segment
+  poserDictee(seg, true);    // puis sa finale
+}
+dire(champ.value.includes(segs[0]) && champ.value.includes(segs[1]) && champ.value.includes(segs[2]),
+     'les trois segments sont tous la : "' + champ.value.slice(0, 96) + '"');
+dire(champ.value.indexOf(segs[0]) < champ.value.indexOf(segs[2]),
+     'et dans l ordre ou ils ont ete dits');
+dire((champ.value.match(/Renomme la variable/g) || []).length === 1,
+     'chaque segment n apparait qu une fois : l intermediaire ne double pas sa finale');
+
+// Deepgram, lui, fait grandir ses intermediaires DANS un segment. Les deux comportements
+// doivent aboutir au meme texte, sinon changer de moteur changerait ce qu on lit.
+champ.value = ''; champ.oninput();
+ouvrirDictee();
+poserDictee('Renomme la variable', false);
+poserDictee('Renomme la variable qui', false);
+poserDictee('Renomme la variable qui', true);
+poserDictee('gère le silence', false);
+poserDictee('gère le silence dans config', true);
+dire(champ.value === 'Renomme la variable qui gère le silence dans config',
+     'intermediaires grandissants : aucune repetition non plus — "' + champ.value + '"');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);
