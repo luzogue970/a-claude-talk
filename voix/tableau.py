@@ -242,6 +242,17 @@ PAGE = r"""<!doctype html>
   --fond:#0e1116; --carte:#161b22; --bord:#272e37; --texte:#d7dde5; --faible:#8b949e;
   --toi:#58a6ff; --voix:#3fb950; --pensee:#a371f7; --outil:#d29922; --erreur:#f85149;
   --permission:#ff7b72; --tour:#39c5cf;
+  /* « ce qui est vif en ce moment » : le micro qui entend, la conversation courante, une
+     jauge qui se remplit. Distinct de --toi (ce que TU dis) et de --voix (ce qu'il répond) :
+     ici c'est l'état de l'application, pas un locuteur.
+     Elle a manqué pendant six utilisations : var(--accent) n'était définie nulle part, donc
+     les barres du micro devenaient TRANSPARENTES dès qu'on parlait — le rond paraissait vide
+     au moment précis où il devait montrer quelque chose. Une variable CSS absente ne lève
+     rien : elle rend la valeur initiale, et pour une couleur de fond c'est « invisible ». */
+  --accent:#4f9dde;
+  /* « ça attend ta relecture » : la note contre la barre quand une dictée est retenue.
+     L'ambre plutôt que le rouge — rien n'est cassé, quelque chose demande un geste. */
+  --retenu:#d8a657;
 }
 *{box-sizing:border-box}
 
@@ -411,8 +422,8 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
    devient un mensonge. */
 #note-barre{position:absolute;bottom:100%;right:16px;margin-bottom:8px;
   display:flex;gap:7px;align-items:center;background:var(--carte);
-  border:1px solid var(--retenu,#d8a657);border-radius:999px;padding:5px 13px;
-  font-size:12.5px;color:var(--retenu,#d8a657);
+  border:1px solid var(--retenu);border-radius:999px;padding:5px 13px;
+  font-size:12.5px;color:var(--retenu);
   opacity:0;transition:opacity .25s ease;pointer-events:none}
 #note-barre.montre{opacity:1}
 #note-barre[hidden]{display:none}
@@ -573,24 +584,45 @@ body{overflow-x:hidden}
 .micro-rond.ouvert{border-color:var(--toi)}
 .micro-rond.parle{border-color:var(--accent);box-shadow:0 0 0 3px #4f9dde1f}
 .micro-rond.coupe{border-color:#5a3a3a;background:#22181a}
-.ondes{display:flex;align-items:center;gap:2px;height:18px}
-.ondes i{display:block;width:2.5px;border-radius:2px;background:#6b7480;height:5px;
-  transition:height .12s ease-out,background .15s}
-.micro-rond.ouvert .ondes i{background:#9aa4b0}
-.micro-rond.parle .ondes i{background:var(--accent)}
-/* Coupe : une seule barre basse, aplatie. La forme dit l'etat sans couleur, donc elle reste
-   lisible pour qui distingue mal le rouge du bleu. */
-.micro-rond.coupe .ondes i{height:3px;background:#a86b6b}
-.micro-rond.coupe .ondes i:not(:nth-child(3)){opacity:.35}
-@keyframes onde{0%,100%{height:5px}50%{height:16px}}
-.micro-rond.parle .ondes i{animation:onde .9s ease-in-out infinite}
-.micro-rond.parle .ondes i:nth-child(1){animation-delay:0s}
-.micro-rond.parle .ondes i:nth-child(2){animation-delay:.12s}
-.micro-rond.parle .ondes i:nth-child(3){animation-delay:.24s}
-.micro-rond.parle .ondes i:nth-child(4){animation-delay:.36s}
-.micro-rond.parle .ondes i:nth-child(5){animation-delay:.48s}
+/* Cinq barres, et elles doivent SE VOIR. La première version faisait 2,5 x 5 px dans un rond
+   de 48 : mesuré, et à cette taille le bouton paraît vide. Un indicateur qu'on ne remarque pas
+   ne remplit pas son office — il fait juste croire que rien ne marche.
+   3,5 px de large, et un profil d'égaliseur AU REPOS (6-11-14-11-6) plutôt que cinq traits
+   identiques : la forme dit « micro » avant même qu'on ait bougé. */
+.ondes{display:flex;align-items:center;justify-content:center;gap:3px;height:24px}
+.ondes i{display:block;width:3.5px;border-radius:2px;background:#8b95a3;
+  transition:height .14s ease-out,background .15s,opacity .15s}
+.ondes i:nth-child(1),.ondes i:nth-child(5){height:6px}
+.ondes i:nth-child(2),.ondes i:nth-child(4){height:11px}
+.ondes i:nth-child(3){height:14px}
+.micro-rond.ouvert .ondes i{background:#aab4c0}
+
+/* Parole détectée : elles montent, décalées, pour que ça ondule au lieu de clignoter en bloc.
+   Les hauteurs de fin diffèrent par barre — une animation où tout monte à la même hauteur
+   ressemble à un chargement, pas à une voix. */
+.micro-rond.parle .ondes i{background:var(--accent);
+  animation:onde .85s ease-in-out infinite}
+@keyframes onde{0%,100%{height:7px}50%{height:22px}}
+@keyframes onde-b{0%,100%{height:11px}50%{height:18px}}
+.micro-rond.parle .ondes i:nth-child(1){animation-delay:0s;animation-name:onde-b}
+.micro-rond.parle .ondes i:nth-child(2){animation-delay:.1s}
+.micro-rond.parle .ondes i:nth-child(3){animation-delay:.2s}
+.micro-rond.parle .ondes i:nth-child(4){animation-delay:.3s}
+.micro-rond.parle .ondes i:nth-child(5){animation-delay:.15s;animation-name:onde-b}
+
+/* Coupé : tout s'aplatit à la même hauteur. La FORME porte l'état autant que la couleur,
+   donc ça reste lisible sans distinguer le rouge du bleu. */
+.micro-rond.coupe .ondes i{height:4px !important;background:#b07575;opacity:.6;
+  animation:none}
 @media (prefers-reduced-motion: reduce){
-  .micro-rond.parle .ondes i{animation:none;height:13px}
+  /* Pas d'animation, mais un profil plus haut : l'état « on t'entend » doit rester visible
+     sans mouvement, sinon on prive d'information ceux qui coupent les animations. */
+  .micro-rond.parle .ondes i{animation:none}
+  .micro-rond.parle .ondes i:nth-child(1),
+  .micro-rond.parle .ondes i:nth-child(5){height:12px}
+  .micro-rond.parle .ondes i:nth-child(2),
+  .micro-rond.parle .ondes i:nth-child(4){height:18px}
+  .micro-rond.parle .ondes i:nth-child(3){height:22px}
 }
 /* Au bout de combien de silence le message part. À côté de la barre, parce que c'est un
    réglage de la dictée, pas de la session. */

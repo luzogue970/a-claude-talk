@@ -107,8 +107,12 @@ const EVENEMENTS = [
 
 const SONDE = `
 <script>
-setTimeout(() => {
+setTimeout(async () => {
   const cs = el => getComputedStyle(el);
+  // Les hauteurs des barres ont une transition CSS : mesurer juste apres avoir change la
+  // classe donne un etat A MI-CHEMIN, et on ne sait plus si « coupe » s'aplatit vraiment ou
+  // si c'est l'animation qu'on a photographiee. On laisse le style se poser.
+  const poser = () => new Promise(r => setTimeout(r, 250));
   const releve = { lignes: [] };
   const flux = document.querySelector("main");
   releve.page = { hauteur: document.body.scrollHeight, largeur: document.body.clientWidth };
@@ -129,6 +133,42 @@ setTimeout(() => {
     releve.panneaux[id] = { l: Math.round(r.left), d: Math.round(r.right),
                             w: Math.round(r.width) };
   }
+  // Les barres du micro : sont-elles VISIBLES ? « le rond est juste vide » — un indicateur
+  // qui ne se voit pas ne vaut rien, et une largeur en fraction de pixel peut disparaitre
+  // au rendu. On mesure la boite reelle de chaque barre, dans les trois etats.
+  const mb = document.getElementById("micro-bas");
+  releve.ondes = {};
+  if (mb) {
+    // Transitions et animations neutralisees le temps de la mesure. Sans ça on photographie
+    // un etat A MI-CHEMIN et on ne mesure pas la regle mais l'instant : la version precedente
+    // rendait « 4px 11px 14px 11px 6px » sur l'etat coupe, alors que la meme feuille de style
+    // isolee donne bien « 4px » partout. Une mesure qui depend du moment ou elle tombe ne dit
+    // rien de ce qu'on voulait verifier.
+    const gel = document.createElement("style");
+    gel.textContent = "*{transition:none !important;animation:none !important}";
+    document.head.appendChild(gel);
+    for (const etat of ["micro-rond ouvert", "micro-rond ouvert parle", "micro-rond coupe"]) {
+      mb.className = etat;
+      const barres = [...mb.querySelectorAll(".ondes i")].map(i => {
+        const r = i.getBoundingClientRect();
+        const c = cs(i);
+        return { w: +r.width.toFixed(2), h: +r.height.toFixed(2),
+                 // La hauteur CALCULEE par le CSS, distincte de la boite rendue : elle dit ce
+                 // que la regle a resolu, sans dependre d'une transition en cours ni d'une
+                 // animation que le rendu sans fenetre n'avance pas.
+                 hCalc: c.height, anim: c.animationName,
+                 fond: c.backgroundColor, aff: c.display, opac: +c.opacity };
+      });
+      releve.ondes[etat] = { n: barres.length, barres };
+    }
+    // L'animation se lit sur une feuille NON gelee : c'est la seule chose que le gel cache.
+    gel.remove();
+    mb.className = "micro-rond ouvert parle";
+    releve.animeQuandParle = [...mb.querySelectorAll(".ondes i")]
+      .map(i => cs(i).animationName).join(",");
+    mb.className = "micro-rond ouvert";
+  }
+
   releve.deborde = {
     page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     corps: document.body.scrollWidth - document.body.clientWidth,
@@ -197,7 +237,7 @@ fs.writeFileSync(fichier, html);
 
 function rendre(largeur, hauteur) {
   return execFileSync(chrome, [
-    "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000",
+    "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=6000",
     `--window-size=${largeur},${hauteur}`, "--dump-dom", "file://" + fichier,
   ], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 40 * 1024 * 1024 });
 }
@@ -328,6 +368,39 @@ try {
   }
 } catch (e) {
   console.log("  ~     seconde mesure en fenêtre étroite impossible — ignorée");
+}
+
+// --- les barres du micro doivent SE VOIR ------------------------------------------------
+for (const [etat, o] of Object.entries(r.ondes || {})) {
+  dire(o.n === 5, `${etat} : les cinq barres existent (${o.n})`);
+  const visibles = o.barres.filter(b3 => b3.w >= 2 && b3.h >= 2 && b3.opac > 0.2);
+  dire(visibles.length === o.n,
+       `${etat} : les ${o.n} barres sont visibles (${visibles.length} le sont — `
+       + `${o.barres.map(b3 => `${b3.w}x${b3.h}`).join(" ")})`);
+  const transparent = o.barres.filter(b3 => /rgba\(0, 0, 0, 0\)|transparent/.test(b3.fond));
+  dire(!transparent.length, `${etat} : aucune barre sans fond`);
+}
+const O = r.ondes || {};
+if (O["micro-rond ouvert"]) {
+  // Au REPOS, un profil d'égaliseur plutôt que cinq traits identiques : la forme dit « micro »
+  // avant même qu'on ait parlé. C'est ce qui manquait — cinq traits de 5 px se lisaient comme
+  // un rond vide.
+  const h = O["micro-rond ouvert"].barres.map(b3 => parseFloat(b3.hCalc));
+  dire(new Set(h).size >= 3, `au repos, les barres dessinent un profil varié (${h.join(" ")})`);
+  dire(Math.max(...h) >= 12, `et la plus haute se voit vraiment (${Math.max(...h)} px)`);
+}
+if (O["micro-rond coupe"]) {
+  const h = O["micro-rond coupe"].barres.map(b3 => parseFloat(b3.hCalc));
+  dire(new Set(h).size === 1,
+       `coupé, TOUTES les barres s'aplatissent à la même hauteur (${h.join(" ")})`);
+  dire(h[0] <= 5, `et à plat (${h[0]} px) : la forme dit l'état sans dépendre de la couleur`);
+}
+if (r.animeQuandParle) {
+  const noms = r.animeQuandParle.split(",");
+  dire(noms.every(n => n && n !== "none"),
+       `parole détectée : les cinq barres sont animées (${r.animeQuandParle})`);
+}
+{
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

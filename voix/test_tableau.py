@@ -506,6 +506,19 @@ def tout_genre_affiche_a_un_filtre():
     dire(len(versions) == 1,
          f"une seule version de livekit epinglee partout : {sorted(versions)}")
 
+    # Une variable CSS absente ne leve RIEN : elle rend la valeur initiale. Pour une couleur
+    # de fond, c'est « transparent » — donc invisible. C'est exactement ce qui est arrive :
+    # var(--accent) n'etait definie nulle part et les barres du micro devenaient invisibles
+    # au moment ou elles devaient montrer quelque chose. Six usages, aucun message d'erreur.
+    print("\n=== toute variable CSS utilisee est definie ===")
+    page = (racine / "tableau.py").read_text(encoding="utf-8")
+    definies = set(re.findall(r"(--[\w-]+)\s*:", page))
+    utilisees = set(re.findall(r"var\((--[\w-]+)", page))
+    orphelines = sorted(utilisees - definies)
+    dire(not orphelines,
+         f"{len(utilisees)} variables utilisees, toutes definies"
+         + (f" — ABSENTES : {orphelines}" if orphelines else ""))
+
     print("\n=== aucune constante definie deux fois ===")
     racine = Path(__file__).parent
     for fichier in ("config.py", "moteurs_stt.py", "consommation.py"):
