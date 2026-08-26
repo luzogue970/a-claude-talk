@@ -21,3 +21,4 @@ conversations/
 # sur le disque n'a rien a faire ici — dont azure.conf, qui contient une cle en clair, et
 # voices/, 268 Mo de voix Piper gardees pour la synthese locale a venir.
 tts/
+_essai_auto.md

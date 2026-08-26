@@ -320,6 +320,35 @@ async def principal():
     dire(len(poses_amorce) >= 8,
          f"et l'amorçage couvre bien l'etat interne ({len(poses_amorce)} champs)")
 
+    # --- LiveKit accepte reellement le mode manuel ---------------------------------------
+    # Tout ce qui precede teste NOTRE decideur. Encore faut-il que LiveKit se taise vraiment :
+    # si « manual » etait ignore, il commettrait les tours de son cote EN PLUS des notres, et
+    # le symptome serait le pire — des messages partant deux fois, ou avant le decompte. Un
+    # nom d'option qui change entre deux versions ne leve aucune erreur, il est juste ignore.
+    print("\n=== LiveKit accepte le mode manuel ===")
+    try:
+        import config
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.agent_session import (EndpointingOptions,
+                                                        TurnHandlingOptions)
+        from livekit.plugins import silero
+        vraie = AgentSession(
+            vad=silero.VAD.load(),
+            turn_handling=TurnHandlingOptions(
+                turn_detection="manual",
+                endpointing=EndpointingOptions(mode="fixed", min_delay=config.ECOUTE_MIN,
+                                               max_delay=config.plafond_ecoute())))
+        th = dict(vraie._opts.turn_handling)
+        dire(th.get("turn_detection") == "manual",
+             f"l'option est retenue telle quelle : {th.get('turn_detection')!r}")
+        ep = dict(vraie._opts.endpointing)
+        dire(ep.get("min_delay") == config.ECOUTE_MIN,
+             f"et l'endpointing reste lisible — c'est la source du delai affiche ({ep.get('min_delay')} s)")
+        dire(callable(vraie.commit_user_turn) and callable(vraie.clear_user_turn),
+             "commit_user_turn et clear_user_turn existent : les deux gestes du mode manuel")
+    except Exception as exc:
+        dire(False, f"impossible de construire une vraie session : {type(exc).__name__}: {exc}")
+
     print(f"\n  {ok} ok, {ko} echec(s)")
     return 1 if ko else 0
 

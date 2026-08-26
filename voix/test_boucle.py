@@ -115,6 +115,12 @@ async def main():
     essai = os.path.join(config.WORKDIR, "_essai_auto.md")
     if os.path.isfile(essai):
         os.remove(essai)
+    # Nettoyer AVANT, pas seulement apres. Un fichier laisse par une execution precedente
+    # faisait que Claude le lisait, constatait qu'il disait deja « bonjour », et avait raison
+    # de ne rien ecrire — le test echouait alors sur un comportement CORRECT. Un test qui
+    # depend de ce qu'a laisse le precedent ne mesure pas ce qu'il croit mesurer.
+    if os.path.isfile(essai):
+        os.remove(essai)
     await tour("Cree un fichier _essai_auto.md contenant juste le mot bonjour.", True)
     # Attendre que le WORKER ait fini, pas un delai fixe. `tour()` rend la main des que la
     # voix a dit « c'est parti » — le travail continue derriere. Dix secondes suffisaient la
