@@ -285,10 +285,13 @@ const grand = hauteur();
 dire(grand > vide, 'un long texte fait grandir le champ (' + grand + ' px)');
 dire(!champ.classList.contains('une-ligne'), 'et le coin devient sobre');
 
-// le plafond : 40 % de 800 px = 320 px
+// Le plafond : 55 % de 800 px = 440 px. Releve de 40 a 55 % — une longue dictee doit se
+// relire sans naviguer, et c est exactement ce qu on fait juste avant d envoyer.
 champ.value = 'a'.repeat(20000);
 ajusterHauteur();
-dire(hauteur() === 320, 'plafonne a 40 % de la fenetre (' + hauteur() + ' px)');
+dire(hauteur() === 440, 'plafonne a 55 % de la fenetre (' + hauteur() + ' px)');
+dire(champ.style.overflowY === 'auto',
+     'et au plafond la gouttiere apparait : le texte reste atteignable au defilement');
 
 // et il redescend, ce que « height:auto » d abord rend possible
 champ.value = 'court';
@@ -860,6 +863,41 @@ const ordre = envoyes.find(o => o.cmd === 'reprendre');
 dire(ordre && ordre.session_id === 'sid-autre',
      'cliquer demande la reprise de CETTE conversation');
 dire(panneau.hidden, 'et le panneau se referme');
+
+// ---- le micro du bas ---------------------------------------------------------------------
+titre('deux boutons, un seul micro');
+// Le geste que ça sert : couper le micro pour corriger le texte, le rouvrir pour continuer.
+// Devoir remonter dans l en-tete pour ça casse le geste — le regard est en bas, ou le texte
+// s ecrit. Mais il n y a qu UN micro : deux mises a jour separees finiraient par se
+// contredire, et le symptome serait de croire qu on est ecoute alors qu on ne l est pas.
+const microBasEl = document.getElementById('micro-bas');
+emettre({ genre: 'micro', actif: true, voulu: true, bail: true });
+dire(/ouvert/.test(microBasEl.className) && btnMicro.className === '',
+     'micro ouvert : les deux boutons le disent (' + microBasEl.className + ')');
+emettre({ genre: 'micro', actif: false, voulu: false, bail: true });
+dire(/coupe/.test(microBasEl.className) && /coupe/.test(btnMicro.className),
+     'micro coupe : les deux aussi (' + microBasEl.className + ')');
+dire(/rouvrir/.test(microBasEl.title) && /corriger le texte/.test(microBasEl.title),
+     'et son infobulle dit le geste, pas seulement l etat');
+
+// L animation ne bouge QUE sur une parole reellement detectee par le VAD. Une animation qui
+// bouge sans raison donnerait une fausse confirmation d etre entendu — on parlerait dans le
+// vide en croyant que tout va bien.
+emettre({ genre: 'micro', actif: true, voulu: true, bail: true });
+dire(!/parle/.test(microBasEl.className), 'micro ouvert mais silence : les ondes sont au repos');
+emettre({ genre: 'ecoute', actif: false, parle: true });
+dire(/parle/.test(microBasEl.className), 'parole detectee : les ondes bougent');
+dire(/t entend|entend/.test(microBasEl.title.replace(/'/g, ' ')),
+     'et l infobulle le dit : "' + microBasEl.title.split(String.fromCharCode(10))[0] + '"');
+emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5, fin: Date.now() + 5000 });
+dire(!/parle/.test(microBasEl.className),
+     'le silence commence : les ondes s arretent, le decompte prend le relais');
+
+// Cliquer en bas fait la meme chose que cliquer en haut.
+socket.readyState = 1;
+envoyes.length = 0;
+microBasEl.onclick();
+dire(envoyes.some(o => o.cmd === 'micro'), 'le bouton du bas envoie bien l ordre micro');
 
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

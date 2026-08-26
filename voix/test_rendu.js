@@ -102,7 +102,9 @@ setTimeout(() => {
              w: Math.round(r.width), h: Math.round(r.height) }; };
   releve.entete = document.querySelector("header").offsetHeight;
   releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
-                    modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct") };
+                    modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct"),
+                    microBas: b("#micro-bas"), champBoite: b("#saisie"),
+                    convs: b("#convs") };
   releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
   pre.id = "releve";
@@ -203,6 +205,24 @@ if (bo.direct) {
 if (bo.cogit && bo.barre) {
   dire(bo.cogit.b <= bo.barre.t + 1,
        `le bandeau de cogitation ne recouvre pas la barre (${bo.cogit.b} <= ${bo.barre.t})`);
+}
+
+// --- le micro du bas : atteignable sans viser -------------------------------------------
+// 40 px est la cible confortable au pouce comme a la souris. Un bouton de 24 px se rate, et
+// celui-la sert precisement dans un geste rapide : couper pour corriger, rouvrir pour dicter.
+if (bo.microBas && bo.champBoite) {
+  dire(bo.microBas.w >= 38 && bo.microBas.h >= 38,
+       `le micro du bas est atteignable (${bo.microBas.w}x${bo.microBas.h} px)`);
+  // Aligne sur la DERNIERE ligne du champ : quand le champ grandit, le bouton doit rester
+  // en bas avec lui, pas flotter au milieu d'une grande boite.
+  dire(Math.abs(bo.microBas.b - bo.champBoite.b) <= 3,
+       `il reste aligne sur le bas du champ (${bo.microBas.b} vs ${bo.champBoite.b})`);
+  dire(bo.microBas.l < bo.champBoite.l,
+       `et il precede le champ, du cote ou va la main (${bo.microBas.l} < ${bo.champBoite.l})`);
+}
+if (bo.convs) {
+  dire(bo.convs.w > 0 && bo.convs.w < 240,
+       `le bouton des conversations reste compact (${bo.convs.w} px)`);
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

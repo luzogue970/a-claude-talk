@@ -504,13 +504,52 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 #saisie{flex:1;min-width:0;background:var(--carte);color:var(--texte);
   border:1px solid var(--bord);border-radius:19px;padding:8px 15px;font:inherit;
   font-size:13px;line-height:1.5;outline:none;resize:none;overflow-y:auto;
-  display:block;height:36px;max-height:40vh;overflow-y:hidden;
+  display:block;height:36px;max-height:55vh;overflow-y:hidden;
   transition:height .12s ease-out,border-radius .12s ease-out,border-color .12s}
 /* Une seule ligne : la pastille arrondie du reste de l'interface. Plusieurs lignes : un coin
    plus sobre, sinon la boite ressemble a une gelule etiree. */
 #saisie.une-ligne{border-radius:999px}
 #saisie:focus{border-color:var(--toi)}
 #saisie::placeholder{color:#5a636e}
+
+/* Une gouttiere discrete plutot que celle du systeme, qui arrivait comme une barre grise
+   large au milieu d'une interface sombre. */
+#saisie::-webkit-scrollbar{width:8px}
+#saisie::-webkit-scrollbar-thumb{background:#39414c;border-radius:4px}
+#saisie::-webkit-scrollbar-track{background:transparent}
+
+/* --- le micro du bas -------------------------------------------------------------------
+   Rond et assez grand pour etre atteint sans viser (40 px : la cible confortable au pouce
+   comme a la souris). Les cinq ondes bougent quand la parole est DETECTEE — pas un
+   volume : on ne mesure pas le niveau audio ici, et animer au hasard donnerait une fausse
+   confirmation d'etre entendu, ce qui est pire que pas d'indicateur du tout. */
+.micro-rond{flex:none;width:40px;height:40px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--carte);border:1px solid var(--bord);cursor:pointer;
+  transition:background .15s,border-color .15s,box-shadow .15s}
+.micro-rond:hover{background:#1f242c}
+.micro-rond.ouvert{border-color:var(--toi)}
+.micro-rond.parle{border-color:var(--accent);box-shadow:0 0 0 3px #4f9dde1f}
+.micro-rond.coupe{border-color:#5a3a3a;background:#22181a}
+.ondes{display:flex;align-items:center;gap:2px;height:18px}
+.ondes i{display:block;width:2.5px;border-radius:2px;background:#6b7480;height:5px;
+  transition:height .12s ease-out,background .15s}
+.micro-rond.ouvert .ondes i{background:#9aa4b0}
+.micro-rond.parle .ondes i{background:var(--accent)}
+/* Coupe : une seule barre basse, aplatie. La forme dit l'etat sans couleur, donc elle reste
+   lisible pour qui distingue mal le rouge du bleu. */
+.micro-rond.coupe .ondes i{height:3px;background:#a86b6b}
+.micro-rond.coupe .ondes i:not(:nth-child(3)){opacity:.35}
+@keyframes onde{0%,100%{height:5px}50%{height:16px}}
+.micro-rond.parle .ondes i{animation:onde .9s ease-in-out infinite}
+.micro-rond.parle .ondes i:nth-child(1){animation-delay:0s}
+.micro-rond.parle .ondes i:nth-child(2){animation-delay:.12s}
+.micro-rond.parle .ondes i:nth-child(3){animation-delay:.24s}
+.micro-rond.parle .ondes i:nth-child(4){animation-delay:.36s}
+.micro-rond.parle .ondes i:nth-child(5){animation-delay:.48s}
+@media (prefers-reduced-motion: reduce){
+  .micro-rond.parle .ondes i{animation:none;height:13px}
+}
 /* Au bout de combien de silence le message part. À côté de la barre, parce que c'est un
    réglage de la dictée, pas de la session. */
 #delai{background:var(--carte);color:var(--texte);border:1px solid var(--bord);
@@ -717,6 +756,14 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
   </div>
   <form id="composer" autocomplete="off">
+    <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
+         regard est quand on dicte : le texte s'y ecrit, et la relecture s'y fait. Devoir
+         remonter en haut pour couper l'ecoute avant de corriger un mot casse le geste. Les
+         deux boutons pilotent le meme etat — il n'y a qu'un micro. -->
+    <button id="micro-bas" type="button" class="micro-rond"
+            title="couper ou rouvrir le micro (touche m)">
+      <span class="ondes"><i></i><i></i><i></i><i></i><i></i></span>
+    </button>
     <textarea id="saisie" rows="1" class="une-ligne"
               placeholder="écrire au lieu de parler — touche /"
               aria-label="message à envoyer" maxlength="4000"></textarea>
@@ -1280,10 +1327,29 @@ addEventListener("visibilitychange", () => {
 });
 addEventListener("online", reconnecter);
 const btnMicro = document.getElementById("micro");
+const microBas = document.getElementById("micro-bas");
+// La parole est-elle détectée EN CE MOMENT. Vient du serveur (le VAD), jamais d'une
+// supposition : une animation qui bouge sans raison donnerait une fausse confirmation d'être
+// entendu, ce qui est pire que pas d'indicateur — on parlerait dans le vide en croyant que
+// tout va bien. Le niveau audio, lui, n'est pas accessible en mode console : on montre donc
+// ce qu'on sait (« ça t'entend »), pas ce qu'on n'a pas (« à ce volume »).
+let paroleDetectee = false;
+
+// Un seul endroit décide de l'apparence des DEUX boutons : il n'y a qu'un micro, et deux
+// mises à jour séparées finissent toujours par se contredire — le symptôme serait le pire
+// possible, croire qu'on est écouté alors qu'on ne l'est pas.
 function majMicro() {
   btnMicro.textContent = microActif ? "🎤 micro" : "🔇 micro coupé";
   btnMicro.className = microActif ? "" : "coupe";
   btnMicro.title = (microActif ? "couper" : "rouvrir") + " le micro (touche m)";
+  if (!microBas) return;
+  microBas.className = "micro-rond " + (!microActif ? "coupe"
+    : paroleDetectee ? "ouvert parle" : "ouvert");
+  microBas.title = microActif
+    ? (paroleDetectee ? "ça t'entend — clic pour couper (touche m)"
+                      : "micro ouvert, silence — clic pour couper (touche m)")
+    : "micro coupé — clic pour rouvrir (touche m).\nCoupe-le pour corriger le texte, "
+      + "rouvre-le pour continuer à dicter.";
 }
 function basculerMicro() {
   const voulu = !microActif;
@@ -1294,6 +1360,7 @@ function basculerMicro() {
   if (!parti) btnMicro.title = "en attente de la reconnexion…";
 }
 btnMicro.onclick = basculerMicro;
+if (microBas) microBas.onclick = basculerMicro;   // le même geste, à l'autre bout de la page
 
 // Le travail en cours est montre, pas annonce. La narration parlee (« toujours dessus, je
 // viens de lancer cat ») a ete retiree : on ne peut pas survoler du son, alors qu'un
@@ -1726,7 +1793,10 @@ function ajusterHauteur() {
   // « auto » d'abord : sans ça scrollHeight reste bloqué sur la hauteur précédente et le
   // champ ne redescend jamais quand on efface.
   champ.style.height = "auto";
-  const plafond = Math.round((window.innerHeight || 800) * 0.4);
+  // 55 % de la hauteur : une longue dictee doit se relire sans naviguer, et c'est ce
+  // qu'on fait juste avant d'envoyer. En dessous, le texte defilait hors de vue des trois
+  // phrases — or c'est precisement le moment ou l'on veut tout voir d'un coup.
+  const plafond = Math.round((window.innerHeight || 800) * 0.55);
   const voulue = Math.min(Math.max(champ.scrollHeight || HAUTEUR_MINI, HAUTEUR_MINI), plafond);
   champ.style.height = voulue + "px";
   // La barre de defilement n'apparait qu'au plafond. Laisser `overflow-y:auto` en
@@ -1860,6 +1930,11 @@ function recevoir(e) {
     }
     if (e.genre === "micro") {
       microActif = e.actif;
+      // Le micro change d'état : l'énoncé en cours n'en est plus un. Sans cette remise à
+      // zéro, couper le micro en pleine parole laissait les ondes s'animer indéfiniment
+      // alors que plus rien n'était entendu — une confirmation FAUSSE d'être écouté, donc
+      // exactement le défaut que cet indicateur est censé éviter.
+      paroleDetectee = false;
       btnMicro.classList.remove("attente");   // le serveur a repondu : plus d'attente
       majMicro();
     }
@@ -1903,6 +1978,10 @@ function recevoir(e) {
       // nulle part ailleurs. Ce repère est ce qui permet d'ignorer une transcription en
       // retard, qui appartient au tour précédent.
       if (e.parle) { ouvrirDictee(); noteBarre(null); }
+      // `parle` marque le début de la parole, `actif` le début du silence : les deux bornes
+      // du même énoncé. L'animation suit donc exactement ce que le VAD entend.
+      if (e.parle) { paroleDetectee = true; majMicro(); }
+      else if (e.actif) { paroleDetectee = false; majMicro(); }
       if (e.actif) lancerCompte(e.min, e.max, e.fin); else arreterCompte();
       return;
     }
