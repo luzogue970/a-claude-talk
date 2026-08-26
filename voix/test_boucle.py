@@ -103,6 +103,14 @@ async def main():
                 await asyncio.sleep(0.25)
             print("  !! aucun debrief parle")
 
+    async def au_repos(limite: float = 180.0) -> bool:
+        """Attend que le worker ait fini. Un point d'attente explicite, pas un sleep."""
+        for _ in range(int(limite * 4)):
+            if not worker.occupe:
+                return True
+            await asyncio.sleep(0.25)
+        return False
+
     print("=== 1. une tache qui utilise un outil ===")
     await tour("Compte les fichiers Python dans le dossier voix et dis-moi combien il y en a.", True)
 
@@ -111,14 +119,31 @@ async def main():
     await asyncio.sleep(1.5)
     await tour("t'en es où ?", False)
 
-    print(f"=== 3. mode auto ({config.PERMISSION}) : ecriture sans demander ===")
+    print("=== 3. la retenue d'office, pendant que le worker travaille ===")
+    # La section precedente a laisse le worker occupe VOLONTAIREMENT. C'est donc exactement le
+    # moment ou une phrase doit etre RETENUE et non envoyee : celui ou l'on parle pour reagir
+    # a ce qu'on voit passer, donc celui ou une phrase mal transcrite coute le plus cher.
+    dictees_avant = len([e for e in tableau.histoire if e["genre"] == "dictee"])
+    dire(worker.occupe, "le worker travaille encore : c'est bien le cas qu'on veut tester")
+    await tour("ajoute aussi un test sur cette fonction", False)
+    dictees = [e for e in tableau.histoire if e["genre"] == "dictee"][dictees_avant:]
+    dire(bool(dictees), "la phrase est deposee dans la barre au lieu de partir")
+    dire(bool(dictees) and dictees[-1].get("auto") is True,
+         "et elle est marquee comme retenue d'office, pas a la demande")
+
+    print(f"=== 4. mode auto ({config.PERMISSION}) : ecriture sans demander ===")
+    # Attendre le repos AVANT de demander une ecriture. Sans ça la demande etait retenue par
+    # la section precedente, et le test verifiait une ecriture jamais demandee a Claude : il
+    # echouait sur un comportement parfaitement correct. Ce test etait faux depuis que la
+    # retenue d'office existe — personne ne l'avait vu, il n'assertait rien.
+    dire(await au_repos(), "le worker revient au repos avant la suite")
+    # La retenue est collante : tant qu'un texte attend dans la barre, rien ne part par-dessus.
+    # Ici c'est le test qui joue le role de « la barre est partie ».
+    agent._retenu_en_attente = False
     essai = os.path.join(config.WORKDIR, "_essai_auto.md")
-    if os.path.isfile(essai):
-        os.remove(essai)
-    # Nettoyer AVANT, pas seulement apres. Un fichier laisse par une execution precedente
-    # faisait que Claude le lisait, constatait qu'il disait deja « bonjour », et avait raison
-    # de ne rien ecrire — le test echouait alors sur un comportement CORRECT. Un test qui
-    # depend de ce qu'a laisse le precedent ne mesure pas ce qu'il croit mesurer.
+    # Nettoyer AVANT, pas seulement apres : un fichier laisse par une execution precedente
+    # ferait que Claude le lit, constate qu'il dit deja « bonjour », et a raison de ne rien
+    # ecrire. Un test qui depend de ce qu'a laisse le precedent ne mesure pas ce qu'il croit.
     if os.path.isfile(essai):
         os.remove(essai)
     await tour("Cree un fichier _essai_auto.md contenant juste le mot bonjour.", True)
@@ -141,7 +166,7 @@ async def main():
     if os.path.isfile(essai):
         os.remove(essai)
 
-    print("=== 4. les ordres locaux, sur des formulations libres ===")
+    print("=== 5. les ordres locaux, sur des formulations libres ===")
     for phrase in ("utilise un modele plus rapide pour cette tache", "change de modele",
                    "tu peux couper le micro s'il te plait", "t'en es ou",
                    "j'ai consomme combien de tokens", "repete", "chut", "arrete tout"):

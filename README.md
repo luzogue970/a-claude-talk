@@ -672,11 +672,64 @@ Chaque conversation laisse deux choses, qui ne servent pas à la même chose :
 L'écriture est incrémentale : une coupure de courant ne perd que le tour en cours.
 
 ```fish
-vvconv              # ce qui a été lancé depuis ici (et sous ici)
+vv                  # REPREND la dernière conversation de ce dossier
+vvneuf              # en ouvre une neuve à la place
+vvconv              # les conversations d'ici (une ligne par conversation, pas par lancement)
 vvconv --tout       # tout, où que ce soit
-vvreprendre 1       # reprendre (rang, identifiant de session, ou bout de nom de fichier)
+vvreprendre 1       # reprendre une autre (rang, identifiant de session, ou bout de nom)
 vvlire 1            # relire le transcript
 ```
+
+### Une conversation n'est pas un lancement
+
+**`vv` reprend, il n'ouvre plus.** C'est le comportement qu'on veut par défaut : on revient
+dans un projet pour *continuer*. Avant, chaque lancement ouvrait une session Claude neuve — même
+projet, même sujet, contexte reparti de zéro — et il fallait penser à `vvreprendre` à chaque
+fois. Oublier n'affichait aucun avertissement.
+
+La reprise ne se fait que sur une conversation **du même dossier**, ayant **au moins un tour**,
+qu'**aucun autre agent ne tient ouverte**. Chacune de ces trois conditions évite un dégât
+précis : une session que Claude Code ne connaît pas repartirait à blanc en silence, et deux
+agents sur la même session s'écriraient par-dessus.
+
+**La liste compte les conversations, plus les lancements.** C'est la correction qui change le
+plus la lecture : rouvrir l'agent six fois en reprenant la même session écrivait six lignes
+pour *une* conversation. Sur cette machine, 23 lignes pour 5 conversations réelles — d'où
+l'impression que les conversations se multiplient et qu'on perd le contexte, alors que le
+contexte était intact. `vvconv` affiche maintenant « 59 tours, repris 7 fois ».
+
+Un piège qui ressemblait exactement au même symptôme : `vvconv` numérotait une liste restreinte
+au sous-arbre, et `vvreprendre` résolvait le rang sur la liste complète. « vvreprendre 3 »
+pouvait donc reprendre autre chose que la troisième affichée. Les deux passent désormais par la
+même liste ; un identifiant, lui, se résout toujours depuis n'importe quel dossier.
+
+### Le sélecteur sur la page
+
+Le bouton **💬 conversations** ouvre la liste du dossier. On y reconnaît une conversation à la
+**dernière phrase qu'on y a dite** — entre quatre conversations ouvertes sur le même projet,
+« 22:49 » et « 22:55 » ne distinguent rien, une phrase si. Cliquer bascule à chaud : le client
+est reconstruit avec `resume`, la conversation en cours n'est pas perdue, et on reste dans la
+même application.
+
+Deux entrées ne sont volontairement pas cliquables, et le panneau dit pourquoi : une
+conversation sans identifiant de session (rien à reprendre) et une conversation tenue par un
+autre agent (deux agents sur la même session s'écriraient par-dessus).
+
+### Regrouper les transcripts éparpillés
+
+Chaque lancement écrit son propre fichier. La liste sait les regrouper, mais les fichiers
+restent séparés — relire une conversation demandait d'en ouvrir sept dans le bon ordre.
+
+```fish
+../.venv/bin/python voix/fusionner.py             # montre ce qu'il ferait
+../.venv/bin/python voix/fusionner.py --vraiment  # le fait
+```
+
+Il ne touche **pas** aux sessions de Claude Code : le contexte n'a jamais dépendu de ces
+fichiers, qui ne servent qu'à relire. Il ne fusionne que des lancements partageant un
+`session_id` — sans identifiant commun, rien ne prouve leur lien. Les sources partent dans
+`conversations/avant-fusion/` plutôt qu'à la poubelle, et le fichier écrit est relu avant tout
+déplacement : écrire n'est pas avoir écrit, et un disque plein ne doit pas coûter une archive.
 
 ### La reprise recharge tout, et le vérifie
 
@@ -1212,36 +1265,49 @@ Neuf moteurs déclarés au même endroit (`voix/moteurs_stt.py`), tous avec un *
 réel**. Les chiffres datent d'août 2026 et viennent des pages de tarif des fournisseurs — ce
 sont des indications pour choisir, pas des garanties.
 
-| Moteur | Gratuit | Type | Direct | Clé |
-|---|---|---|---|---|
-| **Deepgram** | 200 $ de crédits (~430 h) | crédit unique | oui | `DEEPGRAM_API_KEY` |
-| **Speechmatics** | 8 h/mois, renouvelé, sans carte | mensuel | oui | `SPEECHMATICS_API_KEY` |
-| **Gladia** | 4 h/mois de temps réel, renouvelé | mensuel | oui | `GLADIA_API_KEY` |
-| **AssemblyAI** | 50 $ de crédits (~330 h) | crédit unique | oui | `ASSEMBLYAI_API_KEY` |
-| **Soniox** | crédits gratuits à l'inscription | crédit unique | oui | `SONIOX_API_KEY` |
-| **Azure** | 5 h/mois au palier F0 | mensuel | oui | `AZURE_SPEECH_KEY` |
-| **Google Cloud** | 60 min/mois à vie | mensuel | oui | `GOOGLE_APPLICATION_CREDENTIALS` |
-| **Groq** | palier gratuit, limites journalières | mensuel | **non** | `GROQ_API_KEY` |
-| **local** (faster-whisper) | illimité, hors ligne | — | **non** | aucune |
+| Moteur | Gratuit | Type | Direct | Mesuré ici | Clé |
+|---|---|---|---|---|---|
+| **AssemblyAI** | 50 $ de crédits (~330 h) | crédit | oui | **3,0 % en 2,9 s** | `ASSEMBLYAI_API_KEY` |
+| **Deepgram** | 200 $ de crédits (~430 h) | crédit | oui | **3,0 % en 5,4 s** | `DEEPGRAM_API_KEY` |
+| **local** (faster-whisper) | illimité, hors ligne | — | **non** | 6,1 %, 4 à 7 s | aucune |
+| **Speechmatics** | 8 h/mois, renouvelé, sans carte | mensuel | oui | tronque ou muet | `SPEECHMATICS_API_KEY` |
+| **Gladia** | 4 h/mois de temps réel, renouvelé | mensuel | oui | coupe à la 1re proposition | `GLADIA_API_KEY` |
+| **Soniox** | crédits à l'inscription | crédit | oui | « 402 balance exhausted » | `SONIOX_API_KEY` |
+| **Azure** | 5 h/mois au palier F0 | mensuel | oui | palier épuisé | `AZURE_SPEECH_KEY` |
+| **Google Cloud** | 60 min/mois à vie | mensuel | oui | non essayé (carte requise) | `GOOGLE_APPLICATION_CREDENTIALS` |
+| **Groq** | palier gratuit, limites journalières | mensuel | **non** | non essayé | `GROQ_API_KEY` |
+
+La colonne « mesuré ici » vient de `voix/banc_stt.py` sur trois phrases techniques françaises,
+en août 2026. Elle ne dit pas quel moteur est le meilleur en général — les bancs publics
+placent Speechmatics devant Deepgram — elle dit lequel a **rendu une phrase complète sur cette
+machine, avec cette configuration**. C'est la seule question qui compte pour choisir un ordre
+de repli, et les deux réponses ne coïncident pas.
 
 « Direct » veut dire que le texte s'écrit **pendant** qu'on parle. C'est ce qui rend la
 relecture avant envoi possible : un moteur sans résultats intermédiaires ne rend son texte
 qu'à la fin, donc « retenir » devient inutilisable et le texte semble apparaître sans raison.
 C'est pour ça que les moteurs non directs passent derrière tous les autres, même excellents.
 
-**L'ordre est recalculé d'après ce qu'il reste**, en quatre classes :
+**La preuve passe avant le palier.** Un moteur dont on n'a pas vu une phrase complète passe
+derrière tous ceux qui l'ont prouvé, même s'il est gratuit et renouvelable. La raison : un quota
+mensuel ne vaut rien si le moteur rend la moitié de la phrase. Et une transcription tronquée est
+le pire des résultats — elle ne ressemble pas à une panne, elle ressemble à une instruction,
+donc on agit dessus. Ces moteurs restent dans la chaîne, en position de se rattraper sans qu'un
+tour en paie le prix ; relancer `banc_stt.py` est ce qui doit faire évoluer le champ `demontre`.
 
-1. un **crédit unique encore abondant** — au-dessus de sa réserve. Autant profiter du meilleur
-   moteur maintenant : 430 h couvrent cinq ans à 7 h/mois, donc « garder la réserve » est
-   théorique tant qu'elle est pleine ;
-2. les **quotas mensuels** — ils reviennent le mois prochain, les dépenser ne coûte rien ;
+**Ensuite l'ordre est recalculé d'après ce qu'il reste**, en quatre classes :
+
+1. les **quotas mensuels** — c'est le seul palier qui se **perd** : les heures d'août non
+   consommées ne reviennent pas, elles disparaissent. Ne pas les dépenser, c'est les jeter ;
+2. un **crédit encore abondant** — au-dessus de sa réserve. Le relais naturel, et il attend
+   sans rien perdre ;
 3. un crédit passé **sous sa réserve** — il se garde pour les mois où les mensuels seront
-   épuisés, c'est précisément à ça qu'il sert ;
+   épuisés tôt, c'est précisément à ça qu'il sert ;
 4. les moteurs **sans texte en direct**, et le local.
 
 Un moteur **constaté épuisé** part à la fin, quelle que soit sa qualité. À classe égale, le
-rang de qualité tranche — mesuré quand on a mesuré. Concrètement : Deepgram en tête tant qu'il
-lui reste plus de 100 h, puis il recule derrière Speechmatics sans jamais vider la réserve.
+rang de qualité tranche. Chaîne réelle sur cette machine :
+`AssemblyAI → Deepgram → Speechmatics → Gladia → local → Soniox → Azure`.
 
 Le local ferme toujours la marche : c'est le seul qui ne peut pas manquer de crédit, donc le
 seul qui garantit qu'on ne devienne jamais sourd.

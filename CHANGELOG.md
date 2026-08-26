@@ -7,6 +7,68 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.14.0] — 2026-08-27
+
+### Corrige — les conversations ne se dedoublent plus (et ne se dedoublaient pas vraiment)
+Quatre defauts distincts derriere « des conversations qui se relancent toutes seules ». Les
+donnees le montrent : 23 lignes d'index pour 5 sessions Claude. Le contexte n'etait PAS perdu.
+
+- `vv` ouvrait une conversation NEUVE a chaque lancement — `resume` n'etait rempli que par
+  `vvreprendre`. Il reprend maintenant la derniere conversation du dossier, et l'annonce.
+  `vvneuf` en ouvre une neuve, ce qui est le cas rare.
+- une reprise qui echoue ne disait rien : Claude Code ouvre une session neuve sans raler. On
+  compare l'identifiant obtenu au demande, l'ecart devient un avertissement.
+- le rang affiche ne designait pas la meme conversation que le rang resolu : `vvconv`
+  numerotait le sous-arbre, `resoudre` cherchait partout. « vvreprendre 3 » pouvait reprendre
+  autre chose que la troisieme affichee.
+- le nom du transcript etant a la minute, deux lancements rapprochés du meme projet
+  ecrivaient dans le meme fichier — le second ecrasait le premier.
+
+### Ajoute — un selecteur de conversations sur la page
+Une ligne par conversation reelle, reconnaissable a la derniere phrase qu'on y a dite : entre
+quatre conversations sur le meme projet, « 22:49 » et « 22:55 » ne distinguent rien. Le nombre
+de reprises est affiche. Cliquer bascule a chaud, sans quitter l'application. Une conversation
+sans identifiant de session, ou tenue par un autre agent, n'est pas cliquable — et on dit
+pourquoi.
+
+### Ajoute — le micro dans la fenetre de conversation
+Rond, 40 px, aligne sur le bas du champ. Le geste qu'il sert : couper pour corriger le texte,
+rouvrir pour continuer a dicter. Cinq ondes bougent quand la parole est DETECTEE — pas un
+volume, qui n'est pas accessible en mode console. Animer au hasard aurait donne une fausse
+confirmation d'etre entendu, pire que pas d'indicateur.
+
+### Change — la preuve avant le palier dans l'ordre des moteurs
+Nouveau champ `demontre` : a-t-on VU ce moteur rendre une phrase COMPLETE ici ? AssemblyAI
+(3,0 % en 2,9 s) et Deepgram (3,0 % en 5,4 s) l'ont fait. Speechmatics tronque ou reste muet,
+Gladia coupe a la premiere proposition, Soniox repond « 402 balance exhausted », Azure est
+epuise. Un moteur non demontre passe derriere ceux qui ont prouve, meme gratuit et
+renouvelable : un quota mensuel ne vaut rien si le moteur rend la moitie de la phrase.
+
+### Corrige — Speechmatics pouvait transcrire parfaitement et rester muet
+Le plugin est par defaut en `turn_detection_mode=EXTERNAL` : il ne finalise rien lui-meme et
+attend qu'un tiers ferme le segment. Or l'agent decide desormais seul de la fin de tour. Passe
+en ADAPTIVE : la reconnaissance rend du TEXTE, c'est nous qui decidons quand le tour part.
+
+### Ajoute — voix/fusionner.py
+Regroupe les transcripts d'une meme conversation (19 fichiers pour 4 conversations ici). Ne
+touche pas aux sessions de Claude Code. Rien sans `--vraiment`, sources archivees dans
+`avant-fusion/`, relecture du fichier ecrit avant tout deplacement.
+
+### Ajoute — le champ texte monte a 55 % de la hauteur
+Une longue dictee doit se relire d'un coup, et c'est ce qu'on fait juste avant d'envoyer. Avec
+une gouttiere discrete plutot que celle du systeme.
+
+### Ajoute — pyflakes dans la suite de tests
+J'ai ecrit trois `log.warning` la ou `log` n'existait pas, et appele une fonction 400 lignes
+avant son `def`. Ni la compilation ni les tests qui ne passent pas par la ligne fautive ne le
+voyaient : les deux auraient leve un NameError en pleine session, sur un chemin d'erreur.
+
+### Corrige — le talon de test ne savait pas cliquer
+Il rendait `[]` pour tout selecteur d'attribut. Les panneaux se dessinent en posant innerHTML
+puis rebranchent leurs gestionnaires par `querySelectorAll("[data-...]")` : aucun clic n'etait
+donc jamais branche dans les tests. 534 verifications, deux suites nouvelles
+(`fusion`, `consommation` etendue).
+
 ## [1.13.0] — 2026-08-26
 
 ### Change — l'agent decide de l'envoi, donc le decompte affiche est celui qui decide
