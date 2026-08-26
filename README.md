@@ -174,6 +174,10 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 | `VOIX_DEEPGRAM_KEYTERM` | `1` | `0` coupe le biais si Deepgram le refusait en français |
 | `VOIX_RETENIR_OCCUPE` | `1` | retenir ce qui est dit pendant que Claude travaille ; `0` rétablit l'envoi immédiat |
 | `VOIX_ECOUTE_MIN` | `5.0` | silence (s) avant envoi du tour — réglable depuis le tableau ; le défaut LiveKit est 0,3 s |
+| `VOIX_TOUR_MANUEL` | `1` | l'agent décide de l'envoi, donc le décompte affiché est celui qui décide ; `0` rend la main à LiveKit |
+| `SONIOX_API_KEY` | — | Soniox : crédits gratuits à l'inscription, temps réel |
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | Google Cloud : le **chemin** d'un fichier JSON de compte de service, pas une clé |
+| `VOIX_CONSO` | `~/.config/claude-talk/consommation.json` | où est tenu le compteur de temps par moteur |
 | `VOIX_JOURNAL` | `<projet>/conversations` | où sont écrits les transcripts et l'index |
 | `VOIX_ECOUTE_MAX` | *(déduit)* | plafond « phrase inachevée » — vide, il suit le plancher (× 2,5) |
 | `VOIX_STT_LOCAL_MODELE` | `small` | `small` (~4 s pour 2 s d'audio, correct) \| `base` (~1,7 s, moins fiable) |
@@ -468,14 +472,73 @@ Le défaut de LiveKit committait le tour après **0,3 s** de silence : une pause
 son idée comptait comme une fin de phrase, et la suite arrivait comme un second message
 par-dessus le premier. C'est réglé à 4 s de plancher, 12 s de plafond.
 
-Le mécanisme est binaire (vérifié dans `audio_recognition.py`) : le détecteur de fin de tour
-donne une probabilité, et si elle passe sous son seuil c'est le **plafond** qui s'applique au
-lieu du plancher. La fenêtre est donc entièrement déterminée, ce qui rend le décompte exact :
+**C'est l'agent qui commet le tour, pas LiveKit** — et c'est ce qui rend le décompte
+honnête. `turn_detection` est en mode `manual` : le VAD continue de signaler début et fin de
+parole, mais rien ne part sans que l'agent le décide. Il arme une fenêtre, publie son échéance
+*absolue*, et commet à l'échéance. La page **lit** cette échéance au lieu de recompter.
+
+La version précédente laissait LiveKit décider et faisait estimer la page à partir des mêmes
+réglages : deux horloges pour une seule décision. Quand elles divergeaient on lisait « encore
+4 s » alors que le message était déjà parti — donc « retenir » arrivait après la décision. Il
+n'y a plus qu'une horloge, et c'est celle qui décide.
 
 ```
-envoi dans 2.7 s │ envoyer          ← fenêtre normale
-phrase inachevée — 6.3 s │ envoyer  ← le détecteur a prolongé
+envoi dans 2.7 s │ retenir │ envoyer
 ```
+
+Quatre issues, un seul endroit qui tranche (`Voix.ouvrir_fenetre`), dans cet ordre :
+
+| Situation | Ce qui se passe |
+|---|---|
+| rien de transcrit | on n'arme rien — un décompte sur un tour vide n'annonce rien |
+| réponse à une permission, ou **ordre local court** | ça part **tout de suite** |
+| une raison de retenir | on ne commet pas, le tour en attente est jeté |
+| le cas courant | on arme la fenêtre et on publie son échéance |
+
+L'envoi immédiat des ordres locaux est un gain net du mode manuel : « arrête » et « coupe le
+micro » attendaient cinq secondes de silence comme n'importe quelle phrase, ce qui est absurde
+pour un ordre d'arrêt.
+
+Il est limité aux énoncés de **cinq mots au plus**, et ce n'est pas cosmétique : la détection
+considère « arrêter » + « ça » comme un ordre, donc *« explique-moi pourquoi il faut arrêter de
+faire ça »* est détectée comme un arrêt. Ce faux positif existait déjà, mais tant qu'il passait
+par la fenêtre on pouvait le rattraper avec « retenir ». Un raccourci sans limite lui aurait
+retiré ce filet. Au pire un « stop » bavard patiente cinq secondes ; jamais une question ne
+devient un ordre irrattrapable.
+
+**Couper le micro vaut « j'ai fini de parler ».** En manuel la fin de tour vient du VAD ; si le
+micro se coupe *pendant* la parole, ce signal peut ne jamais arriver, et le texte déjà
+transcrit resterait dans la barre sans décompte et sans envoi. La coupure tranche donc
+elle-même, en passant par le même décideur.
+
+`VOIX_TOUR_MANUEL=0` rend la main à LiveKit. La page le détecte — sans échéance publiée elle
+retombe sur une estimation avec plafond, et réaffiche « phrase inachevée » : là où LiveKit
+décide, la page ne *peut* que deviner, et le dire est plus honnête.
+
+### La retenue est collante
+
+Une fois qu'un texte attend une relecture, **plus rien ne part par-dessus**. Le défaut que ça
+corrige : on dicte, c'est retenu (la barre garde la phrase), on reparle, ce second tour part,
+et la page vide la barre — la première phrase disparaît sans avoir jamais été envoyée ni
+signalée. C'était la version exacte du « texte déjà envoyé qui réapparaît, et parfois
+seulement une partie ».
+
+La page dit **pourquoi** un texte est retenu, dans le flux et contre la barre :
+
+| Raison | Ce qui s'affiche |
+|---|---|
+| `attente` | ajouté à ce qui attend déjà — relis, puis Entrée |
+| `occupe` | retenu pendant que Claude travaille — relis, puis Entrée |
+| `mode` | mode « retenir » armé — relis, puis Entrée |
+| `tour` | rattrapé — relis, puis Entrée |
+
+« retenu » tout court laissait chercher laquelle des quatre s'appliquait. La note s'efface dès
+que la situation change — reparler, envoyer : une explication qui survit à son objet devient
+fausse.
+
+Vider la barre à la main libère la retenue. Sans ce signal l'agent croirait qu'un texte attend
+encore et retiendrait tout indéfiniment : une amélioration qui se transforme en blocage
+silencieux est pire que le défaut qu'elle corrige.
 
 ### Régler le délai, et rattraper un message
 
@@ -1145,25 +1208,65 @@ construit à partir de maintenant.
 
 ## Choisir son moteur de reconnaissance
 
-Sept moteurs déclarés au même endroit (`voix/moteurs_stt.py`), tous avec un **palier gratuit
+Neuf moteurs déclarés au même endroit (`voix/moteurs_stt.py`), tous avec un **palier gratuit
 réel**. Les chiffres datent d'août 2026 et viennent des pages de tarif des fournisseurs — ce
 sont des indications pour choisir, pas des garanties.
 
-| Moteur | Gratuit | Type | Streaming | Clé |
+| Moteur | Gratuit | Type | Direct | Clé |
 |---|---|---|---|---|
+| **Deepgram** | 200 $ de crédits (~430 h) | crédit unique | oui | `DEEPGRAM_API_KEY` |
 | **Speechmatics** | 8 h/mois, renouvelé, sans carte | mensuel | oui | `SPEECHMATICS_API_KEY` |
 | **Gladia** | 4 h/mois de temps réel, renouvelé | mensuel | oui | `GLADIA_API_KEY` |
+| **AssemblyAI** | 50 $ de crédits (~330 h) | crédit unique | oui | `ASSEMBLYAI_API_KEY` |
+| **Soniox** | crédits gratuits à l'inscription | crédit unique | oui | `SONIOX_API_KEY` |
 | **Azure** | 5 h/mois au palier F0 | mensuel | oui | `AZURE_SPEECH_KEY` |
-| **AssemblyAI** | 50 $ de crédits (~300 h) | crédit unique | oui | `ASSEMBLYAI_API_KEY` |
-| **Deepgram** | 200 $ de crédits | crédit unique | oui | `DEEPGRAM_API_KEY` |
+| **Google Cloud** | 60 min/mois à vie | mensuel | oui | `GOOGLE_APPLICATION_CREDENTIALS` |
 | **Groq** | palier gratuit, limites journalières | mensuel | **non** | `GROQ_API_KEY` |
-| **local** (faster-whisper) | illimité, hors ligne | — | non | aucune |
+| **local** (faster-whisper) | illimité, hors ligne | — | **non** | aucune |
 
-**L'ordre par défaut suit une logique de budget** : les quotas **mensuels** d'abord — ils
-reviennent, autant les dépenser — puis les **crédits uniques**, qu'on garde pour quand les
-mensuels sont épuisés, puis le **local**, illimité mais lent. Le local ferme toujours la
-marche : c'est le seul qui ne peut pas manquer de crédit, donc le seul qui garantit qu'on ne
-devienne jamais sourd.
+« Direct » veut dire que le texte s'écrit **pendant** qu'on parle. C'est ce qui rend la
+relecture avant envoi possible : un moteur sans résultats intermédiaires ne rend son texte
+qu'à la fin, donc « retenir » devient inutilisable et le texte semble apparaître sans raison.
+C'est pour ça que les moteurs non directs passent derrière tous les autres, même excellents.
+
+**L'ordre est recalculé d'après ce qu'il reste**, en quatre classes :
+
+1. un **crédit unique encore abondant** — au-dessus de sa réserve. Autant profiter du meilleur
+   moteur maintenant : 430 h couvrent cinq ans à 7 h/mois, donc « garder la réserve » est
+   théorique tant qu'elle est pleine ;
+2. les **quotas mensuels** — ils reviennent le mois prochain, les dépenser ne coûte rien ;
+3. un crédit passé **sous sa réserve** — il se garde pour les mois où les mensuels seront
+   épuisés, c'est précisément à ça qu'il sert ;
+4. les moteurs **sans texte en direct**, et le local.
+
+Un moteur **constaté épuisé** part à la fin, quelle que soit sa qualité. À classe égale, le
+rang de qualité tranche — mesuré quand on a mesuré. Concrètement : Deepgram en tête tant qu'il
+lui reste plus de 100 h, puis il recule derrière Speechmatics sans jamais vider la réserve.
+
+Le local ferme toujours la marche : c'est le seul qui ne peut pas manquer de crédit, donc le
+seul qui garantit qu'on ne devienne jamais sourd.
+
+### Combien il reste, sur chaque palier
+
+Aucun fournisseur ne dit combien il reste sans aller voir sa console. Le jour où le quota
+Azure s'est vidé, la transcription est devenue muette et rien ne disait pourquoi : vingt
+minutes de diagnostic pour un compteur arrivé à zéro.
+
+La pastille du moteur affiche donc au survol ce qu'il reste, et le panneau montre une jauge
+par moteur. On compte le **temps micro ouvert** — c'est ce que facturent les fournisseurs de
+temps réel — imputé au moteur actif, redécoupé à chaque bascule pour que le temps consommé par
+Azure avant sa chute ne soit pas facturé à celui qui prend le relais. Le local n'est jamais
+compté : il ne coûte rien.
+
+**Deux natures d'information, et la page les distingue.** « il reste ~7 h 12 » est une
+**estimation locale** : elle ignore ce qui a été consommé depuis une autre machine, un autre
+outil, ou avant l'installation du compteur. « épuisé — constaté » est un **fait** : le
+fournisseur a refusé pour cause de quota, et le motif du refus est affiché. Le constat prime
+toujours sur l'estimation, il est daté, et un quota mensuel redevient crédible le mois suivant
+tout seul.
+
+C'est délibéré : un compteur parti de zéro annonçait « 5 h restantes » sur un palier vide
+depuis des semaines. Un chiffre faux et rassurant est pire qu'aucun chiffre.
 
 Un moteur sans clé est retiré de la chaîne, pas une cause d'échec. Ajoute une clé, il entre
 à sa place ; enlève-la, il sort.

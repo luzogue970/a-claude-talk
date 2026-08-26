@@ -7,6 +7,90 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.13.0] — 2026-08-26
+
+### Change — l'agent decide de l'envoi, donc le decompte affiche est celui qui decide
+`turn_detection` passe en mode `manual`. Le VAD continue de signaler debut et fin de parole,
+mais LiveKit ne commet plus le tour : l'agent arme une fenetre, publie son echeance absolue,
+et commet a l'echeance. La page lit cette echeance au lieu de recompter.
+
+Avant, LiveKit decidait et la page estimait a partir des memes reglages : deux horloges pour
+une seule decision. Quand elles divergeaient on lisait « encore 4 s » alors que le message
+etait deja parti, donc « retenir » arrivait apres la decision. C'etait la cause de « la phase
+de retenir, des fois je ne peux pas la faire ». `VOIX_TOUR_MANUEL=0` rend la main a LiveKit,
+et la page le detecte : sans echeance publiee elle retombe sur une estimation avec plafond.
+
+### Ajoute — un ordre local part immediatement
+« arrete », « coupe le micro », « chut » attendaient cinq secondes de silence comme n'importe
+quelle phrase. Ils partent maintenant sans attendre — limite aux enonces de cinq mots au plus,
+parce que la detection considere « arrêter » + « ça » comme un ordre et que *« explique-moi
+pourquoi il faut arrêter de faire ça »* est donc detectee comme un arret. Ce faux positif
+existait deja ; un raccourci sans limite lui aurait retire le filet de la relecture.
+
+### Corrige — la retenue est collante, plus rien ne part par-dessus un texte en attente
+On dictait, c'etait retenu (la barre gardait la phrase), on reparlait, ce second tour partait,
+et la page vidait la barre : la premiere phrase disparaissait sans avoir jamais ete envoyee ni
+signalee. C'est la version exacte du « texte deja envoye qui reapparait, et parfois seulement
+une partie ». Vider la barre a la main libere la retenue — sans ce signal l'agent retiendrait
+tout indefiniment.
+
+### Ajoute — la page dit POURQUOI un texte est retenu
+Quatre raisons distinctes (`attente`, `occupe`, `mode`, `tour`), dans le flux et contre la
+barre, avec ce qu'il faut faire ensuite. « retenu » tout court laissait chercher laquelle
+s'appliquait. La note s'efface des que la situation change.
+
+### Corrige — couper le micro vaut « j'ai fini de parler »
+En manuel la fin de tour vient du VAD. Si le micro se coupait pendant la parole, ce signal
+pouvait ne jamais arriver et le texte deja transcrit restait dans la barre sans decompte et
+sans envoi, sans que rien l'explique.
+
+### Ajoute — combien il reste sur chaque palier de moteur
+La pastille du moteur affiche au survol ce qu'il reste ; le panneau montre une jauge par
+moteur. On compte le temps micro ouvert, impute au moteur actif, redecoupe a chaque bascule
+pour que le temps consomme par Azure avant sa chute ne soit pas facture au suivant. Le local
+n'est jamais compte.
+
+La page distingue deux natures d'information : « il reste ~7 h 12 » est une **estimation
+locale**, « epuise — constate » est un **fait** (le fournisseur a refuse, avec son motif). Le
+constat prime sur l'estimation. Un compteur parti de zero annonçait « 5 h restantes » sur un
+palier Azure vide depuis des semaines — un chiffre faux et rassurant est pire qu'aucun chiffre.
+
+### Change — l'ordre de la chaine suit ce qu'il reste, plus l'ordre de declaration
+Quatre classes : credit abondant, quota mensuel, credit sous reserve, moteurs sans texte en
+direct. Un moteur constate epuise part a la fin. Concretement Deepgram est en tete tant qu'il
+lui reste plus de 100 h, puis il recule derriere Speechmatics sans jamais vider la reserve.
+
+### Ajoute — Soniox et Google Cloud
+Neuf moteurs. Le vocabulaire du projet passe comme chacun l'attend, verifie dans les
+signatures : Soniox veut une chaine de contexte, Google des couples (mot, poids).
+
+### Corrige — le vocabulaire cassait Speechmatics entierement
+Le plugin attend des objets `AdditionalVocabEntry`, pas des chaines. Une liste de chaines
+levait « 'str' object has no attribute 'content' » et cassait le moteur, pas seulement le
+biais lexical.
+
+### Corrige — 155 lignes dupliquees dans config.py
+Deux blocs y figuraient deux fois a l'identique. Python garde la derniere definition, donc
+modifier la premiere ne faisait rien, sans le moindre message : le pire symptome possible sur
+un fichier de configuration, on croit avoir agi. Suppression prouvee sans effet — les 48
+valeurs publiques du module sont identiques avant et apres. 465 lignes → 310.
+
+### Corrige — le lanceur de tests annonçait des preuves qu'il n'avait pas
+Trois defauts de la meme famille : `-k front,tableau` ne correspondait a rien et rendait
+« bon pour la fusion » sur zero test ; le compteur ne lisait qu'un dialecte de sortie sur
+trois, rendant 97 verifications invisibles ; une suite verte sans rien de compte passait pour
+une preuve — elle est desormais MUETTE et fait sortir en erreur.
+
+`test_boucle`, la suite la plus couteuse (vrai Claude, vrai quota), n'affichait que des
+compteurs et ne verifiait rien. Elle verifie maintenant huit choses.
+
+### Ajoute — des garde-fous contre les regressions rencontrees
+Aucune constante definie deux fois dans config ; tout plugin importe epingle dans
+requirements avec une seule version de livekit partout ; tout etat durable present dans
+`ETATS` (le bug des selecteurs vides) ; tout champ de `__init__` present dans `_amorcer_etat`
+(les talons de test ne peuvent plus deriver). Suites `consommation` (49) et `fenetre` (47).
+469 verifications au total.
+
 ## [1.12.0] — 2026-08-26
 
 ### Corrige — un texte deja envoye revenait dans la barre
