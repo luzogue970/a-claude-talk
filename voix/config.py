@@ -11,11 +11,25 @@ SECRETS = Path.home() / ".config" / "claude-talk" / "secrets.env"
 
 
 def _load_secrets():
-    """Secrets live outside the repo, so a clone can never carry a key."""
+    """Secrets live outside the repo, so a clone can never carry a key.
+
+    Le prefixe `export` est accepte, et ce n'est pas de la complaisance. Le fichier s'appelle
+    `.env`, il ressemble a un script, et tous les exemples du web ecrivent `export CLE=...` :
+    l'ajouter dans ce format est le geste naturel. Sans cette tolerance, `partition("=")`
+    fabriquait une variable nommee « export ASSEMBLYAI_API_KEY » — la cle etait donc PRESENTE
+    dans le fichier et le moteur affichait « pas de cle ». Une clef ignoree en silence est le
+    pire des echecs : on la cherche partout sauf la ou elle est.
+
+    Vecu exactement ainsi, et ma verification l'avait masque : j'avais teste en chargeant le
+    fichier avec `source` en bash, qui comprend `export`, au lieu de passer par ce parseur.
+    Verifier autrement que l'application ne verifie rien du tout.
+    """
     if not SECRETS.is_file():
         return
     for line in SECRETS.read_text(encoding="utf-8").splitlines():
         line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
@@ -194,6 +208,22 @@ RETENIR_SI_OCCUPE = os.environ.get("VOIX_RETENIR_OCCUPE", "1") not in ("0", "non
 # IMMEDIATEMENT au lieu d'attendre le silence complet. En automatique il patientait
 # ECOUTE_MIN comme n'importe quelle phrase, ce qui est absurde pour un ordre d'arret.
 TOUR_MANUEL = os.environ.get("VOIX_TOUR_MANUEL", "1") not in ("0", "non", "false")
+
+# Couper le micro tout seul apres ce silence, en secondes. 0 desactive.
+#
+# Pourquoi ça existe : micro ouvert, l'audio part en CONTINU vers le moteur de
+# reconnaissance. Verifie dans LiveKit — `AgentActivity.push_audio` transmet chaque trame sans
+# aucun filtre, et le commentaire du code l'assume : le flux doit rester continu pour que la
+# reconnaissance garde son contexte. Autrement dit on paie chaque seconde de micro ouvert,
+# qu'on parle ou non. Une pause dejeuner micro ouvert coute une heure de quota.
+#
+# La veille ne se declenche que sur un silence REEL — aucune parole detectee, pas meme une
+# video en fond. C'est precisement le cas « je me suis leve en oubliant de couper ». Elle ne
+# coupera jamais pendant qu'on reflechit a voix haute, puisque parler la remet a zero.
+#
+# Cinq minutes : assez long pour ne jamais gener une pause de reflexion, assez court pour que
+# l'oubli coute des minutes et non des heures.
+MICRO_VEILLE_S = float(os.environ.get("VOIX_MICRO_VEILLE", "300"))
 
 # Le plafond suit le plancher au lieu d'etre fixe. Sinon regler le plancher a 15 s le
 # placerait au-dessus d'un plafond de 12 s, et la fenetre « phrase inachevee » deviendrait

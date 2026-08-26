@@ -57,6 +57,43 @@ const LISTES = [
       { cle: "max", libelle: "maximum — le plus fouillé, le plus lent" }] },
   { n: 3, genre: "delais", actuel: 5, plafond: 12.5,
     paliers: [{ s: 3 }, { s: 5 }, { s: 10 }] },
+  // Les PANNEAUX doivent etre remplis pour la meme raison que les selecteurs : mesurer la
+  // largeur d'un panneau vide passe l'assertion sans rien verifier. Le debordement de 124 px
+  // venait justement du panneau plein, avec ses neuf moteurs et leurs notes.
+  { n: 4, genre: "moteurs_stt", actif: "assemblyai", direct: true,
+    chaine: ["assemblyai", "deepgram", "speechmatics", "gladia", "local"],
+    liste: [
+      { cle: "assemblyai", libelle: "AssemblyAI", dispo: true, rang: 0, streaming: true,
+        gratuit: "50 $ de credits a l'inscription (~300 h)",
+        note: "MESURE le meilleur ici : 3,0 % d'erreur en 2,9 s, le plus rapide en ligne" },
+      { cle: "deepgram", libelle: "Deepgram", dispo: true, rang: 1, streaming: true,
+        gratuit: "200 $ de credits a l'inscription",
+        note: "nova-3 ; mesure a 3,0 % d'erreur, aussi bon qu'AssemblyAI mais deux fois plus lent" },
+      { cle: "speechmatics", libelle: "Speechmatics", dispo: true, rang: 2, streaming: true,
+        gratuit: "8 h/mois, renouvele, sans carte",
+        note: "bon sur les bancs publics (6,4 %), mais ici il tronque ses phrases ou reste muet" },
+      { cle: "google", libelle: "Google Cloud", dispo: false, rang: null, streaming: true,
+        gratuit: "60 min/mois a vie", note: "le palier a vie est petit" },
+      { cle: "local", libelle: "local (faster-whisper)", dispo: true, rang: 4, streaming: false,
+        gratuit: "illimite, hors ligne",
+        note: "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine" },
+    ] },
+  { n: 5, genre: "consommation", moteurs: [
+      { cle: "assemblyai", libelle: "AssemblyAI", dispo: true, consomme_s: 1200,
+        palier_s: 1188000, reste_s: 1186800, part: 0.001, renouvelable: false,
+        gratuit: "50 $ de credits", epuise: false },
+      { cle: "speechmatics", libelle: "Speechmatics", dispo: true, consomme_s: 28800,
+        palier_s: 28800, reste_s: 0, part: 1, renouvelable: true, epuise: true,
+        gratuit: "8 h/mois", motif: "Quota exceeded for this month" },
+    ] },
+  { n: 6, genre: "conversations", dossier: "/home/x/dev/insnap", courante: "sid-a", liste: [
+      { session_id: "sid-a", projet: "insnap", tours: 59, reprises: 7, ici: true,
+        maj: new Date(Date.now() - 300000).toISOString(), etat: "en cours",
+        apercu: "l inscription whatsapp sur l appli semble ne pas marcher et l ux ui a ce niveau non plus" },
+      { session_id: "sid-b", projet: "echec", tours: 38, reprises: 5, sous: "claudesque/echec",
+        maj: new Date(Date.now() - 10800000).toISOString(), etat: "fermée",
+        apercu: "tkt rien a faire pour l instant, on verra ça demain matin tranquillement" },
+    ] },
 ];
 
 const EVENEMENTS = [
@@ -75,6 +112,32 @@ setTimeout(() => {
   const releve = { lignes: [] };
   const flux = document.querySelector("main");
   releve.page = { hauteur: document.body.scrollHeight, largeur: document.body.clientWidth };
+
+  // Le debordement HORIZONTAL, panneaux ouverts. C'est la seule facon de l'attraper : ferme,
+  // un panneau ne mesure rien ; ouvert, un panneau trop large elargit la page entiere et
+  // cache une partie du contenu derriere un defilement lateral qu'on ne cherche pas.
+  const ouverts = ["choix-moteur", "choix-conv"];
+  releve.panneaux = {};
+  // Remplir avant de mesurer : c'est le panneau PLEIN qui debordait.
+  try { dessinerChoix(); } catch (e) {}
+  try { dessinerConvs(); } catch (e) {}
+  for (const id of ouverts) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.hidden = false;
+    const r = el.getBoundingClientRect();
+    releve.panneaux[id] = { l: Math.round(r.left), d: Math.round(r.right),
+                            w: Math.round(r.width) };
+  }
+  releve.deborde = {
+    page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    corps: document.body.scrollWidth - document.body.clientWidth,
+    vue: innerWidth,
+  };
+  for (const id of ouverts) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
   for (const l of flux.children) {
     if (!l.dataset.g) continue;
     const corps = l.querySelector(".corps");
@@ -132,12 +195,16 @@ const dossier = fs.mkdtempSync(path.join(os.tmpdir(), "rendu-"));
 const fichier = path.join(dossier, "page.html");
 fs.writeFileSync(fichier, html);
 
+function rendre(largeur, hauteur) {
+  return execFileSync(chrome, [
+    "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000",
+    `--window-size=${largeur},${hauteur}`, "--dump-dom", "file://" + fichier,
+  ], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 40 * 1024 * 1024 });
+}
+
 let dom;
 try {
-  dom = execFileSync(chrome, [
-    "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=3000",
-    "--window-size=1280,900", "--dump-dom", "file://" + fichier,
-  ], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 40 * 1024 * 1024 });
+  dom = rendre(1280, 900);
 } catch (e) {
   console.log("  Chrome n'a pas rendu la page — test ignore (" + (e.message || "").slice(0, 60) + ")");
   process.exit(0);
@@ -223,6 +290,44 @@ if (bo.microBas && bo.champBoite) {
 if (bo.convs) {
   dire(bo.convs.w > 0 && bo.convs.w < 240,
        `le bouton des conversations reste compact (${bo.convs.w} px)`);
+}
+
+// --- rien ne doit deborder sur le cote --------------------------------------------------
+// Un panneau qui elargit la page ne se voit pas comme un bug : on croit que l'interface est
+// « comme ça », on defile lateralement sans raison, et une partie du contenu reste cachee.
+dire(r.deborde.page <= 0,
+     `la page ne déborde pas horizontalement, panneaux ouverts (${r.deborde.page} px)`);
+dire(r.deborde.corps <= 0,
+     `le corps non plus (${r.deborde.corps} px)`);
+for (const [id, b2] of Object.entries(r.panneaux || {})) {
+  dire(b2.w > 200, `#${id} est bien REMPLI quand on le mesure (${b2.w} px)`);
+  dire(b2.d <= r.deborde.vue,
+       `#${id} tient dans la fenêtre (bord droit ${b2.d} <= ${r.deborde.vue})`);
+  dire(b2.l >= 0, `#${id} ne sort pas à gauche (${b2.l})`);
+}
+
+// --- et en fenetre ETROITE ---------------------------------------------------------------
+// Corriger un debordement a 1280 px ne prouve rien pour un portable a 1366, une fenetre en
+// demi-ecran, ou un panneau lateral d'editeur ouvert a cote. C'est precisement la que les
+// largeurs minimales se retournent contre l'interface : elles ne peuvent plus retrecir, donc
+// c'est la page qui s'elargit.
+try {
+  const domEtroit = rendre(860, 780);
+  const brutE = /<pre id="releve">([\s\S]*?)<\/pre>/.exec(domEtroit);
+  if (brutE) {
+    const re = JSON.parse(brutE[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+                                  .replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
+    dire(re.deborde.page <= 0,
+         `en 860 px de large, la page ne déborde toujours pas (${re.deborde.page} px)`);
+    for (const [id, b2] of Object.entries(re.panneaux || {})) {
+      dire(b2.d <= re.deborde.vue && b2.l >= 0,
+           `#${id} tient encore (${b2.l} → ${b2.d} dans ${re.deborde.vue})`);
+    }
+    dire(re.champ.souffleBas >= 12,
+         `et le champ respire encore sous lui (${re.champ.souffleBas} px)`);
+  }
+} catch (e) {
+  console.log("  ~     seconde mesure en fenêtre étroite impossible — ignorée");
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

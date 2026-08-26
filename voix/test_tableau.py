@@ -535,6 +535,10 @@ def tout_genre_affiche_a_un_filtre():
         "ecoute", "retenir", "tour_quota", "_histoire",
         "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif", "transcrit",
         "consommation", "conversations",
+        # « vider » est un ORDRE ponctuel, pas une ligne du flux : il efface la page au
+        # changement de conversation. Il n'est deliberement pas dans ETATS non plus — le
+        # rejouer a la reconnexion effacerait ce qu'on vient de recharger.
+        "vider",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)

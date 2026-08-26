@@ -65,6 +65,15 @@ class Tableau:
         self.etat: dict[str, str] = {}
 
     # --- publication ---------------------------------------------------------
+    def vider(self):
+        """Oublier tout le flux garde en memoire.
+
+        Appele au changement de conversation. Sans ça, une reconnexion republierait
+        l'historique de la conversation PRECEDENTE par-dessus la nouvelle, et on ne saurait
+        plus laquelle on lit — ni a quelle conversation appartient un message qu'on relit.
+        """
+        self.histoire.clear()
+
     def publier(self, genre: str, **donnees):
         """Never awaited by callers: the voice path must not block on the UI."""
         # Deux horodatages, et ce n'est pas une redondance. « h » est l'heure de l'horloge,
@@ -297,11 +306,19 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 /* Le choix du moteur : une liste avec ce que donne chaque palier gratuit. Sans cette
    information, choisir revient a tirer au sort. */
 .avec-choix{position:relative;display:inline-flex}
-#choix-moteur{position:absolute;top:calc(100% + 8px);left:0;z-index:30;min-width:430px;
+/* Ancré à DROITE et borné à la fenêtre. Ancré à gauche avec une largeur minimale de 430 px,
+   il dépassait de 124 px — mesuré — et élargissait la page entière : on se retrouvait à
+   défiler latéralement sans raison, avec une partie du contenu cachée. Un panneau flottant ne
+   doit jamais pouvoir agrandir la page qui le porte.
+   `max-height` + défilement interne : le même raisonnement en vertical, neuf moteurs sur un
+   petit écran sortaient par le bas sans qu'on puisse les atteindre. */
+#choix-moteur{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+  width:max-content;max-width:min(430px, calc(100vw - 32px));
+  max-height:min(70vh, 620px);overflow-y:auto;
   background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:11px 13px;
   box-shadow:0 12px 32px #00000080;font-size:11.5px;color:var(--faible)}
 #choix-moteur[hidden]{display:none}
-#choix-moteur .m{display:grid;grid-template-columns:22px 1fr auto;gap:8px;
+#choix-moteur .m{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;
   align-items:baseline;padding:4px 3px;border-radius:5px}
 #choix-moteur .m:hover{background:#1f242c}
 #choix-moteur .nom{color:var(--texte);font-weight:650}
@@ -334,6 +351,21 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #choix-conv .c.active{border-left-color:var(--accent);background:#1b2027}
 #choix-conv .c.morte{opacity:.45}
 #choix-conv .haut{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+/* Une pastille d'état à gauche du nom. La FORME porte l'information autant que la couleur —
+   pleine, creuse, barrée — pour que ça reste lisible sans distinguer les teintes. */
+#choix-conv .etat{display:inline-block;width:9px;height:9px;border-radius:50%;
+  margin-right:7px;flex:none;vertical-align:baseline;border:1.5px solid var(--faible)}
+#choix-conv .etat.vit{background:var(--accent);border-color:var(--accent);
+  box-shadow:0 0 0 3px #4f9dde26}
+#choix-conv .etat.close{background:transparent;border-color:#4a525e}
+#choix-conv .etat.coupee{background:transparent;border-color:#d8a657;
+  border-style:dashed}
+#choix-conv .etat.prise{background:#6b7480;border-color:#6b7480}
+#choix-conv .c{position:relative}
+/* Le nombre de reprises est une information de densité, pas une phrase : une puce compacte
+   se lit d'un coup, « repris 7 fois » noyé dans une ligne de métadonnées non. */
+#choix-conv .repr{display:inline-block;background:#252b34;border-radius:5px;
+  padding:1px 6px;margin-left:6px;color:var(--faible);font-size:11px}
 #choix-conv .nom{color:var(--texte);font-weight:650}
 #choix-conv .quand{color:var(--faible);white-space:nowrap;font-variant-numeric:tabular-nums}
 #choix-conv .dit{color:var(--faible);margin-top:3px;line-height:1.45;
@@ -490,10 +522,11 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 /* La barre respire : 18 px sous le champ plutot que le bord de l'ecran. Collee en bas, elle
    donnait l'impression d'une fenetre coupee — et sur un portable, la zone la plus basse est
    celle qu'on atteint le moins bien. */
+body{overflow-x:hidden}
 #saisie-barre{position:fixed;bottom:0;left:0;right:0;z-index:6;
   background:linear-gradient(to top,#0e1116 62%,#0e1116e0);backdrop-filter:blur(10px);
   border-top:1px solid var(--bord);
-  padding:11px 16px 18px;display:flex;justify-content:center}
+  padding:14px 16px 20px;display:flex;justify-content:center}
 /* align-items:flex-end : quand le champ grandit, les boutons restent alignes sur sa
    derniere ligne au lieu de flotter au milieu d'une grande boite. */
 #saisie-barre form{display:flex;gap:8px;width:100%;max-width:1100px;align-items:flex-end}
@@ -501,15 +534,24 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 /* Un textarea, pas un input : une longue dictee doit rester ENTIEREMENT visible. Sur une
    seule ligne, le texte defilait hors du champ et on ne voyait plus ce qu'on dictait.
    La hauteur est calculee en JS (scrollHeight) ; le CSS ne fait que l'animer. */
-#saisie{flex:1;min-width:0;background:var(--carte);color:var(--texte);
-  border:1px solid var(--bord);border-radius:19px;padding:8px 15px;font:inherit;
-  font-size:13px;line-height:1.5;outline:none;resize:none;overflow-y:auto;
-  display:block;height:36px;max-height:55vh;overflow-y:hidden;
-  transition:height .12s ease-out,border-radius .12s ease-out,border-color .12s}
+/* La zone principale de l'interface, et elle doit le paraître. Elle faisait 36 px de haut en
+   13 px de texte : on la cherchait. C'est pourtant là qu'on passe tout son temps — on y dicte,
+   on y relit, on y corrige, on y envoie.
+   Plus haute (52 px), plus grande en texte (14,5 px), et un fond légèrement détaché du reste
+   pour qu'elle se trouve d'un coup d'œil. Elle grandit toujours avec le contenu et redescend
+   quand on efface : plus visible, pas plus envahissante. */
+#saisie{flex:1;min-width:0;background:#161b22;color:var(--texte);
+  border:1px solid #303845;border-radius:24px;padding:14px 18px;font:inherit;
+  font-size:14.5px;line-height:1.55;outline:none;resize:none;
+  display:block;height:52px;max-height:55vh;overflow-y:hidden;
+  transition:height .12s ease-out,border-radius .12s ease-out,border-color .12s,
+             box-shadow .15s}
 /* Une seule ligne : la pastille arrondie du reste de l'interface. Plusieurs lignes : un coin
    plus sobre, sinon la boite ressemble a une gelule etiree. */
 #saisie.une-ligne{border-radius:999px}
-#saisie:focus{border-color:var(--toi)}
+/* Au focus, la zone s'affirme franchement : un halo, pas un simple filet de 1 px qui se
+   confond avec le reste dans une interface sombre. */
+#saisie:focus{border-color:var(--toi);box-shadow:0 0 0 3px #4f9dde22;background:#1a212b}
 #saisie::placeholder{color:#5a636e}
 
 /* Une gouttiere discrete plutot que celle du systeme, qui arrivait comme une barre grise
@@ -523,7 +565,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
    comme a la souris). Les cinq ondes bougent quand la parole est DETECTEE — pas un
    volume : on ne mesure pas le niveau audio ici, et animer au hasard donnerait une fausse
    confirmation d'etre entendu, ce qui est pire que pas d'indicateur du tout. */
-.micro-rond{flex:none;width:40px;height:40px;border-radius:50%;
+.micro-rond{flex:none;width:48px;height:48px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
   background:var(--carte);border:1px solid var(--bord);cursor:pointer;
   transition:background .15s,border-color .15s,box-shadow .15s}
@@ -589,6 +631,7 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 /* Pendant qu'on dicte, la barre montre que ce texte n'est pas encore le tien. */
 #saisie.dictee{border-color:var(--toi);color:#9ecbff;font-style:italic}
 #envoyer{background:transparent;color:var(--faible);border:1px solid var(--bord);
+  min-height:38px;
   border-radius:999px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer;
   white-space:nowrap}
 #envoyer:not(:disabled):hover{border-color:var(--toi);color:#9ecbff}
@@ -1784,7 +1827,9 @@ champ.oninput = () => {
 // train d'être reconnu, donc on ne pouvait plus le corriger. Le champ suit maintenant son
 // contenu, jusqu'à 40 % de la hauteur de fenêtre — au-delà il défile à l'intérieur, parce
 // qu'un champ qui mange l'écran cache le flux qu'on est venu lire.
-const HAUTEUR_MINI = 36;
+// Doit suivre la hauteur CSS du champ : les deux se contredisant, le champ oscillait d'un
+// pixel a chaque frappe et « une-ligne » clignotait.
+const HAUTEUR_MINI = 52;
 const barreSaisie = document.getElementById("saisie-barre");
 const btnBas = document.getElementById("bas");
 const zoneFlux = document.querySelector("main");
@@ -1886,6 +1931,24 @@ function recevoir(e) {
       majResteMoteur();
       const b = document.getElementById("choix-moteur");
       if (b && !b.hidden) dessinerChoix();
+      return;
+    }
+    if (e.genre === "vider") {
+      // Changer de conversation ne doit pas empiler deux conversations dans le même flux :
+      // on ne saurait plus laquelle on lit, et les compteurs additionneraient les deux.
+      // Le rejeu de la nouvelle arrive juste après.
+      flux.textContent = "";
+      actions = 0; jetons = 0;
+      majCompteurs();
+      // La barre aussi, et sans condition : ce qu'elle porte appartient à la conversation
+      // qu'on quitte. Le garder l'enverrait à la suivante, qui n'a rien demandé — c'est la
+      // même famille de bug que le texte déjà envoyé qui réapparaît.
+      viderDictee();
+      champ.value = "";
+      ajusterHauteur();
+      majEnvoyer();
+      barreVide = true;
+      noteBarre(null);
       return;
     }
     if (e.genre === "conversations") {
@@ -2154,20 +2217,30 @@ function dessinerConvs() {
     if (titre !== section) { section = titre; html += `<div class="titre">${ech(titre)}</div>`; }
     const active = c.session_id === convCourante;
     const morte = c.etat === "en cours" && !active;   // tenue par un autre agent
+    // La pastille dit l'état d'un coup d'œil, et son titre le dit en toutes lettres : une
+    // icône qu'il faut deviner ne vaut pas mieux qu'une absence d'icône.
+    const et = active ? ["vit", "celle que tu utilises en ce moment"]
+      : morte ? ["prise", "ouverte dans une autre fenêtre — on ne peut pas y être à deux"]
+      : c.etat === "interrompue" ? ["coupee", "interrompue — l'agent s'est arrêté sans se fermer"]
+      : ["close", "fermée proprement, prête à reprendre"];
     html += `<button type="button" class="c${active ? " active" : ""}${morte ? " morte" : ""}" `
-      + `data-sid="${ech(c.session_id)}"${morte ? " disabled" : ""}>`
-      + `<span class="haut"><span class="nom">${ech(c.projet || "?")}`
+      + `data-sid="${ech(c.session_id)}"${morte ? " disabled" : ""} `
+      + `title="${ech(et[1])}">`
+      + `<span class="haut"><span class="nom">`
+      + `<span class="etat ${et[0]}"></span>${ech(c.projet || "?")}`
       + (active ? ` <span class="ici">· en cours</span>` : "")
       + (morte ? ` <span class="ici">· ouverte ailleurs</span>` : "")
       + `</span><span class="quand">${ech(ilYA(c.maj))}</span></span>`
       + `<div class="dit">${ech(c.apercu || "(rien n'y a encore été dit)")}</div>`
       + `<div class="meta">${c.tours} tour${c.tours > 1 ? "s" : ""}`
-      + (c.reprises > 1 ? ` · repris ${c.reprises} fois` : "")
+      + (c.reprises > 1 ? `<span class="repr">↻ ${c.reprises}</span>` : "")
       + (c.sous ? ` · ./${ech(c.sous)}` : "") + `</div></button>`;
   }
   html += `<div class="pied">`
     + `Reprendre garde <b>tout le contexte</b> : Claude Code relit sa session sur disque, `
     + `ce n'est pas un résumé.<br>`
+    + `<b>↻</b> = nombre de fois où la conversation a été reprise. Une conversation reste `
+    + `<b>une seule</b> conversation, même relancée dix fois.<br>`
     + `« vv » reprend la dernière d'ici tout seul ; « vvneuf » en ouvre une neuve.`
     + (perdues ? `<br>${perdues} lancement(s) sans session enregistrée — rien à y reprendre.` : "")
     + `</div>`;

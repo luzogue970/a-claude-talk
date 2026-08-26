@@ -271,12 +271,13 @@ const hauteur = () => parseInt(champ.style.height);
 
 champ.value = ''; ajusterHauteur();
 const vide = hauteur();
-dire(vide === 36, 'vide : hauteur minimale (' + vide + ' px)');
+dire(vide === HAUTEUR_MINI,
+     'vide : hauteur minimale (' + vide + ' px, constante ' + HAUTEUR_MINI + ')');
 dire(champ.classList.contains('une-ligne'), 'et la pastille est ronde');
 
 champ.value = 'renomme la variable qui gere le silence';
 ajusterHauteur();
-dire(hauteur() === 36, 'une phrase courte tient sur une ligne (' + hauteur() + ' px)');
+dire(hauteur() === HAUTEUR_MINI, 'une phrase courte tient sur une ligne (' + hauteur() + ' px)');
 
 // une longue dictee, comme quand on parle trop longtemps
 champ.value = 'a'.repeat(400);
@@ -296,7 +297,7 @@ dire(champ.style.overflowY === 'auto',
 // et il redescend, ce que « height:auto » d abord rend possible
 champ.value = 'court';
 ajusterHauteur();
-dire(hauteur() === 36, 'efface : il redescend a sa taille d origine (' + hauteur() + ' px)');
+dire(hauteur() === HAUTEUR_MINI, 'efface : il redescend a sa taille d origine (' + hauteur() + ' px)');
 dire(champ.classList.contains('une-ligne'), 'la pastille redevient ronde');
 
 // la barre grandit : le flux doit reculer, sinon elle recouvre les dernieres lignes
@@ -314,7 +315,7 @@ ouvrirDictee();
 poserDictee('a'.repeat(300), false);
 dire(hauteur() > 36, 'une dictee longue fait grandir le champ (' + hauteur() + ' px)');
 viderDictee();
-dire(hauteur() === 36, 'et l envoi le remet a plat (' + hauteur() + ' px)');
+dire(hauteur() === HAUTEUR_MINI, 'et l envoi le remet a plat (' + hauteur() + ' px)');
 
 // Entree envoie au lieu d inserer un retour a la ligne
 let soumis = false;
@@ -837,8 +838,18 @@ dessinerConvs();
 const panneau = document.getElementById('choix-conv');
 dire(/l inscription whatsapp/.test(panneau.innerHTML),
      'la derniere phrase dite est affichee : c est a ça qu on reconnait une conversation');
-dire(/repris 7 fois/.test(panneau.innerHTML),
+dire(/↻ 7/.test(panneau.innerHTML),
      'le nombre de reprises est visible — 59 tours en 7 lancements, pas 7 conversations');
+// Une icone qu il faut deviner ne vaut pas mieux qu une absence d icone : chaque pastille
+// porte son explication en toutes lettres, et le pied explique le symbole une fois.
+dire(/class="etat vit"/.test(panneau.innerHTML),
+     'la conversation courante porte une pastille pleine');
+dire(/celle que tu utilises en ce moment/.test(panneau.innerHTML),
+     'et son infobulle dit ce que la pastille signifie');
+dire(/on ne peut pas y etre a deux|on ne peut pas y être à deux/.test(panneau.innerHTML),
+     'celle tenue ailleurs explique POURQUOI elle est desactivee');
+dire(/= nombre de fois/.test(panneau.innerHTML),
+     'et le symbole des reprises est explique une fois, en bas');
 dire(/abandonnee/.test(panneau.innerHTML) === false,
      'une conversation sans session_id n est pas proposee : la reprendre repartirait de zero');
 dire(/1 lancement\(s\) sans session/.test(panneau.innerHTML),
@@ -934,6 +945,29 @@ poserDictee('gère le silence', false);
 poserDictee('gère le silence dans config', true);
 dire(champ.value === 'Renomme la variable qui gère le silence dans config',
      'intermediaires grandissants : aucune repetition non plus — "' + champ.value + '"');
+
+// ---- reprendre une conversation recharge son historique ----------------------------------
+titre('changer de conversation vide le flux avant de recharger');
+// Sans le vidage, les deux conversations s empilent dans le meme flux : on ne sait plus
+// laquelle on lit, ni a laquelle appartient un message qu on relit trois jours plus tard.
+// Et les compteurs additionneraient les deux.
+emettre({ genre: 'toi', texte: 'un message de la conversation precedente' });
+champ.value = 'un brouillon qui appartient a l ancienne'; champ.oninput();
+dire(flux.children.length > 0, 'le flux porte des lignes avant la bascule');
+emettre({ genre: 'vider' });
+dire(flux.children.length === 0, 'le vidage efface tout le flux');
+dire(champ.value === '', 'et la barre aussi : son brouillon appartenait a l autre conversation');
+
+// Puis l historique de la NOUVELLE arrive, marque comme du passe.
+emettre({ genre: 'reprise', texte: '↑ historique rechargé — 763 lignes' });
+emettre({ genre: 'toi', texte: 'une question de la conversation reprise', passe: true });
+emettre({ genre: 'voix', texte: 'et sa reponse', passe: true });
+emettre({ genre: 'reprise', texte: '↓ ici commence le direct' });
+dire(flux.children.length >= 3, 'l historique de la nouvelle conversation est rejoue');
+dire(/historique rechargé/.test(flux.textContent),
+     'et une ligne dit combien de lignes ont ete rechargees');
+dire(/ici commence le direct/.test(flux.textContent),
+     'avec une frontiere claire entre le passe et maintenant');
 
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

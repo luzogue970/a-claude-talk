@@ -25,8 +25,8 @@ const page = bloc[1].replace(/^brancher\(\);$/m, "");
 const STUB = `
 const __cache = {};
 function elem(nom) {
-  return {
-    nom, className: "", textContent: "", innerHTML: "", title: "", value: "",
+  const noeud = {
+    nom, className: "", _texte: "", innerHTML: "", title: "", value: "",
     disabled: false, hidden: false, placeholder: "", style: {}, children: [],
     dataset: {}, _q: {},
     appendChild(c) { this.children.push(c); return c; },
@@ -118,6 +118,24 @@ function elem(nom) {
       if (trouves.length) return trouves[0];
       return this._q[sel] || (this._q[sel] = elem(nom + sel));
     },
+    // Dans un vrai DOM, LIRE textContent concatene le texte des descendants et l ECRIRE
+    // remplace tous les enfants. Le talon le gardait comme une chaine ordinaire : vider un
+    // conteneur ne vidait rien, et chercher un mot dans un flux ne trouvait jamais ce que
+    // les lignes portaient. Deux tests passaient donc pour de mauvaises raisons.
+    get textContent() {
+      // Poser innerHTML cree de vrais noeuds de texte dans un navigateur : leur contenu est
+      // donc lisible par textContent. Sans ce depouillement, chercher un mot dans le flux ne
+      // trouvait jamais rien — toutes les lignes de la page sont construites en innerHTML.
+      const depuisHtml = this.innerHTML
+        ? this.innerHTML.split("<").map(m => m.slice(m.indexOf(">") + 1)).join("")
+        : "";
+      return this._texte + depuisHtml
+        + this.children.map(c => c.textContent || "").join("");
+    },
+    set textContent(v) {
+      this._texte = v == null ? "" : String(v);
+      if (this._texte === "") this.children.length = 0;
+    },
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
@@ -126,6 +144,7 @@ function elem(nom) {
                                      : (v ? this._s.add(c) : this._s.delete(c)); },
     },
   };
+  return noeud;
 }
 // Les ids reellement presents dans le balisage. Un getElementById qui inventait un element
 // pour n'importe quel id masquait les chemins de creation paresseuse : le code croyait avoir

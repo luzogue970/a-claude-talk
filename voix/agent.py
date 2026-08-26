@@ -149,6 +149,10 @@ class Voix(Agent):
         # rien ne part tout seul par-dessus. C'est aussi ce qu'on a promis en affichant
         # « relis, puis Entree » — une promesse que la version precedente ne tenait pas.
         self._retenu_en_attente = False
+        # Quand la parole a ete entendue pour la derniere fois. Sert a la veille : micro
+        # ouvert, l'audio part en continu vers le nuage, donc un micro oublie ouvert coute
+        # exactement comme un micro qu'on utilise.
+        self._derniere_parole: float = time.monotonic()
         # Les pourcentages de fenêtre au départ du tour, pour pouvoir dire à l'arrivée de
         # combien ils ont bougé.
         self._quota_depart: dict[str, float] = {}
@@ -825,9 +829,14 @@ async def entrypoint(ctx: JobContext):
         tableau.publier("reprise", texte="↓ ici commence le direct")
         log.info("historique rejoué : %d lignes", len(evenements))
 
-    if config.REPRENDRE:
+    # La session qu'on a reellement reprise — demandee a la main OU choisie toute seule.
+    # Ne tester que config.REPRENDRE laissait la page VIDE sur une reprise automatique : le
+    # contexte de Claude etait complet, mais le flux ne montrait rien, ce qui donnait
+    # exactement l'impression d'une conversation neuve qu'on cherchait a corriger.
+    reprise_initiale = config.REPRENDRE or (worker.reprise or {}).get("session_id")
+    if reprise_initiale:
         # En tâche de fond : lire huit cents messages ne doit pas retarder le premier mot.
-        asyncio.create_task(_rejouer_historique(config.REPRENDRE))
+        asyncio.create_task(_rejouer_historique(reprise_initiale))
 
     # Quel moteur transcrit, et lesquels sont disponibles. Publie tot : c'est la premiere
     # question qu'on se pose quand une transcription est mauvaise.
@@ -1009,6 +1018,7 @@ async def entrypoint(ctx: JobContext):
             # une pause pour reflechir ne coupe plus la phrase en deux messages.
             if config.TOUR_MANUEL:
                 agent.fermer_fenetre(publier=False)
+            agent._derniere_parole = time.monotonic()
             tableau.publier("ecoute", actif=False, parle=True)
         elif str(ev.old_state) == "speaking":
             # La transcription commence ici. Avec un moteur sans texte en direct, c'est la
@@ -1120,7 +1130,17 @@ async def entrypoint(ctx: JobContext):
             else:
                 dit = await worker.changer_conversation(sid)
                 if dit:
+                    # Vider AVANT de rejouer : sans ça les deux conversations s'empilent dans
+                    # le meme flux et on ne sait plus laquelle on lit — ni a laquelle
+                    # appartient un message qu'on relit trois jours plus tard.
+                    tableau.vider()
+                    tableau.publier("vider")
                     tableau.publier("ordre", texte=dit)
+                    # Le contexte de Claude est complet des la bascule ; c'est la PAGE qui
+                    # restait vide. On relit donc ce que Claude Code a ecrit sur disque, comme
+                    # au demarrage d'une reprise — sinon reprendre depuis la page donnerait
+                    # moins que reprendre depuis le terminal, pour la meme action.
+                    asyncio.create_task(_rejouer_historique(sid))
                     publier_conversations()
                 else:
                     tableau.publier("log", niveau="WARNING", source="session",
@@ -1301,6 +1321,40 @@ async def entrypoint(ctx: JobContext):
                              "micro": s.get("micro", False), "depuis": s.get("depuis")}
                             for s in pupitre.sessions()])
 
+    async def veiller_micro():
+        """Couper le micro apres un silence prolonge, et le dire.
+
+        Le cout qu'on evite est reel et invisible : micro ouvert, l'audio part en CONTINU vers
+        le moteur de reconnaissance — chaque trame, sans filtre. Une pause dejeuner micro
+        ouvert consomme une heure de quota sans qu'une seule phrase ait ete dite, et rien ne
+        le signale avant que le palier soit vide.
+
+        Deux precautions pour que ça ne devienne pas une gene :
+
+        - le compteur repart des qu'une parole est DETECTEE, donc reflechir a voix haute avec
+          des pauses de trente secondes ne declenche rien ;
+        - la coupure est annoncee et le chemin du retour est nomme. Un micro qui se ferme sans
+          rien dire serait pire que le probleme : on parlerait dans le vide sans comprendre.
+        """
+        if not config.MICRO_VEILLE_S:
+            return
+        while True:
+            await asyncio.sleep(15)
+            if not agent.micro_voulu:
+                continue
+            silence = time.monotonic() - agent._derniere_parole
+            if silence < config.MICRO_VEILLE_S:
+                continue
+            agent.micro_voulu = False
+            agent.appliquer_micro()
+            minutes = int(silence // 60)
+            tableau.publier("ordre",
+                            texte=(f"micro mis en veille après {minutes} min de silence — "
+                                   f"il consommait du quota pour rien. "
+                                   f"Touche m ou le bouton pour le rouvrir."))
+            log.info("micro en veille apres %d min de silence", minutes)
+            agent._derniere_parole = time.monotonic()
+
     async def surveiller_pupitre():
         """Suivre le bail, et le registre.
 
@@ -1330,6 +1384,7 @@ async def entrypoint(ctx: JobContext):
     # demarrage — une fonction imbriquee n'existe qu'une fois son « def » execute.
     publier_conversations()
     asyncio.create_task(surveiller_pupitre())
+    asyncio.create_task(veiller_micro())
     asyncio.create_task(agent.pomper_evenements())
     asyncio.create_task(quota.boucle())
     if config.STT_ENGINE in ("auto", "local"):

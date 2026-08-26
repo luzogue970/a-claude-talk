@@ -320,5 +320,39 @@ dire(impose[0] == "azure",
 
 vider()
 
+# --- le fichier de secrets, tel que l'APPLICATION le lit --------------------------------
+# Le piege vecu : la cle AssemblyAI etait bien dans le fichier, ecrite « export CLE="..." »,
+# et le tableau affichait « pas de cle ». `partition("=")` fabriquait une variable nommee
+# « export ASSEMBLYAI_API_KEY ». Une cle ignoree en silence est le pire des echecs — on la
+# cherche partout sauf la ou elle est.
+#
+# Et la lecon de methode, plus importante que le correctif : ma verification l'avait masque
+# parce que je chargeais le fichier avec `source` en bash, qui comprend `export`. Verifier
+# autrement que l'application ne verifie rien.
+print("\n=== le fichier de secrets se lit dans tous ses formats ===")
+import tempfile as _tf
+_boite = Path(_tf.mkdtemp(prefix="secrets-"))
+_f = _boite / "secrets.env"
+_f.write_text("# un commentaire\n"
+              "NU=valeur-nue\n"
+              "export AVEC=valeur-export\n"
+              'export GUILL="entre guillemets"\n'
+              "AVEC_ESPACES = espaces autour \n"
+              "VIDE=\n", encoding="utf-8")
+import config as _cfg
+_vrai = _cfg.SECRETS
+_cfg.SECRETS = _f
+for _k in ("NU", "AVEC", "GUILL", "AVEC_ESPACES", "VIDE"):
+    os.environ.pop(_k, None)
+_cfg._load_secrets()
+_cfg.SECRETS = _vrai
+for _k, _attendu in (("NU", "valeur-nue"), ("AVEC", "valeur-export"),
+                     ("GUILL", "entre guillemets"), ("AVEC_ESPACES", "espaces autour"),
+                     ("VIDE", "")):
+    dire(os.environ.get(_k) == _attendu,
+         f"« {_k} » lu correctement : {os.environ.get(_k)!r}")
+dire("export AVEC" not in os.environ,
+     "et aucune variable fantome nommee « export ... » n'est creee")
+
 print(f"\n  {ok} ok, {ko} echec(s)")
 sys.exit(1 if ko else 0)
