@@ -300,7 +300,15 @@ def compte_messages(sid: str, dossier: str | None = None) -> int:
 # Combien de messages de l'historique on rejoue au maximum sur le tableau. Une conversation
 # de soixante tours en compte huit cents : tout rejouer remplirait la memoire de la page et
 # chasserait la session en cours. On garde donc les plus RECENTS, et on dit ce qu'on a laisse.
-REJEU_MAX = 400
+# Assez pour une conversation de soixante tours rejouee ENTIEREMENT : mesure, elle produit
+# environ 1 200 lignes. Tronquer au milieu d'une reprise donnerait l'impression que la
+# conversation commence en cours de route.
+REJEU_MAX = 2000
+
+# Les sorties d'outils completes pesaient 4,76 Mo sur cette meme session — 85 % du volume,
+# pour des sorties de `cat` vieilles de trois semaines. Ce qui compte en relecture est qu'un
+# outil a rendu quelque chose, et son debut.
+RESULTAT_MAX = 400
 
 
 def rejouer_session(sid: str, dossier: str | None = None,
@@ -311,14 +319,19 @@ def rejouer_session(sid: str, dossier: str | None = None,
     VIDE : le tableau vit en memoire du processus, et un nouveau processus part de rien. On
     relit donc ce que Claude Code a ecrit sur disque, et on le republie.
 
-    La forme compte autant que le contenu. Une premiere version publiait chaque appel d'outil
-    comme sa propre ligne : sur soixante tours, ca faisait 247 lignes d'outils qui enterraient
-    la conversation sous un mur de « Bash cat », « Read x.py ». Ce n'est pas ce qu'on veut
-    relire.
+    **On rejoue tout ce qui a du contenu**, ligne par ligne comme en direct : ce que tu as dit,
+    la reflexion, ce qu'il a ecrit, chaque appel d'outil avec son resultat, et le bilan du
+    tour. Les filtres du tableau decident ensuite de ce qui s'affiche — c'est leur role, et ca
+    evite d'avoir a choisir a ta place.
 
-    Un tour est donc rendu comme il se lit : ce que tu as dit, ce que Claude a repondu, puis
-    UNE ligne recapitulant ses actions. La reflexion et les sorties d'outils sont ecartees —
-    elles font le gros des huit cents messages et ne se relisent pas.
+    Deux exceptions, mesurees et non supposees sur une session de soixante tours :
+
+    - **La reflexion est ecartee** parce qu'elle est VIDE sur disque : 349 blocs `thinking`
+      pour 0 Ko de contenu. Les rejouer ajouterait 349 lignes blanches.
+    - **Les sorties d'outils sont tronquees** a `RESULTAT_MAX` caracteres. Completes, elles
+      pesaient 4,76 Mo — 85 % du volume total — pour des sorties de `cat` vieilles de trois
+      semaines. Ce qui compte en relecture est qu'un outil a rendu quelque chose, et son
+      debut ; la trace complete vit dans la session Claude Code, qui est intacte.
 
     Renvoie (evenements, nombre d'evenements ecartes par la limite).
     """
@@ -330,21 +343,17 @@ def rejouer_session(sid: str, dossier: str | None = None,
     except Exception:
         return [], 0
 
-    from worker import _cible   # meme rendu que les lignes en direct
+    from worker import _cible
 
     evenements: list[dict] = []
-    outils: list[str] = []      # les actions du tour en cours
+    outils: list[str] = []      # les actions du tour en cours, pour son bilan
 
     def clore_tour():
-        """La ligne de bilan, une seule par tour, comme en direct."""
         if not outils:
             return
-        apercu = ", ".join(outils[:8]) + (" …" if len(outils) > 8 else "")
-        evenements.append({
-            "genre": "tour",
-            "actions": len(outils),
-            "texte": apercu,
-        })
+        apercu_actions = ", ".join(outils[:8]) + (" …" if len(outils) > 8 else "")
+        evenements.append({"genre": "tour", "actions": len(outils),
+                           "texte": apercu_actions})
         outils.clear()
 
     for m in messages:
@@ -355,30 +364,46 @@ def rejouer_session(sid: str, dossier: str | None = None,
         contenu = charge.get("content")
 
         if role == "user":
-            # Une chaine : c'est toi, et un nouveau tour commence. Une liste : ce sont des
-            # resultats d'outils, qui n'ouvrent pas de tour.
             if isinstance(contenu, str) and contenu.strip():
                 clore_tour()
                 evenements.append({"genre": "toi", "texte": contenu.strip()})
+            elif isinstance(contenu, list):
+                for bloc in contenu:
+                    if not isinstance(bloc, dict) or bloc.get("type") != "tool_result":
+                        continue
+                    brut = bloc.get("content")
+                    if isinstance(brut, list):
+                        brut = " ".join(b.get("text", "") for b in brut
+                                        if isinstance(b, dict))
+                    texte = str(brut or "").strip()
+                    if not texte:
+                        continue
+                    coupe = len(texte) > RESULTAT_MAX
+                    evenements.append({
+                        "genre": "resultat",
+                        "texte": texte[:RESULTAT_MAX] + (" […]" if coupe else ""),
+                        "id": bloc.get("tool_use_id"),
+                        "echec": bool(bloc.get("is_error")),
+                        "tronque": coupe,
+                    })
             continue
 
         if role != "assistant" or not isinstance(contenu, list):
             continue
-        # Un message d'assistant peut porter plusieurs blocs de texte : on les recolle en un
-        # seul paragraphe plutot qu'en autant de lignes.
-        morceaux = []
         for bloc in contenu:
             if not isinstance(bloc, dict):
                 continue
             sorte = bloc.get("type")
             if sorte == "text" and (bloc.get("text") or "").strip():
-                morceaux.append(bloc["text"].strip())
+                evenements.append({"genre": "texte", "texte": bloc["text"].strip()})
             elif sorte == "tool_use":
                 nom = bloc.get("name") or "?"
                 cible = _cible(nom, bloc.get("input") or {})
                 outils.append(f"{nom} {cible}".strip())
-        if morceaux:
-            evenements.append({"genre": "texte", "texte": "\n\n".join(morceaux)})
+                # Une ligne par appel, comme en direct, avec son identifiant : c'est lui qui
+                # rattache le resultat a l'action.
+                evenements.append({"genre": "outil", "nom": nom, "cible": cible,
+                                   "id": bloc.get("id")})
 
     clore_tour()
     ecartes = max(0, len(evenements) - limite)

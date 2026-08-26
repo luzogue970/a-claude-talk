@@ -619,11 +619,16 @@ async def entrypoint(ctx: JobContext):
                             texte=f"aucun historique lisible pour la session {sid}")
             return
         tableau.publier("reprise", texte=(
-            f"reprise de {sid} — {len(evenements)} lignes rechargées"
+            f"↑ historique rechargé — {len(evenements)} lignes"
             + (f", {ecartes} plus anciennes écartées" if ecartes else "")))
-        for e in evenements:
+        # Par lots, avec une pause : un rejeu complet fait plus de mille lignes, et tout
+        # pousser d'un trait remplit la file du client jusqu'à ce qu'elle jette ses plus
+        # anciens messages — on perdrait le début de la conversation qu'on vient de recharger.
+        for i, e in enumerate(evenements):
             tableau.publier(e.pop("genre"), passe=True, **e)
-        tableau.publier("reprise", texte="fin de l'historique — la suite est en direct")
+            if i % 100 == 99:
+                await asyncio.sleep(0.05)
+        tableau.publier("reprise", texte="↓ ici commence le direct")
         log.info("historique rejoué : %d lignes", len(evenements))
 
     if config.REPRENDRE:

@@ -173,10 +173,11 @@ const cols = r.lignes[0].colonnes.split(/\s+/);
 dire(cols.length === 4, `la grille garde ses quatre colonnes : ${r.lignes[0].colonnes}`);
 dire(parseFloat(cols[3]) > 400, `la quatrième colonne est celle du texte (${cols[3]})`);
 
-// une ligne passee doit rester lisible : 0,7 donne 5,4:1 sur le texte de Claude, 0,55 : 3,8:1
+// Le passe n'est PAS grise : c'est la meme conversation, on la reprend. Un affaiblissement
+// visuel donnait l'impression de lire une archive alors qu'on relit son propre travail.
 const passees = r.lignes.filter(l => l.passe);
-dire(passees.length > 0 && passees.every(l => l.opacite >= 0.65),
-     `les lignes rejouées restent lisibles (opacité ${passees[0]?.opacite})`);
+dire(passees.length > 0 && passees.every(l => l.opacite === 1),
+     `les lignes rejouées ont la même intensité que le direct (opacité ${passees[0]?.opacite})`);
 
 // le champ ne montre pas de barre de defilement quand il n'en a pas besoin
 dire(r.champ.debordement === "hidden",

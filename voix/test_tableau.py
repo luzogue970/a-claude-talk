@@ -342,79 +342,14 @@ def le_plafond_suit_le_plancher():
              f"plancher {plancher:g} s -> plafond {plafond:g} s (strictement au-dessus)")
 
 
-def le_rejeu_ne_garde_que_ce_qui_se_relit():
-    print("\n=== rejeu d'historique ===")
-    import journal
-
-    faux = [
-        {"role": "user", "content": "ma question"},
-        {"role": "assistant", "content": [
-            {"type": "thinking", "thinking": "des pages et des pages"},
-            {"type": "text", "text": "voila ce que j'ai fait"},
-            {"type": "tool_use", "name": "Read", "input": {"file_path": "/x/config.py"}},
-        ]},
-        {"role": "user", "content": [{"type": "tool_result", "content": "beaucoup de sortie"}]},
-    ]
-
-    class M:
-        def __init__(self, d):
-            self.message = d
-
-    import unittest.mock as mock
-    with mock.patch("claude_agent_sdk.get_session_messages",
-                    return_value=[M(d) for d in faux]):
-        evs, ecartes = journal.rejouer_session("sid-factice", "/x")
-    genres = [e["genre"] for e in evs]
-    dire(genres == ["toi", "texte", "tour"],
-         f"un tour se lit : ce que tu dis, ce qu'il repond, ses actions -> {genres}")
-    dire(all("thinking" not in str(e) for e in evs), "la reflexion est ecartee")
-    dire(not any(e["genre"] == "resultat" for e in evs), "les sorties d'outils sont ecartees")
-    dire(evs[2]["actions"] == 1 and "config.py" in evs[2]["texte"],
-         f"les actions sont recapitulees en UNE ligne : {evs[2]['texte']!r}")
-    dire(ecartes == 0, "rien d'ecarte par la limite sur un petit historique")
-
-    # deux blocs de texte dans un meme message ne doivent pas faire deux lignes
-    deux = [
-        {"role": "user", "content": "question"},
-        {"role": "assistant", "content": [
-            {"type": "text", "text": "premier bloc"},
-            {"type": "tool_use", "name": "Read", "input": {"file_path": "/a.py"}},
-            {"type": "text", "text": "second bloc"},
-        ]},
-    ]
-    with mock.patch("claude_agent_sdk.get_session_messages",
-                    return_value=[M(d) for d in deux]):
-        evs2, _ = journal.rejouer_session("sid", "/x")
-    lignes_texte = [e for e in evs2 if e["genre"] == "texte"]
-    dire(len(lignes_texte) == 1, f"deux blocs -> une seule ligne de texte : {len(lignes_texte)}")
-    dire("premier bloc" in lignes_texte[0]["texte"]
-         and "second bloc" in lignes_texte[0]["texte"], "et les deux sont conserves")
-
-    # plusieurs tours : chacun son bilan
-    trois = []
-    for i in range(3):
-        trois.append({"role": "user", "content": f"question {i}"})
-        trois.append({"role": "assistant", "content": [
-            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
-            {"type": "text", "text": f"reponse {i}"},
-        ]})
-    with mock.patch("claude_agent_sdk.get_session_messages",
-                    return_value=[M(d) for d in trois]):
-        evs3, _ = journal.rejouer_session("sid", "/x")
-    dire(sum(1 for e in evs3 if e["genre"] == "tour") == 3,
-         "trois tours -> trois bilans, pas un seul agrege")
-    dire([e["genre"] for e in evs3[:3]] == ["toi", "texte", "tour"],
-         f"et l'ordre est celui de la lecture : {[e['genre'] for e in evs3[:3]]}")
-
-
 def tout_genre_affiche_a_un_filtre():
     """Un genre qui arrive dans le flux DOIT etre declare dans une famille de filtres.
 
-    Sinon sa ligne est creee avec `display:none` (parce qu'il n'est pas dans les actifs) et
-    aucune case ne peut la montrer : elle est invisible pour toujours. C'est arrive au genre
+    Sinon sa ligne est creee avec `display:none` — il n'est pas dans les actifs — et aucune
+    case ne peut la montrer : elle est invisible pour toujours. C'est arrive au genre
     « session », publie par le worker et absent des libelles.
 
-    On lit les deux cotes dans la source : ce qui est publie d'un cote, ce qui est declare de
+    On lit les DEUX cotes dans la source : ce qui est publie d'un cote, ce qui est declare de
     l'autre. Un test qui recopierait la liste ne verrait jamais l'oubli.
     """
     print("\n=== chaque genre affiche a un filtre ===")
@@ -427,7 +362,7 @@ def tout_genre_affiche_a_un_filtre():
 
     page = (racine / "tableau.py").read_text(encoding="utf-8")
     declares = set(re.findall(r'\{\s*g:\s*"([a-z_]+)"', page))
-    # Les genres traites avant `ajouter()` n'apparaissent jamais comme ligne du flux : ils
+    # Les genres traites avant `ajouter()` ne deviennent jamais une ligne du flux : ils
     # pilotent l'interface au lieu de s'y afficher.
     hors_flux = {
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
@@ -444,6 +379,72 @@ def tout_genre_affiche_a_un_filtre():
     dire(not inutiles,
          "aucun filtre pour un genre jamais publie"
          + (f" — EN TROP : {inutiles}" if inutiles else ""))
+
+
+def le_rejeu_ne_garde_que_ce_qui_se_relit():
+    print("\n=== rejeu d'historique ===")
+    import journal
+
+    long = "x" * 5000
+    faux = [
+        {"role": "user", "content": "ma question"},
+        {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": ""},          # vide sur disque, mesure
+            {"type": "text", "text": "voila ce que j'ai fait"},
+            {"type": "tool_use", "id": "t1", "name": "Read",
+             "input": {"file_path": "/x/config.py"}},
+        ]},
+        {"role": "user", "content": [
+            {"tool_use_id": "t1", "type": "tool_result", "content": long}]},
+    ]
+
+    class M:
+        def __init__(self, d):
+            self.message = d
+
+    import unittest.mock as mock
+    with mock.patch("claude_agent_sdk.get_session_messages",
+                    return_value=[M(d) for d in faux]):
+        evs, ecartes = journal.rejouer_session("sid-factice", "/x")
+
+    genres = [e["genre"] for e in evs]
+    dire(genres == ["toi", "texte", "outil", "resultat", "tour"],
+         f"tout ce qui a du contenu est rejoue, ligne par ligne : {genres}")
+    dire(not any(e["genre"] == "pensee" for e in evs),
+         "la reflexion est ecartee : elle est VIDE sur disque (349 blocs, 0 Ko mesures)")
+
+    res = next(e for e in evs if e["genre"] == "resultat")
+    dire(len(res["texte"]) <= journal.RESULTAT_MAX + 8,
+         f"une sortie d'outil est tronquee : {len(res['texte'])} caracteres")
+    dire(res.get("tronque") is True, "et la troncature est signalee")
+    dire(res.get("id") == "t1",
+         "le resultat garde l'identifiant qui le rattache a son appel")
+
+    outil = next(e for e in evs if e["genre"] == "outil")
+    dire(outil.get("id") == "t1" and outil["cible"] == "config.py",
+         f"l'appel garde son identifiant et sa cible : {outil}")
+
+    bilan = next(e for e in evs if e["genre"] == "tour")
+    dire(bilan["actions"] == 1 and "config.py" in bilan["texte"],
+         f"le bilan du tour recapitule quand meme : {bilan['texte']!r}")
+    dire(ecartes == 0, "rien d'ecarte par la limite sur un petit historique")
+
+    # plusieurs tours : chacun son bilan, dans l'ordre de lecture
+    trois = []
+    for i in range(3):
+        trois.append({"role": "user", "content": f"question {i}"})
+        trois.append({"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"a{i}", "name": "Bash",
+             "input": {"command": "ls"}},
+            {"type": "text", "text": f"reponse {i}"},
+        ]})
+    with mock.patch("claude_agent_sdk.get_session_messages",
+                    return_value=[M(d) for d in trois]):
+        evs3, _ = journal.rejouer_session("sid", "/x")
+    dire(sum(1 for e in evs3 if e["genre"] == "tour") == 3,
+         "trois tours -> trois bilans, pas un seul agrege")
+    dire([e["genre"] for e in evs3[:4]] == ["toi", "outil", "texte", "tour"],
+         f"et l'ordre est celui de la lecture : {[e['genre'] for e in evs3[:4]]}")
 
 
 async def principal():

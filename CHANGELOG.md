@@ -7,6 +7,32 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.10.0] — 2026-08-26
+
+### Modifie — l'historique rejoue n'est plus grise, et garde tout
+
+Le grise donnait l'impression de lire une archive alors qu'on relit son propre travail. La
+classe `passe` reste, mais pour le COMPORTEMENT — aucun indicateur ne s'allume, le compteur
+d'actions ne gonfle pas — jamais pour l'apparence.
+
+- Tout ce qui a du contenu est rejoue ligne par ligne : chaque appel d'outil AVEC son
+  resultat, ce que tu as dit, ce qu'il a ecrit, le bilan de chaque tour. Les filtres du
+  tableau decident de ce qui s'affiche : c'est leur role.
+- Une frontiere explicite pleine largeur remplace la nuance de gris : « ↑ historique
+  rechargé » et « ↓ ici commence le direct ».
+- Deux exceptions MESUREES : la reflexion est ecartee parce qu'elle est vide sur disque (349
+  blocs `thinking`, 0 Ko), et les sorties d'outils sont tronquees a 400 caracteres parce que
+  completes elles pesaient 4,76 Mo, soit 85 % du volume, pour des sorties de `cat` vieilles
+  de trois semaines. La troncature est signalee.
+- 5,6 Mo -> 299 Ko pour 1 242 lignes, envoyees par lots : tout pousser d'un trait remplissait
+  la file du client jusqu'a ce qu'elle jette ses plus anciens messages, et on perdait le debut
+  de la conversation qu'on venait de recharger.
+
+### Ajoute — le titre de la fenetre porte le projet
+
+`claude-talk — insnap`. Avec trois conversations ouvertes, trois onglets nommes
+« claude-talk » sont indiscernables — et c'est le titre qu'on lit dans la barre des taches.
+
 ## [1.9.0] — 2026-08-26
 
 ### Modifie — `vvconv` se limite au dossier courant et a ses descendants

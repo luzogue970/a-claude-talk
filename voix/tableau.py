@@ -24,7 +24,7 @@ log = logging.getLogger("voix.tableau")
 
 # Assez pour contenir un historique rejoue (jusqu'a 400 lignes) SANS chasser la session en
 # cours : une page ouverte en cours de route doit montrer les deux.
-MEMOIRE = 1600
+MEMOIRE = 3000
 
 
 class Tableau:
@@ -120,10 +120,15 @@ class Tableau:
         self.clients[ws] = file
         ecrivain = asyncio.create_task(self._ecrivain(ws, file))
         try:
-            await ws.send_str(json.dumps(
-                {"genre": "_histoire", "evenements": list(self.histoire)},
-                ensure_ascii=False, default=str,
-            ))
+            # Par lots de 200 : une reprise complete fait plus de mille evenements, et une
+            # trame WebSocket unique de plusieurs centaines de kilo-octets se heurte aux
+            # limites du navigateur comme d'aiohttp. Le client les traite dans l'ordre.
+            passe = list(self.histoire)
+            for i in range(0, len(passe) or 1, 200):
+                await ws.send_str(json.dumps(
+                    {"genre": "_histoire", "evenements": passe[i:i + 200]},
+                    ensure_ascii=False, default=str,
+                ))
             async for message in ws:
                 if message.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
@@ -516,9 +521,11 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
 .g-erreur .badge{color:var(--erreur)} .g-erreur .corps{color:#ffb3ad}
 /* Le passe rejoue est lisible mais visiblement passe : sans ca, relire soixante tours
    d'historique donne l'impression que tout vient de se produire. */
-/* Le passé rejoué est lisible mais visiblement passé. On ne descend pas plus bas que 0,7 :
-   à 0,55 le texte de Claude tombait à 3,8:1 de contraste, sous le minimum lisible. */
-.ev.passe{opacity:.7}
+/* Le passé rejoué n'est PAS grisé : c'est la même conversation, on la reprend. Un
+   affaiblissement visuel donnait l'impression de lire une archive alors qu'on relit son
+   propre travail. La classe reste, mais pour le COMPORTEMENT — aucun indicateur ne
+   s'allume, le compteur d'actions ne gonfle pas — jamais pour l'apparence.
+   Ce qui sépare l'avant du maintenant est une frontière explicite, pas une nuance de gris. */
 /* PAS de display:none sur le pip d'une ligne passée. Dans une grille, display:none retire
    l'element du flux : le corps glissait alors dans la colonne de 14 px prévue pour
    l'indicateur, et 563 caracteres dans 14 px donnent UN CARACTERE PAR LIGNE — des lignes
@@ -526,9 +533,14 @@ main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
    il suffit de le laisser occuper sa cellule. */
 .g-attente .badge{color:var(--faible)} .g-attente .corps{color:#8b949e;font-size:12px}
 .g-dictee .badge{color:var(--outil)} .g-dictee .corps{color:#e8d9a8}
-.g-reprise{border-bottom:1px solid var(--tour)}
-.g-reprise .badge{color:var(--tour)}
-.g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.02em}
+/* « Voilà l'historique, voilà maintenant. » Une ligne pleine largeur, pas une ligne de flux
+   parmi les autres : c'est un repère, il doit se voir sans être cherché. */
+.ev.g-reprise{grid-template-columns:62px 1fr;gap:12px;padding:14px 6px 12px;
+  border-bottom:1px solid var(--tour);border-top:1px solid var(--tour);
+  background:#101a1c;margin:10px -6px}
+.g-reprise .badge,.g-reprise .pip{display:none}
+.g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.04em;
+  text-transform:uppercase;font-weight:650}
 .apres{color:#5a636e;margin-left:9px;font-size:11px}
 .g-log .badge{color:#4d5560} .g-log .corps{color:#6e7681;font-size:12px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -856,10 +868,20 @@ const ech = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;"
 // La configuration n'est pas une ligne du flux : c'est l'en-tete de la session. Elle reste
 // en haut, non filtrable, parce qu'en bypassPermissions c'est le seul endroit qui dit
 // noir sur blanc que plus rien ne sera demande.
+// Le titre de la fenêtre porte le projet. Avec trois conversations ouvertes, trois onglets
+// nommés « claude-talk » sont indiscernables — et c'est le titre qu'on lit dans la barre des
+// tâches, pas le contenu de la page.
+function nommerFenetre(valeurs) {
+  const chemin = (valeurs || {})["projet"] || "";
+  const nom = chemin.replace(/\/+$/, "").split("/").filter(Boolean).pop();
+  if (nom) document.title = `claude-talk — ${nom}`;
+}
+
 function carteConfig(e) {
   const champs = Object.entries(e.valeurs || {}).filter(([k]) => !k.startsWith("_"));
   const alerte = e.valeurs?._alerte
     ? `<span class="alerte">⚠ ${ech(e.valeurs._alerte)}</span>` : "";
+  nommerFenetre(e.valeurs);
   const carte = document.createElement("section");
   carte.className = "conf";
   carte.innerHTML = `<div class="conf-titre">configuration ${alerte}</div><dl>`

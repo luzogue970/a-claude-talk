@@ -541,22 +541,39 @@ donc le contexte revient complet. D'où deux conséquences visibles :
 donc un nouveau processus partait de zéro : le contexte de Claude était complet, mais l'écran
 était vide. On relit maintenant ce que Claude Code a écrit sur disque et on le republie.
 
-**La forme compte autant que le contenu.** Une première version publiait chaque appel d'outil
-comme sa propre ligne : sur soixante tours, 247 lignes de `Bash cat` et `Read x.py` qui
-enterraient la conversation sous un mur de bruit. Ce n'est pas ce qu'on relit.
+**Tout ce qui a du contenu est rejoué**, ligne par ligne comme en direct : ce que tu as dit,
+ce qu'il a écrit, **chaque appel d'outil avec son résultat**, et le bilan de chaque tour. Les
+filtres du tableau décident ensuite de ce qui s'affiche — c'est leur rôle, et ça évite de
+choisir à ta place.
 
-Un tour est donc rendu comme il se lit : ce que tu as dit, ce que Claude a répondu, puis **une
-seule ligne** récapitulant ses actions (`12 actions · Read config.py, Bash npm test, …`).
-Plusieurs blocs de texte d'un même message sont recollés en un paragraphe au lieu d'autant de
-lignes. La réflexion et les sorties d'outils sont écartées : elles font le gros des huit cents
-messages et ne se relisent pas.
+Le passé **n'est pas grisé** : c'est la même conversation, on la reprend. Ce qui sépare l'avant
+du maintenant est une frontière explicite, pleine largeur :
 
-Pour cette conversation de soixante tours, ça donne **182 lignes** — contre 382 pour la
-première version, et 813 messages bruts.
+```
+↑ historique rechargé — 1 242 lignes
+   …
+↓ ici commence le direct
+```
+
+Deux exceptions, mesurées sur une session de soixante tours et non supposées :
+
+- **La réflexion est écartée** parce qu'elle est **vide sur disque** : 349 blocs `thinking`
+  pour 0 Ko de contenu. Les rejouer ajouterait 349 lignes blanches.
+- **Les sorties d'outils sont tronquées** à 400 caractères. Complètes, elles pesaient
+  **4,76 Mo** — 85 % du volume — pour des sorties de `cat` vieilles de trois semaines. La
+  troncature est signalée, et la trace intégrale vit dans la session Claude Code, intacte.
+
+Le rejeu passe de 5,6 Mo à **299 Ko pour 1 242 lignes**, envoyées par lots : tout pousser d'un
+trait remplirait la file du client jusqu'à ce qu'elle jette ses plus anciens messages, et on
+perdrait le début de la conversation qu'on vient de recharger.
 
 Une différence à connaître : ce que Claude a dit **à voix haute** n'est pas rejoué. C'est une
 réécriture produite par le porte-parole, qui ne vit pas dans la session Claude Code. Le texte
 écrit porte la même substance, et le transcript Markdown garde la version parlée.
+
+**Le titre de la fenêtre porte le projet** — `claude-talk — insnap`. Avec trois conversations
+ouvertes, trois onglets nommés `claude-talk` sont indiscernables, et c'est le titre qu'on lit
+dans la barre des tâches, pas le contenu de la page.
 
 Les lignes du passé sont grisées et ne portent pas d'indicateur : un outil rejoué a fini il y
 a des heures, et le compteur d'actions de la session en cours ne doit pas gonfler du passé.
