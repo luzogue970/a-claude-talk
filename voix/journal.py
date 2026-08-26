@@ -287,6 +287,11 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
                 "fichiers": [],
                 "etat": lc.get("etat"),
                 "modele": lc.get("modele"),
+                # Pose des la creation : il n'etait ecrit que dans la branche « plus recent
+                # que ce qu'on avait », jamais franchie pour le premier lancement du groupe.
+                # La cle manquait donc sur toute conversation d'un seul lancement.
+                "fichier": lc["fichier"],
+                "pid": lc.get("pid"),
                 "ici": lc.get("ici"),
                 "sous": lc.get("sous"),
             }
@@ -302,6 +307,7 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
             g["etat"] = lc.get("etat")       # l'etat du lancement le plus recent
             g["modele"] = lc.get("modele")
             g["fichier"] = lc["fichier"]     # ou lire la suite
+            g["pid"] = lc.get("pid")
         if lc.get("chemin") and not g["chemin"]:
             g["chemin"] = lc["chemin"]
         g["ici"] = g["ici"] or lc.get("ici")
@@ -315,6 +321,39 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
                      key=lambda g: (bool(g.get("ici")), bool(g.get("sous")), g.get("maj") or ""),
                      reverse=True)
     return ordonne[:limite]
+
+
+def dernier_echange(fichier: str, taille: int = 160) -> str:
+    """La derniere chose qu'on a DITE dans cette conversation.
+
+    Un identifiant et une heure ne permettent pas de se rappeler de quoi on parlait : devant
+    quatre conversations ouvertes sur le meme projet, « 22:49 » et « 22:55 » ne distinguent
+    rien. Une phrase, si — c'est ce qui rend la liste choisissable.
+
+    On lit la fin du fichier, pas le debut : ce qu'on cherche est le point ou l'on s'est
+    arrete, pas la façon dont on avait commence. Et on prend le tour de l'UTILISATEUR plutot
+    que la reponse : c'est ce qu'on a demande dont on se souvient, pas ce qui a ete repondu.
+    """
+    chemin = RACINE / fichier
+    try:
+        # Les derniers kilo-octets suffisent et evitent de lire un transcript de plusieurs Mo
+        # juste pour afficher une ligne de liste.
+        taille_fichier = chemin.stat().st_size
+        with chemin.open("r", encoding="utf-8", errors="replace") as fh:
+            if taille_fichier > 8192:
+                fh.seek(taille_fichier - 8192)
+            fin = fh.read()
+    except OSError:
+        return ""
+    dernier = ""
+    for bloc in fin.split("\n## "):
+        if "— toi" not in bloc.split("\n", 1)[0]:
+            continue
+        corps = bloc.split("\n", 1)[1] if "\n" in bloc else ""
+        corps = " ".join(corps.split())
+        if corps:
+            dernier = corps
+    return dernier[:taille] + ("…" if len(dernier) > taille else "")
 
 
 def derniere_conversation(ici: str | None = None) -> dict | None:

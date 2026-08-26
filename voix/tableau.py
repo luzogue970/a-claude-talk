@@ -30,7 +30,7 @@ MEMOIRE = 3000
 # sont renvoyes a chaque nouvelle connexion, avant l'historique.
 ETATS = frozenset({
     "config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
-    "consommation",
+    "consommation", "conversations",
     "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
 })
 
@@ -318,6 +318,31 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
   white-space:nowrap;text-align:right}
 #choix-moteur .reste b{color:var(--texte);font-weight:650}
 #choix-moteur .reste .vide{color:#c9605e;font-weight:650}
+
+/* Le sélecteur de conversations. Volontairement proche d'une liste de messagerie plutôt que
+   d'un tableau : on choisit une conversation en la RECONNAISSANT, pas en lisant sa fiche
+   technique. D'où la dernière phrase dite en évidence, et l'horodatage en retrait. */
+#choix-conv{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+  width:min(560px, calc(100vw - 32px));max-height:min(64vh, 560px);overflow-y:auto;
+  background:var(--carte);border:1px solid var(--bord);border-radius:12px;
+  padding:8px;font-size:12.5px;box-shadow:0 14px 40px #0009}
+#choix-conv[hidden]{display:none}
+#choix-conv .c{display:block;width:100%;text-align:left;background:none;border:0;
+  border-radius:9px;padding:9px 11px;cursor:pointer;color:inherit;font:inherit;
+  border-left:2px solid transparent}
+#choix-conv .c:hover{background:#1f242c}
+#choix-conv .c.active{border-left-color:var(--accent);background:#1b2027}
+#choix-conv .c.morte{opacity:.45}
+#choix-conv .haut{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+#choix-conv .nom{color:var(--texte);font-weight:650}
+#choix-conv .quand{color:var(--faible);white-space:nowrap;font-variant-numeric:tabular-nums}
+#choix-conv .dit{color:var(--faible);margin-top:3px;line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#choix-conv .meta{color:#5a636e;margin-top:3px}
+#choix-conv .ici{color:var(--accent)}
+#choix-conv .titre{color:#5a636e;padding:8px 11px 4px;letter-spacing:.02em}
+#choix-conv .pied{border-top:1px solid var(--bord);margin-top:8px;padding:9px 11px 4px;
+  color:var(--faible);line-height:1.5}
 #choix-moteur .pied{border-top:1px solid var(--bord);margin-top:8px;padding-top:8px;
   line-height:1.5}
 #choix-moteur .pied b{color:var(--texte)}
@@ -661,6 +686,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   <span class="avec-choix">
     <span id="moteur" title="moteur de reconnaissance vocale"></span>
     <div id="choix-moteur" hidden></div>
+  </span>
+  <span class="avec-choix">
+    <button type="button" id="convs" title="les conversations de ce dossier">💬 conversations</button>
+    <div id="choix-conv" hidden></div>
   </span>
   <span id="compte" title="temps avant envoi automatique">
     <span id="reste"></span>
@@ -1789,6 +1818,15 @@ function recevoir(e) {
       if (b && !b.hidden) dessinerChoix();
       return;
     }
+    if (e.genre === "conversations") {
+      convs = e.liste || [];
+      convCourante = e.courante || null;
+      convDossier = e.dossier || "";
+      majConvs();
+      const b = document.getElementById("choix-conv");
+      if (b && !b.hidden) dessinerConvs();
+      return;
+    }
     if (e.genre === "consommation") {
       consoMoteurs = e.moteurs || [];
       majResteMoteur();
@@ -1990,6 +2028,91 @@ function dessinerChoix() {
       cmd: "moteur_stt", ordre: ordreAvecTete(bouton.getAttribute("data-tete")) });
   }
 }
+
+// --- les conversations de ce dossier ----------------------------------------------------
+// Le défaut qu'on corrige : « vv » ouvrait une conversation neuve à chaque lancement, et la
+// liste comptait les LANCEMENTS. Sur cette machine, 23 lignes pour 5 conversations réelles —
+// d'où l'impression que les conversations se multiplient et qu'on perd le contexte. Ici une
+// ligne = une conversation, et on la reconnaît à ce qu'on y a dit en dernier : entre quatre
+// conversations sur le même projet, « 22:49 » et « 22:55 » ne distinguent rien.
+let convs = [], convCourante = null, convDossier = "";
+const btnConvs = document.getElementById("convs");
+
+function ilYA(iso) {
+  if (!iso) return "";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return "à l'instant";
+  if (s < 5400) return "il y a " + Math.round(s / 60) + " min";
+  if (s < 172800) return "il y a " + Math.round(s / 3600) + " h";
+  return "il y a " + Math.round(s / 86400) + " j";
+}
+
+function majConvs() {
+  const vraies = convs.filter(c => c.session_id && c.tours);
+  btnConvs.textContent = "💬 " + (vraies.length || "aucune")
+    + (vraies.length > 1 ? " conversations" : " conversation");
+  const c = vraies.find(x => x.session_id === convCourante);
+  btnConvs.title = c
+    ? `en cours : ${c.projet} — ${c.tours} tours\nCliquer pour en reprendre une autre.`
+    : "aucune conversation reprise — celle-ci est neuve";
+}
+
+function dessinerConvs() {
+  const b = document.getElementById("choix-conv");
+  // Une conversation sans identifiant de session n'est pas reprenable : Claude Code n'en a
+  // gardé aucune trace. L'afficher comme cliquable promettrait une reprise qui repartirait
+  // de zéro — précisément le silence qu'on cherche à supprimer.
+  const utiles = convs.filter(c => c.session_id && c.tours);
+  const perdues = convs.length - utiles.length;
+  if (!utiles.length) {
+    b.innerHTML = `<div class="pied">Aucune conversation à reprendre dans ce dossier.<br>`
+      + `Celle-ci est neuve — elle apparaîtra ici au prochain lancement.</div>`;
+    return;
+  }
+  let section = null, html = "";
+  for (const c of utiles) {
+    const titre = c.ici ? "ce dossier" : (c.sous ? "sous-dossiers" : "ailleurs");
+    if (titre !== section) { section = titre; html += `<div class="titre">${ech(titre)}</div>`; }
+    const active = c.session_id === convCourante;
+    const morte = c.etat === "en cours" && !active;   // tenue par un autre agent
+    html += `<button type="button" class="c${active ? " active" : ""}${morte ? " morte" : ""}" `
+      + `data-sid="${ech(c.session_id)}"${morte ? " disabled" : ""}>`
+      + `<span class="haut"><span class="nom">${ech(c.projet || "?")}`
+      + (active ? ` <span class="ici">· en cours</span>` : "")
+      + (morte ? ` <span class="ici">· ouverte ailleurs</span>` : "")
+      + `</span><span class="quand">${ech(ilYA(c.maj))}</span></span>`
+      + `<div class="dit">${ech(c.apercu || "(rien n'y a encore été dit)")}</div>`
+      + `<div class="meta">${c.tours} tour${c.tours > 1 ? "s" : ""}`
+      + (c.reprises > 1 ? ` · repris ${c.reprises} fois` : "")
+      + (c.sous ? ` · ./${ech(c.sous)}` : "") + `</div></button>`;
+  }
+  html += `<div class="pied">`
+    + `Reprendre garde <b>tout le contexte</b> : Claude Code relit sa session sur disque, `
+    + `ce n'est pas un résumé.<br>`
+    + `« vv » reprend la dernière d'ici tout seul ; « vvneuf » en ouvre une neuve.`
+    + (perdues ? `<br>${perdues} lancement(s) sans session enregistrée — rien à y reprendre.` : "")
+    + `</div>`;
+  b.innerHTML = html;
+  for (const bouton of [...b.querySelectorAll("[data-sid]")]) {
+    bouton.onclick = () => {
+      envoyerCmd({ cmd: "reprendre", session_id: bouton.getAttribute("data-sid") });
+      b.hidden = true;
+    };
+  }
+}
+
+btnConvs.onclick = ev => {
+  ev.stopPropagation();
+  const b = document.getElementById("choix-conv");
+  b.hidden = !b.hidden;
+  // Rafraîchi à l'ouverture plutôt qu'en continu : la liste ne bouge qu'entre deux
+  // lancements, et relire l'index chaque seconde pour rien serait du travail pur.
+  if (!b.hidden) { envoyerCmd({ cmd: "conversations" }); dessinerConvs(); }
+};
+addEventListener("click", ev => {
+  const b = document.getElementById("choix-conv");
+  if (b && !b.hidden && !b.contains(ev.target) && ev.target !== btnConvs) b.hidden = true;
+});
 
 pastilleMoteur.onclick = ev => {
   ev.stopPropagation();

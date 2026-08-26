@@ -812,5 +812,54 @@ emettre({ genre: 'toi', texte: 'et une dictee' });
 dire(champ.value === 'un brouillon tape',
      'un envoi vocal ne retire que la dictee, jamais le brouillon tape : "' + champ.value + '"');
 
+// ---- le selecteur de conversations -------------------------------------------------------
+titre('une ligne = une conversation, reconnaissable');
+emettre({ genre: 'conversations', dossier: '/a/projet', courante: 'sid-en-cours', liste: [
+  { session_id: 'sid-en-cours', projet: 'insnap', tours: 59, reprises: 7, ici: true,
+    maj: new Date(Date.now() - 5 * 60000).toISOString(), etat: 'en cours',
+    apercu: "l inscription whatsapp ne marche pas" },
+  { session_id: 'sid-autre', projet: 'echec', tours: 38, reprises: 5, sous: 'claudesque/echec',
+    maj: new Date(Date.now() - 3 * 3600000).toISOString(), etat: 'fermée',
+    apercu: "tkt rien a faire pour l instant" },
+  { session_id: 'sid-ailleurs', projet: 'piano', tours: 11, reprises: 3, etat: 'en cours',
+    maj: new Date(Date.now() - 26 * 3600000).toISOString(), apercu: "continue" },
+  { session_id: null, projet: 'abandonnee', tours: 0, reprises: 1, etat: 'fermée', apercu: '' },
+]});
+dire(/2 conversations|3 conversations/.test(btnConvs.textContent),
+     'le bouton compte les conversations reprenables : "' + btnConvs.textContent + '"');
+dire(!/4/.test(btnConvs.textContent),
+     'et NE compte pas le lancement sans session : il n y a rien a y reprendre');
+
+dessinerConvs();
+const panneau = document.getElementById('choix-conv');
+dire(/l inscription whatsapp/.test(panneau.innerHTML),
+     'la derniere phrase dite est affichee : c est a ça qu on reconnait une conversation');
+dire(/repris 7 fois/.test(panneau.innerHTML),
+     'le nombre de reprises est visible — 59 tours en 7 lancements, pas 7 conversations');
+dire(/abandonnee/.test(panneau.innerHTML) === false,
+     'une conversation sans session_id n est pas proposee : la reprendre repartirait de zero');
+dire(/1 lancement\(s\) sans session/.test(panneau.innerHTML),
+     'mais on DIT qu elle existe, plutot que de la faire disparaitre en silence');
+dire(/il y a 5 min/.test(panneau.innerHTML), 'les dates sont relatives, pas des horodatages');
+
+// Celle qui tourne ailleurs ne doit pas etre cliquable : deux agents sur la MEME session
+// Claude s ecriraient par-dessus.
+dire(/data-sid="sid-ailleurs"[^>]*disabled/.test(panneau.innerHTML),
+     'une conversation ouverte par un autre agent est desactivee');
+dire(/data-sid="sid-en-cours"[^>]*disabled/.test(panneau.innerHTML) === false,
+     'mais la conversation COURANTE reste marquee active, pas desactivee');
+
+// Cliquer envoie l ordre de reprise, et rien d autre.
+// La liaison doit etre ouverte : une section precedente l a fermee pour tester la
+// reconnexion, et une commande envoyee liaison fermee part dans la file d attente, pas dans
+// `envoyes`. Sans ce rappel le test mesurerait l etat laisse par un autre test.
+socket.readyState = 1;
+envoyes.length = 0;
+panneau.querySelector('[data-sid="sid-autre"]').onclick();
+const ordre = envoyes.find(o => o.cmd === 'reprendre');
+dire(ordre && ordre.session_id === 'sid-autre',
+     'cliquer demande la reprise de CETTE conversation');
+dire(panneau.hidden, 'et le panneau se referme');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

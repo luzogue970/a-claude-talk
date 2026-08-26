@@ -31,10 +31,63 @@ function elem(nom) {
     dataset: {}, _q: {},
     appendChild(c) { this.children.push(c); return c; },
     append(...cs) { for (const c of cs) this.children.push(c); },
+    // Les panneaux de la page se dessinent en posant innerHTML, puis rebranchent leurs
+    // gestionnaires avec querySelectorAll("[data-...]"). Le talon rendait [] pour tout
+    // selecteur d attribut : les clics n etaient donc JAMAIS branches, et aucun test ne
+    // pouvait verifier qu un bouton fait ce qu il annonce — ni ici, ni sur le choix du
+    // moteur. On modelise donc la lecture des attributs dans le HTML pose.
+    // Les panneaux de la page se dessinent en posant innerHTML, puis rebranchent leurs
+    // gestionnaires avec querySelectorAll("[data-...]"). Le talon rendait [] pour tout
+    // selecteur d attribut : les clics n etaient donc JAMAIS branches, et aucun test ne
+    // pouvait verifier qu un bouton fait ce qu il annonce — ni ici, ni sur le choix du
+    // moteur. On lit donc les attributs dans le HTML pose.
+    //
+    // Sans une seule barre oblique inverse, deliberement : ce fichier est evalue depuis un
+    // litteral de gabarit, qui mange les echappements une seconde fois. Une expression
+    // reguliere ecrite ici perd ses \\w et ses \\[ en silence — c est deja arrive.
     querySelectorAll(sel) {
-      // seul selecteur utilise par la page : les familles ouvertes
       if (sel === "details[open]") return this.children.filter(c => c.open);
+      if (sel.startsWith("[") && sel.endsWith("]") && this.innerHTML) {
+        // Les deux formes que la page utilise reellement : [data-sid] pour tout rebrancher,
+        // et [data-sid="x"] pour en viser un. Elles doivent rendre les MEMES objets, sinon
+        // un gestionnaire pose par la premiere serait introuvable par la seconde.
+        const dedans = sel.slice(1, -1);
+        const eq = dedans.indexOf("=");
+        if (eq < 0) return this._balises(dedans);
+        const attr = dedans.slice(0, eq);
+        const vise = dedans.slice(eq + 1).replace(/["']/g, "");
+        return this._balises(attr).filter(b => b.getAttribute(attr) === vise);
+      }
       return [];
+    },
+    _balises(attr) {
+      // Cache lie au HTML courant : sans lui, deux appels rendraient deux objets differents
+      // et un onclick pose sur le premier ne serait pas trouve sur le second.
+      if (this._cacheHtml !== this.innerHTML) {
+        this._cacheHtml = this.innerHTML;
+        this._cacheBalises = {};
+      }
+      if (this._cacheBalises[attr]) return this._cacheBalises[attr];
+      const sortie = [];
+      for (const morceau of this.innerHTML.split("<").slice(1)) {
+        const bout = morceau.split(">")[0];
+        const cherche = attr + '="';
+        const i = bout.indexOf(cherche);
+        if (i < 0) continue;
+        const reste = bout.slice(i + cherche.length);
+        const valeur = reste.slice(0, reste.indexOf('"'));
+        const balise = elem("<" + bout.split(" ")[0] + " " + attr + "=" + valeur + ">");
+        balise.disabled = bout.includes("disabled");
+        balise.getAttribute = nom => {
+          const c = nom + '="';
+          const j = bout.indexOf(c);
+          if (j < 0) return null;
+          const r = bout.slice(j + c.length);
+          return r.slice(0, r.indexOf('"'));
+        };
+        sortie.push(balise);
+      }
+      return (this._cacheBalises[attr] = sortie);
     },
     contains(n) { return n === this || this.children.some(c => c.contains && c.contains(n)); },
     // Une LISTE par type : le DOM reel garde tous les ecouteurs, et n'en garder qu'un
@@ -57,7 +110,14 @@ function elem(nom) {
       }
       return parseInt(this.style.height) || 36;
     },
-    querySelector(sel) { return this._q[sel] || (this._q[sel] = elem(nom + sel)); },
+    querySelector(sel) {
+      // Une vraie correspondance d abord : inventer un element pour un selecteur qui DEVRAIT
+      // matcher rendait un objet sans gestionnaire, et le test echouait sur le talon plutot
+      // que sur la page.
+      const trouves = this.querySelectorAll(sel);
+      if (trouves.length) return trouves[0];
+      return this._q[sel] || (this._q[sel] = elem(nom + sel));
+    },
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },

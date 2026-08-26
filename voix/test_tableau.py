@@ -469,6 +469,21 @@ def tout_genre_affiche_a_un_filtre():
     # requirements.txt. Sur cette machine tout marchait — il avait ete installe a la main —
     # et une installation neuve plantait au premier repli vers le local. Le genre de panne
     # qui n'arrive qu'a celui a qui on partage le depot.
+    # Un nom indefini ne se voit ni a la compilation ni aux tests qui ne passent pas par la
+    # ligne fautive : j'ai ecrit trois `log.warning` dans worker.py ou `log` n'existait pas.
+    # Ca aurait leve un NameError en pleine session, sur le chemin d'erreur — donc au pire
+    # moment, celui ou l'on cherche deja pourquoi quelque chose ne marche pas.
+    print("\n=== aucun nom indefini ===")
+    import subprocess
+    racine = Path(__file__).parent
+    voix = sorted(str(f) for f in racine.glob("*.py"))
+    r = subprocess.run([sys.executable, "-m", "pyflakes", *voix, str(racine.parent / "tests.py")],
+                       capture_output=True, text=True)
+    graves = [l for l in (r.stdout + r.stderr).splitlines()
+              if "undefined name" in l or "syntax" in l.lower()]
+    dire(not graves, "aucun nom indefini ni erreur de syntaxe"
+                     + (" — " + " ; ".join(graves[:4]) if graves else ""))
+
     print("\n=== chaque plugin importe est declare dans requirements ===")
     racine = Path(__file__).parent
     exigences = (racine.parent / "requirements.txt").read_text(encoding="utf-8")
@@ -519,7 +534,7 @@ def tout_genre_affiche_a_un_filtre():
         "config", "modeles", "efforts", "delais", "delai", "travail", "etat", "quota",
         "ecoute", "retenir", "tour_quota", "_histoire",
         "pupitre", "parole_fin", "lecture", "moteurs_stt", "moteur_actif", "transcrit",
-        "consommation",
+        "consommation", "conversations",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
@@ -529,7 +544,8 @@ def tout_genre_affiche_a_un_filtre():
     # longue conversation et le morceau reste vide a la reconnexion. C'est exactement ce qui
     # a vide les selecteurs de modele et de delai pendant des semaines.
     durables = {"config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
-                "consommation", "micro", "quota", "pupitre", "retenir", "travail", "etat"}
+                "consommation", "conversations", "micro", "quota", "pupitre", "retenir",
+                "travail", "etat"}
     from tableau import ETATS
     oublies = sorted(durables - set(ETATS))
     dire(not oublies,

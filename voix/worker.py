@@ -9,6 +9,7 @@ last paragraph of text.
 """
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,8 @@ from claude_agent_sdk import (
 )
 
 import config
+
+log = logging.getLogger("voix.worker")
 
 # Second filter, under the CLI's own. Read-only tools never ask: a spoken approval for
 # every `grep` would make the voice channel unusable. Under acceptEdits the CLI already lets
@@ -388,6 +391,51 @@ class Worker:
             pass
         self._voir("effort", cle=cle, niveau=niveau, libelle=libelle)
         return libelle
+
+    async def changer_conversation(self, sid: str) -> str:
+        """Basculer sur une AUTRE conversation, sans quitter l'application.
+
+        Meme mecanique que le changement d'effort — le SDK fige la session a la construction,
+        donc il faut reconstruire — et les memes deux garde-fous, pour les memes raisons :
+        jamais en pleine tache, et on construit avant de lacher l'ancien client.
+
+        La difference tient a ce qu'on verifie AVANT : reprendre une session que Claude Code
+        ne connait pas ne leve rien, ça ouvre une conversation vide. On compare donc
+        l'identifiant obtenu a celui demande, et on le DIT quand ils different — sinon on croit
+        avoir change de conversation alors qu'on vient d'en creer une.
+        """
+        sid = (sid or "").strip()
+        if not sid or not self.client:
+            return ""
+        if sid == self.session_id:
+            return "c'est déjà la conversation en cours."
+        if self.occupe:
+            return ""
+
+        ancien, ancienne_pompe = self.client, self._pompe
+        try:
+            nouveau = ClaudeSDKClient(self._options(reprendre=sid))
+            await nouveau.connect()
+        except Exception as exc:
+            log.warning("bascule de conversation refusee : %s", exc)
+            self._voir("erreur", niveau="WARNING", source="session",
+                       texte=f"impossible de reprendre {sid[:8]} : {exc}")
+            return ""
+        self.client = nouveau
+        # Remis a zero pour que le drainer recolte l'identifiant du NOUVEAU client et puisse
+        # verifier la reprise. Le garder ferait passer la verification pour reussie.
+        self.session_id = None
+        self.reprise = {"session_id": sid}
+        self.journal = Journal()
+        self._pompe = asyncio.create_task(self._drainer())
+
+        if ancienne_pompe:
+            ancienne_pompe.cancel()
+        try:
+            await ancien.disconnect()
+        except Exception:
+            pass
+        return f"conversation {sid[:8]} reprise."
 
     async def _rendre_le_modele(self):
         if not self._rendre_apres_tour or not self.client:

@@ -1106,6 +1106,25 @@ async def entrypoint(ctx: JobContext):
             libelle = await worker.changer_modele(cle, temporaire=False)
             if libelle:
                 tableau.publier("ordre", texte=f"modèle changé depuis le tableau : {libelle}")
+        elif nom == "conversations":
+            # Rafraichi a l'ouverture du panneau plutot qu'en continu : la liste ne change
+            # qu'entre deux lancements, et relire l'index a chaque seconde pour rien serait
+            # du travail pur.
+            publier_conversations()
+        elif nom == "reprendre":
+            sid = str(donnees.get("session_id") or "").strip()
+            if worker.occupe:
+                tableau.publier("log", niveau="WARNING", source="session",
+                                texte="pas maintenant : une tâche est en cours. "
+                                      "« arrête » d'abord, ou attends la fin.")
+            else:
+                dit = await worker.changer_conversation(sid)
+                if dit:
+                    tableau.publier("ordre", texte=dit)
+                    publier_conversations()
+                else:
+                    tableau.publier("log", niveau="WARNING", source="session",
+                                    texte="reprise impossible — voir les erreurs ci-dessus")
         elif nom == "barre_vide":
             # La barre a ete videe a la main : plus rien n'attend, la retenue collante tombe.
             agent._retenu_en_attente = False
@@ -1242,6 +1261,37 @@ async def entrypoint(ctx: JobContext):
     tableau.on_commande = commande
     tableau.publier("micro", actif=session.input.audio_enabled)
 
+    def publier_conversations():
+        """Les conversations de ce dossier, choisissables.
+
+        Une par conversation REELLE et non par lancement — c'est la difference qui faisait
+        croire a des conversations qui se multiplient. Chacune porte de quoi la reconnaitre
+        sans deviner : ses tours, en combien de reprises, quand on y a parle pour la derniere
+        fois, et surtout la derniere phrase qu'on y a dite. Devant quatre conversations sur le
+        meme projet, « 22:49 » et « 22:55 » ne distinguent rien ; une phrase, si.
+        """
+        try:
+            liste = []
+            for c in journal.conversations(config.WORKDIR, sous_arbre=True, limite=40):
+                liste.append({
+                    "session_id": c.get("session_id"),
+                    "projet": c.get("projet"),
+                    "chemin": c.get("chemin"),
+                    "tours": c.get("tours", 0),
+                    "reprises": c.get("reprises", 1),
+                    "debut": c.get("debut"),
+                    "maj": c.get("maj"),
+                    "etat": c.get("etat"),
+                    "modele": c.get("modele"),
+                    "ici": bool(c.get("ici")),
+                    "sous": c.get("sous"),
+                    "apercu": journal.dernier_echange(c.get("fichier") or ""),
+                })
+            tableau.publier("conversations", liste=liste,
+                            courante=worker.session_id, dossier=config.WORKDIR)
+        except Exception:
+            log.debug("liste des conversations indisponible", exc_info=True)
+
     def publier_pupitre():
         """Qui existe, qui écoute, et où aller pour les rejoindre."""
         tableau.publier("pupitre", moi=inscription.pid,
@@ -1276,6 +1326,9 @@ async def entrypoint(ctx: JobContext):
             await asyncio.sleep(1.0)
 
     publier_pupitre()
+    # Apres la definition, forcement : appelee plus haut elle levait un NameError au
+    # demarrage — une fonction imbriquee n'existe qu'une fois son « def » execute.
+    publier_conversations()
     asyncio.create_task(surveiller_pupitre())
     asyncio.create_task(agent.pomper_evenements())
     asyncio.create_task(quota.boucle())
