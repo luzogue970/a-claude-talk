@@ -54,7 +54,17 @@ class Conversation:
         self.reprise = reprise
         self.tours = 0
         nom = f"{self.debut:%Y-%m-%d_%H%M}_{projet}".replace("/", "-")
+        # Le nom est a la MINUTE, et deux lancements du meme projet dans la meme minute
+        # tombaient donc sur le meme fichier : le second ecrivait par-dessus le premier, et
+        # l'index — qui deduplique par fichier — n'en gardait qu'un. Un relancement rapide,
+        # apres une coupure ou un plantage, perdait ainsi le transcript precedent en silence.
+        # Le suffixe ne s'ajoute qu'en cas de collision reelle, pour que les noms restent
+        # ceux qu'on lit depuis toujours.
         self.fichier = RACINE / f"{nom}.md"
+        rang = 2
+        while self.fichier.exists():
+            self.fichier = RACINE / f"{nom}-{rang}.md"
+            rang += 1
         self._entete()
 
     def _entete(self):
@@ -231,6 +241,107 @@ def historique(limite: int = 20, ici: str | None = None,
     lignes.sort(key=lambda d: (d["ici"], bool(d.get("sous")), d.get("maj", "")),
                 reverse=True)
     return lignes[:limite]
+
+
+def conversations(ici: str | None = None, sous_arbre: bool = True,
+                  limite: int = 200) -> list[dict]:
+    """Une entree par CONVERSATION REELLE, et non par lancement.
+
+    C'est la difference qui rendait tout illisible. L'index compte les lancements : ouvrir
+    l'agent six fois sur le meme projet en reprenant a chaque fois la meme session Claude
+    ecrit six fichiers de transcript — donc six lignes — pour UNE conversation. Sur cette
+    machine : 23 lignes pour 5 conversations. On croit que les conversations se multiplient
+    et qu'on perd le contexte, alors que le contexte est intact et que c'est la LISTE qui
+    compte mal.
+
+    Le regroupement se fait sur `session_id`, qui est l'identite reelle d'une conversation
+    cote Claude Code. Les lancements sans session_id (agent ouvert puis referme sans avoir
+    rien dit) n'ont pas d'identite : ils restent separes mais se reconnaissent a leur zero
+    tour, et l'appelant peut les ecarter.
+
+    Chaque entree porte de quoi CHOISIR sans deviner : quand on y a parle pour la derniere
+    fois, combien de tours en tout, en combien de reprises, et l'apercu du dernier echange.
+    Un identifiant et une heure ne suffisent pas a se rappeler de quoi on parlait.
+    """
+    # La limite porte sur les CONVERSATIONS rendues, pas sur les lancements lus : tronquer
+    # avant le regroupement amputait les conversations de leurs plus anciens lancements, et
+    # une conversation de 59 tours en 7 reprises s'affichait « 13 tours, repris 2 fois ». Un
+    # chiffre faux presente comme un total est pire qu'une liste plus longue a calculer.
+    lancements = historique(10_000, ici, sous_arbre=sous_arbre)
+    groupes: dict[str, dict] = {}
+    for lc in lancements:
+        sid = lc.get("session_id")
+        # Sans identite cote Claude, chaque lancement reste lui-meme : les fusionner
+        # inventerait une continuite qui n'existe pas.
+        cle = sid or f"_sans_session_{lc['fichier']}"
+        g = groupes.get(cle)
+        if g is None:
+            groupes[cle] = g = {
+                "session_id": sid,
+                "projet": lc.get("projet"),
+                "chemin": lc.get("chemin"),
+                "debut": lc.get("debut"),
+                "maj": lc.get("maj"),
+                "tours": 0,
+                "reprises": 0,
+                "fichiers": [],
+                "etat": lc.get("etat"),
+                "modele": lc.get("modele"),
+                "ici": lc.get("ici"),
+                "sous": lc.get("sous"),
+            }
+        g["tours"] += lc.get("tours") or 0
+        g["reprises"] += 1
+        g["fichiers"].append(lc["fichier"])
+        # Le debut est le plus ancien, la mise a jour la plus recente : la conversation
+        # s'etend sur tous ses lancements, ce n'est pas une suite de conversations courtes.
+        if (lc.get("debut") or "") < (g["debut"] or "\uffff"):
+            g["debut"] = lc.get("debut")
+        if (lc.get("maj") or "") > (g["maj"] or ""):
+            g["maj"] = lc.get("maj")
+            g["etat"] = lc.get("etat")       # l'etat du lancement le plus recent
+            g["modele"] = lc.get("modele")
+            g["fichier"] = lc["fichier"]     # ou lire la suite
+        if lc.get("chemin") and not g["chemin"]:
+            g["chemin"] = lc["chemin"]
+        g["ici"] = g["ici"] or lc.get("ici")
+        g["sous"] = g["sous"] or lc.get("sous")
+    # Meme tri que l'index, en une seule cle : ce qui est ICI d'abord, puis ses descendants,
+    # puis le reste — et a egalite, le plus recemment touche. On se demande « qu'est-ce que je
+    # faisais dans CE projet », pas « qu'ai-je fait de plus recent, ou que ce soit ».
+    # `maj` est inverse par un tri decroissant sur le tuple entier, d'ou les booleens pris a
+    # l'envers : `ici` vaut True et doit passer devant.
+    ordonne = sorted(groupes.values(),
+                     key=lambda g: (bool(g.get("ici")), bool(g.get("sous")), g.get("maj") or ""),
+                     reverse=True)
+    return ordonne[:limite]
+
+
+def derniere_conversation(ici: str | None = None) -> dict | None:
+    """La conversation a reprendre par defaut dans ce dossier, s'il y en a une.
+
+    Deux exclusions, et chacune evite un degat precis :
+
+    - **sans session_id** : rien a reprendre, Claude Code n'en a pas gardé trace. La
+      « reprendre » repartirait de zero en silence — exactement le symptome qu'on corrige.
+    - **deja ouverte ailleurs** : deux agents sur la MEME session Claude s'ecriraient
+      par-dessus. Mieux vaut une nouvelle conversation qu'une conversation corrompue.
+
+    Exige aussi que le dossier corresponde exactement : Claude Code range ses sessions par
+    repertoire, et reprendre depuis un autre dossier ne donne pas une erreur mais une session
+    introuvable, donc un contexte perdu sans le moindre message.
+    """
+    ici = os.path.realpath(ici or os.getcwd())
+    occupes = {d.get("session_id") for d in actives() if d.get("session_id")}
+    for c in conversations(ici, sous_arbre=False):
+        if not c.get("session_id") or not c.get("tours"):
+            continue
+        if c["session_id"] in occupes:
+            continue
+        if (c.get("chemin") and os.path.realpath(c["chemin"]) != ici):
+            continue
+        return c
+    return None
 
 
 def actives(ici: str | None = None) -> list[dict]:
@@ -441,12 +552,17 @@ def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list
     dire se lit comme une perte de donnees.
     """
     ici = os.path.realpath(ici or os.getcwd())
-    lignes = historique(limite, ici, sous_arbre=not tout)
+    # Une ligne par CONVERSATION, pas par lancement. Rouvrir l'agent six fois sur le meme
+    # projet en reprenant la meme session ecrivait six lignes pour une seule conversation :
+    # 23 lignes pour 5 conversations reelles. On croyait que les conversations se
+    # multipliaient et qu'on perdait le contexte, alors que le contexte etait intact.
+    lignes = conversations(ici, sous_arbre=not tout, limite=limite)
     caches = 0
     if not tout:
         # Compte sur l'ensemble, pas sur la page : « 3 masquees » alors qu'il y en a 40 serait
         # un chiffre faux presente comme exact.
-        caches = len(historique(10_000, ici)) - len(historique(10_000, ici, sous_arbre=True))
+        caches = (len(conversations(ici, sous_arbre=False, limite=10_000))
+                  - len(conversations(ici, sous_arbre=True, limite=10_000)))
     if not lignes:
         vide = ["  aucune conversation lancée depuis ici"]
         if caches:
@@ -476,7 +592,7 @@ def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list
                        ""]
 
         etiquette = {"en cours": "● en cours", "fermée": "○ fermée",
-                     "interrompue": "◍ interrompue"}[d["etat"]]
+                     "interrompue": "◍ interrompue"}.get(d["etat"], d["etat"])
         sortie.append(f"  {i:2d}. {d.get('projet') or '?':<24} {etiquette}")
 
         # Le couple demarrage / derniere activite. Pour une conversation vivante la
@@ -488,7 +604,11 @@ def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list
         else:
             droite = f"dernier signe  {_quand(d.get('maj'))}"
         sortie.append(f"      début     {_quand(d.get('debut'))}      {droite}")
-        sortie.append(f"      {d.get('tours', 0)} tour(s) · {d.get('modele') or '?'}")
+        # « en N lancements » dit ce qui manquait : cette conversation a ete reprise, elle
+        # n'est pas une conversation courte de plus.
+        reprises = d.get("reprises", 1)
+        suite = f" · repris {reprises} fois" if reprises > 1 else ""
+        sortie.append(f"      {d.get('tours', 0)} tour(s){suite} · {d.get('modele') or '?'}")
         if d.get("sous"):
             # Le sous-chemin relatif plutot que l'absolu : depuis la racine d'un projet, ce
             # qu'on veut savoir est « dans quel sous-dossier », pas le chemin complet.
@@ -504,25 +624,35 @@ def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list
         sortie.append("")
 
     sortie += ["  reprendre : vvreprendre 1   (ou l'identifiant de session)",
-               "  relire    : vvlire 1"]
+               "  relire    : vvlire 1",
+               "  « vv » reprend tout seul la dernière d'ici ; « vvneuf » en ouvre une neuve."]
     if caches:
         sortie.append(f"  {caches} conversation(s) hors de ce dossier — « vvconv --tout »")
     return sortie
 
 
-def resoudre(reference: str) -> dict | None:
-    """Accepte un rang (« 1 » = la plus recente), un identifiant de session, ou un bout de
-    nom de fichier. Taper « vvreprendre 1 » doit suffire."""
-    liste = historique(100)
-    if not liste:
-        return None
+def resoudre(reference: str, ici: str | None = None, tout: bool = False) -> dict | None:
+    """Un rang (« 1 » = la premiere de la liste), un identifiant de session, ou un bout de nom.
+
+    Le rang est resolu sur EXACTEMENT la liste qu'affiche `apercu` — meme dossier, meme
+    portee, meme regroupement. C'etait faux : l'affichage numerotait une liste restreinte au
+    sous-arbre et la resolution cherchait dans la liste complete, si bien que « vvreprendre 3 »
+    pouvait reprendre une autre conversation que la troisieme affichee. Silencieusement, et en
+    donnant l'impression qu'une conversation repartait toute seule.
+
+    Un identifiant, lui, est cherche PARTOUT : il designe une conversation precise, et exiger
+    d'etre dans le bon dossier pour l'utiliser reviendrait a demander l'information qu'on vient
+    justement chercher.
+    """
     if reference.isdigit():
+        liste = conversations(ici, sous_arbre=not tout)
         rang = int(reference)
         return liste[rang - 1] if 1 <= rang <= len(liste) else None
-    for d in liste:
+    partout = conversations(ici, sous_arbre=False, limite=1000)
+    for d in partout:
         if d.get("session_id") == reference:
             return d
-    for d in liste:
-        if reference in (d.get("session_id") or "") or reference in d.get("fichier", ""):
+    for d in partout:
+        if reference in (d.get("session_id") or "") or reference in (d.get("fichier") or ""):
             return d
     return None

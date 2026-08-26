@@ -119,6 +119,10 @@ class Worker:
         self._tableau = tableau
         self._conv = conversation
         self.session_id: str | None = None
+        # La conversation qu'on a decide de reprendre, resolue une fois au demarrage. Gardee
+        # a part de session_id, qui est ce que le SDK finit par nous rendre : si la reprise
+        # echouait, les deux differeraient et c'est precisement ce qu'il faut pouvoir dire.
+        self.reprise: dict | None = None
         self._pompe: asyncio.Task | None = None
         self.modele = config.WORKER_MODEL
         self._modele_base = config.WORKER_MODEL
@@ -180,8 +184,42 @@ class Worker:
             },
         )
 
+    def _a_reprendre(self) -> str | None:
+        """Quelle conversation reprendre au demarrage, et le dire.
+
+        Trois sources, par ordre de priorite : ce qu'on a demande explicitement
+        (`vvreprendre`), puis la derniere conversation de ce dossier, puis rien. Le choix est
+        ANNONCE dans les deux cas — reprendre en silence laisserait croire a une conversation
+        neuve, et ouvrir une neuve en silence est exactement ce qui faisait perdre le contexte
+        sans que rien ne le signale.
+        """
+        if config.REPRENDRE:
+            self._voir("log", niveau="INFO", source="session",
+                       texte=f"reprise demandée : {config.REPRENDRE[:8]}")
+            return config.REPRENDRE
+        if not config.REPRISE_AUTO:
+            self._voir("log", niveau="INFO", source="session",
+                       texte="nouvelle conversation (demandée)")
+            return None
+        try:
+            import journal
+            c = journal.derniere_conversation(config.WORKDIR)
+        except Exception:
+            log.debug("reprise automatique impossible", exc_info=True)
+            c = None
+        if not c:
+            self._voir("log", niveau="INFO", source="session",
+                       texte="nouvelle conversation — rien à reprendre dans ce dossier")
+            return None
+        self.reprise = c
+        self._voir("log", niveau="INFO", source="session",
+                   texte=(f"reprise de la conversation de {c.get('projet') or 'ce dossier'} — "
+                          f"{c.get('tours', 0)} tours, "
+                          f"{c.get('reprises', 1)} lancement(s) · {c['session_id'][:8]}"))
+        return c["session_id"]
+
     async def start(self):
-        self.client = ClaudeSDKClient(self._options())
+        self.client = ClaudeSDKClient(self._options(reprendre=self._a_reprendre()))
         await self.client.connect()
         self._pompe = asyncio.create_task(self._drainer())
 
@@ -195,7 +233,20 @@ class Worker:
             sid = getattr(message, "session_id", None)
             if sid and not self.session_id:
                 self.session_id = sid
-                self._voir("session", id=sid)
+                # Verifier que la reprise a PRIS. Claude Code ne rale pas quand il ne trouve
+                # pas la session demandee : il en ouvre une neuve, et la conversation repart
+                # de zero sans le moindre message. C'est exactement le silence qui faisait
+                # croire a des conversations qui se dedoublent toutes seules.
+                voulu = (self.reprise or {}).get("session_id") or config.REPRENDRE or None
+                repris = bool(voulu) and sid == voulu
+                if voulu and not repris:
+                    self._voir("erreur", niveau="WARNING", source="session",
+                               texte=(f"la reprise de {voulu[:8]} n'a PAS pris — Claude Code a "
+                                      f"ouvert une conversation neuve ({sid[:8]}). Le contexte "
+                                      f"précédent n'est pas là."))
+                    log.warning("reprise refusee : demande %s, obtenu %s", voulu, sid)
+                self._voir("session", id=sid, repris=repris,
+                           tours=(self.reprise or {}).get("tours") if repris else 0)
                 if self._conv:
                     self._conv.note_session(sid)
             if isinstance(message, StreamEvent):

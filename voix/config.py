@@ -248,6 +248,23 @@ JOURNAL_DIR = os.environ.get("VOIX_JOURNAL", str(ROOT / "conversations"))
 # Identifiant de session Claude Code a reprendre, s'il y en a un.
 REPRENDRE = os.environ.get("VOIX_REPRENDRE", "")
 
+# Reprendre la derniere conversation de CE dossier, au lieu d'en ouvrir une nouvelle.
+#
+# Le defaut inverse coutait cher, et de façon invisible. Chaque lancement de `vv` ouvrait une
+# session Claude Code neuve : meme projet, meme sujet, mais contexte reparti de zero. Sur
+# cette machine, 23 lancements pour 5 conversations reelles — et il fallait penser a taper
+# `vvreprendre <rang>` a chaque fois pour ne pas repartir a blanc. Oublier n'affichait aucun
+# avertissement : la conversation demarrait simplement sans rien savoir de la precedente.
+#
+# Reprendre est le comportement qu'on veut par defaut : on revient dans un projet pour
+# CONTINUER. Ouvrir une conversation neuve reste possible et explicite (VOIX_NOUVELLE=1, ou
+# `vvneuf`), parce que c'est le cas rare — changer de sujet dans le meme dossier.
+#
+# La reprise ne se fait que sur une conversation du MEME dossier, qui a au moins un tour, et
+# qu'aucun autre agent ne tient ouverte. Voir journal.derniere_conversation : chacune de ces
+# trois conditions evite un degat precis.
+REPRISE_AUTO = os.environ.get("VOIX_NOUVELLE", "") not in ("1", "oui", "true")
+
 # --- tableau de bord ---------------------------------------------------------
 UI_PORT = int(os.environ.get("VOIX_UI_PORT", "7788"))
 UI_OUVRIR = os.environ.get("VOIX_UI_OUVRIR", "1") not in ("0", "", "non")

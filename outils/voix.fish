@@ -8,7 +8,7 @@
 # Pour pointer ailleurs : set -Ux VOIX_RACINE /chemin/vers/claude-talk
 #
 # vv  = parler (Opus 5)      | vt = taper, sans micro    | vh = Haiku, pour la plomberie
-# vvconv vvreprendre vvlire  | vvsessions vvstop         | voix = l'aide complete
+# vvconv vvreprendre vvlire  | vvsessions vvstop vvneuf  | voix = l'aide complete
 #
 # « Hey Claude » (vhey) est desactive : il demandait une unite systemd et des raccourcis i3
 # qui ne peuvent pas etre livres ici. Voir la section correspondante du README.
@@ -85,6 +85,12 @@ function __voix_lancer --description "Lance l'agent : modele, dossier de travail
 end
 function vv --description "Voix : micro + haut-parleurs, Opus 5 effort xhigh, logs visibles"
     __voix_lancer claude-opus-5 "$argv[1]" console --log-level info
+end
+function vvneuf --description "Voix en ouvrant une conversation NEUVE (vv reprend la derniere)"
+    # `vv` reprend desormais la derniere conversation du dossier : c'est ce qu'on veut en
+    # revenant dans un projet. Ouvrir une conversation neuve reste possible, mais devient le
+    # geste explicite — c'est le cas rare, changer de sujet dans le meme dossier.
+    VOIX_NOUVELLE=1 __voix_lancer claude-opus-5 "$argv[1]" console --log-level info
 end
 function vt --description "Voix au clavier : meme boucle, sans micro (etape 0)"
     __voix_lancer claude-opus-5 "$argv[1]" console --text
@@ -189,7 +195,7 @@ function vvreprendre --description "Relancer vv en reprenant une conversation"
     set -l infos ($py -c "
 import sys; sys.path.insert(0, '$VOIX_RACINE/voix')
 import journal
-d = journal.resoudre('$argv[1]')
+d = journal.resoudre('$argv[1]', ici='$PWD')
 sid = (d or {}).get('session_id') or ''
 print(sid)
 if sid:
@@ -225,7 +231,7 @@ function vvlire --description "Relire une conversation enregistree"
     set -l fic ($py -c "
 import sys; sys.path.insert(0, '$VOIX_RACINE/voix')
 import journal, pathlib
-d = journal.resoudre('$argv[1]') if '$argv[1]' else None
+d = journal.resoudre('$argv[1]', ici='$PWD') if '$argv[1]' else None
 print(str(journal.RACINE / d['fichier']) if d else '')
 ")
     if test -z "$fic"; or not test -f "$fic"
@@ -304,7 +310,8 @@ function voix --description "Rappel des commandes vocales"
     echo "  vheydiag        regler le seuil du verrou haut-parleurs"
     echo "  vheytest f.wav  rejouer un fichier dans la chaine Hey Claude"
     echo
-    echo "  vvconv          historique des conversations"
+    echo "  vvconv          les conversations (une ligne par conversation, pas par lancement)"
+    echo "  vvneuf          ouvrir une conversation NEUVE (vv reprend la derniere d'ici)"
     echo "  vvreprendre N   relancer vv en reprenant la conversation N"
     echo "  vvlire N        relire la conversation N"
     echo "  vvstop          arreter les agents vv restes lances"

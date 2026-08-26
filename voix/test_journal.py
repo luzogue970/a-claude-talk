@@ -109,6 +109,80 @@ def principal():
     dire("aucune conversation lancée depuis ici" in vide,
          "un dossier sans historique le dit sans laisser croire a une perte")
 
+    # --- une conversation, pas un lancement ---------------------------------------------
+    # Le defaut qu'on corrige : rouvrir l'agent six fois sur le meme projet en reprenant la
+    # meme session Claude ecrivait six lignes pour UNE conversation. Sur la vraie machine,
+    # 23 lignes pour 5 conversations : on croyait que les conversations se multipliaient et
+    # qu'on perdait le contexte, alors que le contexte etait intact et que c'est la LISTE qui
+    # comptait mal.
+    print("\n=== une ligne par conversation, pas par lancement ===")
+    for i in range(3):
+        c = journal.Conversation("repris", "claude-opus-5", "xhigh", chemin="/a/projet/repris")
+        c.note_session("sess-partagee")          # LA MEME session, trois lancements
+        c.tour_utilisateur(f"question {i}")
+        c.tour_claude("reponse")
+        time.sleep(0.01)
+
+    lancements = [d for d in journal.historique(50, "/a/projet") if d["projet"] == "repris"]
+    convs = [d for d in journal.conversations("/a/projet") if d["projet"] == "repris"]
+    dire(len(lancements) == 3, f"l'index garde bien les 3 lancements ({len(lancements)})")
+    dire(len(convs) == 1, f"mais ils ne font qu'UNE conversation ({len(convs)})")
+    dire(convs[0]["reprises"] == 3, "elle sait en combien de fois elle a ete reprise")
+    dire(convs[0]["tours"] == 3,
+         f"et ses tours sont additionnes sur tous ses lancements ({convs[0]['tours']})")
+
+    # Le debut est le PLUS ANCIEN, la mise a jour la PLUS RECENTE : la conversation s'etend
+    # sur toute sa duree, ce n'est pas une suite de conversations courtes.
+    dire(convs[0]["debut"] <= min(d["debut"] for d in lancements),
+         "son debut est celui du premier lancement")
+    dire(convs[0]["maj"] >= max(d["maj"] for d in lancements),
+         "sa derniere activite est celle du dernier")
+
+    # Sans identifiant de session il n'y a pas d'identite : les fusionner inventerait une
+    # continuite qui n'existe pas.
+    # tour_claude et pas seulement tour_utilisateur : c'est la reponse qui declenche
+    # l'indexation, une question restee sans reponse n'est indexee qu'a la fermeture.
+    for nom in ("anonyme-a", "anonyme-b"):
+        c = journal.Conversation(nom, "claude-opus-5", "xhigh", chemin="/a/projet/anon")
+        c.tour_utilisateur("x")
+        c.tour_claude("y")
+        time.sleep(0.01)
+    anons = [d for d in journal.conversations("/a/projet")
+             if str(d["projet"]).startswith("anonyme")]
+    dire(len(anons) == 2,
+         "deux lancements sans session_id restent deux entrees : rien ne prouve leur lien")
+
+    # --- le rang designe ce qui est affiche ---------------------------------------------
+    # C'etait faux, et le symptome ressemblait a « une conversation qui repart toute seule » :
+    # l'affichage numerotait une liste restreinte au sous-arbre, la resolution cherchait dans
+    # la liste complete. « vvreprendre 3 » pouvait donc reprendre une AUTRE conversation.
+    print("\n=== le rang resolu est celui qu'on a vu ===")
+    for depuis in ("/a/projet", "/a/projet/app", "/a"):
+        vus = journal.conversations(depuis)
+        # Comparaison sur l'identite METIER, pas sur l'objet : chaque appel reconstruit ses
+        # dictionnaires, donc `is` serait toujours faux et le test toujours vert par accident.
+        def signe(d):
+            return (d or {}).get("session_id") or (d or {}).get("fichier")
+        bon = all(signe(journal.resoudre(str(i), ici=depuis)) == signe(vus[i - 1])
+                  for i in range(1, len(vus) + 1))
+        dire(bon, f"depuis {depuis} : les {len(vus)} rangs designent les lignes affichees")
+
+    # Un identifiant, lui, marche de PARTOUT : exiger le bon dossier pour l'utiliser
+    # demanderait l'information qu'on vient justement chercher.
+    d = journal.resoudre("sess-partagee", ici="/a/rien")
+    dire(d is not None and d["session_id"] == "sess-partagee",
+         "un identifiant se resout depuis n'importe quel dossier")
+
+    # --- ce qu'on reprend par defaut ----------------------------------------------------
+    print("\n=== la reprise par defaut ===")
+    d = journal.derniere_conversation("/a/projet/repris")
+    dire(d is not None and d["session_id"] == "sess-partagee",
+         "dans un dossier connu, on reprend sa derniere conversation")
+    dire(journal.derniere_conversation("/a/vide-jamais-vu") is None,
+         "dans un dossier inconnu, il n'y a rien a reprendre — donc une conversation neuve")
+    dire(journal.derniere_conversation("/a/projet/anon") is None,
+         "une conversation sans session_id n'est pas reprenable : Claude n'en a pas trace")
+
     shutil.rmtree(boite, ignore_errors=True)
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
