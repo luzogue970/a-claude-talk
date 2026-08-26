@@ -347,6 +347,18 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   border:1px solid var(--bord);border-radius:999px;padding:5px 13px 5px 10px;
   font-size:12.5px;color:var(--pensee)}
 #cogitation[hidden]{display:none}
+
+/* La note de la barre : pourquoi ce texte est là et ce qu'on en attend. Placée contre la
+   barre, du côté opposé à l'indicateur d'activité pour qu'ils puissent coexister. Elle
+   s'efface d'elle-même : une explication qui reste affichée alors que la situation a changé
+   devient un mensonge. */
+#note-barre{position:absolute;bottom:100%;right:16px;margin-bottom:8px;
+  display:flex;gap:7px;align-items:center;background:var(--carte);
+  border:1px solid var(--retenu,#d8a657);border-radius:999px;padding:5px 13px;
+  font-size:12.5px;color:var(--retenu,#d8a657);
+  opacity:0;transition:opacity .25s ease;pointer-events:none}
+#note-barre.montre{opacity:1}
+#note-barre[hidden]{display:none}
 #cogitation .marque{color:var(--pensee)}
 #mot{font-weight:600;letter-spacing:.01em}
 .points i{font-style:normal;animation:clignote 1.4s ease-in-out infinite}
@@ -670,6 +682,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 <main id="flux"></main>
 <button id="bas">↓ suivre</button>
 <div id="saisie-barre">
+  <div id="note-barre" hidden></div>
   <div id="cogitation" hidden>
     <span class="spin"></span>
     <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
@@ -971,10 +984,17 @@ function corps(e) {
     case "log":
       return `<span style="opacity:.7">${ech(e.source)}</span> ${ech(e.texte)}`;
     case "dictee":
-      return ech(e.texte)
-        + (e.auto
-            ? `<span class="apres">retenu : Claude travaillait</span>`
-            : `<span class="apres">retenu à ta demande</span>`);
+      // Dire POURQUOI, pas seulement « retenu ». Les trois raisons ne se corrigent pas de la
+      // même façon : le mode se désarme, la retenue d'office s'explique par le travail en
+      // cours, le rattrapage est un geste qu'on vient de faire. « retenu » tout court laissait
+      // chercher lequel des trois s'appliquait.
+      return ech(e.texte) + `<span class="apres">` + ({
+        attente: "retenu — un texte attend déjà dans la barre, relis et envoie",
+        occupe: "retenu — Claude travaillait, à relire avant d'envoyer",
+        mode: "retenu — le mode « retenir » est armé",
+        tour: "retenu — tu l'as rattrapé pendant le décompte",
+      }[e.raison] || (e.auto ? "retenu — Claude travaillait"
+                             : "retenu à ta demande")) + `</span>`;
     case "session":
       // Sans ce cas la ligne s'affichait VIDE : l'événement porte `id`, pas `texte`. Or
       // c'est précisément l'identifiant qu'on vient chercher pour reprendre.
@@ -1399,9 +1419,38 @@ function majCompte() {
   if (maintenant >= finMax) arreterCompte();
 }
 
-function lancerCompte(min, max) {
-  finMin = Date.now() + min * 1000;
-  finMax = Date.now() + max * 1000;
+// `fin` est l'échéance RÉELLE, en horloge murale, publiée par l'agent qui commettra le tour.
+// L'utiliser plutôt que de recompter localement supprime la seule vraie cause du « je vois
+// encore 4 s et le message est déjà parti » : il n'y a plus qu'une horloge, et c'est celle
+// qui décide. Le repli sur `min` couvre l'ancien mode automatique, où LiveKit décide et où
+// la page ne peut effectivement qu'estimer.
+// Un mot contre la barre, effacé au premier signe que la situation a changé : on écrit, on
+// envoie, ou une nouvelle dictée s'ouvre. Une explication qui survit à son objet devient
+// fausse, et l'ancienne version restait affichée jusqu'au tour suivant.
+let tempsNote = null;
+// Suit l'état de la barre pour n'envoyer le signal qu'AU CHANGEMENT : une commande par frappe
+// de touche noierait le journal et la liaison.
+let barreVide = true;
+function noteBarre(texte) {
+  const n = document.getElementById("note-barre");
+  if (!n) return;
+  if (tempsNote) { clearTimeout(tempsNote); tempsNote = null; }
+  if (!texte) { n.classList.remove("montre"); n.hidden = true; return; }
+  n.textContent = texte;
+  n.hidden = false;
+  requestAnimationFrame(() => n.classList.add("montre"));
+  tempsNote = setTimeout(() => noteBarre(null), 12000);
+}
+
+function lancerCompte(min, max, fin) {
+  if (fin) {
+    // Échéance exacte, sans extension possible : en manuel il n'y a pas de détecteur pour
+    // juger la phrase inachevée, donc afficher « phrase inachevée — 3 s » serait inventé.
+    finMin = finMax = fin;
+  } else {
+    finMin = Date.now() + min * 1000;
+    finMax = Date.now() + max * 1000;
+  }
   if (!tic) tic = setInterval(majCompte, 100);
   majCompte();
 }
@@ -1515,7 +1564,15 @@ function fermerDictee(garde) {
 // Fin de tour en mode envoi direct : le texte est parti chez Claude, la barre se vide.
 // Le tour est parti chez Claude : la dictée disparaît de la barre, le brouillon tapé reste.
 function viderDictee() {
+  // Ne retire QUE la partie dictée, jamais le brouillon tapé : on peut avoir écrit une phrase,
+  // parlé ensuite, et le tour vocal parti ne doit pas emporter ce qu'on avait écrit à côté.
+  //
+  // J'ai voulu vider inconditionnellement, pour empêcher un texte retenu de survivre à un
+  // envoi — et ça détruisait ce brouillon. Le vrai correctif est ailleurs, côté agent : la
+  // retenue est COLLANTE, donc plus aucun tour vocal ne peut partir tant qu'un texte attend
+  // une relecture. Le mauvais scénario ne peut plus se produire, il n'y a rien à rattraper ici.
   if (dicteeOuverte) fermerDictee(null);
+  barreVide = !champ.value.trim();
 }
 
 // --- au bout de combien de silence le message part -------------------------------------
@@ -1614,6 +1671,14 @@ champ.oninput = () => {
   segments = "";
   dicteeOuverte = false;
   champ.classList.remove("dictee");
+  // La barre vidée à la main libère la retenue collante. Sans ce signal, l'agent croirait
+  // qu'un texte attend encore une relecture et retiendrait TOUT indéfiniment — une
+  // amélioration qui se transforme en blocage silencieux est pire que le défaut d'origine.
+  const videMaintenant = !champ.value.trim();
+  if (videMaintenant !== barreVide) {
+    barreVide = videMaintenant;
+    if (videMaintenant) envoyerCmd({ cmd: "barre_vide" });
+  }
   majEnvoyer();
   ajusterHauteur();
 };
@@ -1781,18 +1846,26 @@ function recevoir(e) {
       // segments accumulés côté page, qui peuvent avoir manqué un morceau.
       fermerDictee(e.texte || "");
       champ.focus();
+      // Un mot sous la barre, au moment exact où le texte s'y dépose : c'est là que le regard
+      // est. Le trouver dans le flux quinze lignes plus haut ne sert à rien.
+      noteBarre({
+        attente: "ajouté à ce qui attend déjà — relis, puis Entrée",
+        occupe: "retenu pendant que Claude travaille — relis, puis Entrée",
+        mode: "mode « retenir » armé — relis, puis Entrée",
+        tour: "rattrapé — relis, puis Entrée",
+      }[e.raison] || "retenu — relis, puis Entrée");
       ajouter(e);            // et une ligne, sinon rien ne dit qu'on a parlé pour rien
       return;
     }
     // Parti chez Claude : la barre n'a plus à porter le texte.
-    if (e.genre === "toi" && !e.tape) { viderDictee(); }
+    if (e.genre === "toi" && !e.tape) { viderDictee(); noteBarre(null); }
     if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }
     if (e.genre === "ecoute") {
       // `parle` marque le DÉBUT de la parole : c'est là qu'une nouvelle dictée s'ouvre, et
       // nulle part ailleurs. Ce repère est ce qui permet d'ignorer une transcription en
       // retard, qui appartient au tour précédent.
-      if (e.parle) ouvrirDictee();
-      if (e.actif) lancerCompte(e.min, e.max); else arreterCompte();
+      if (e.parle) { ouvrirDictee(); noteBarre(null); }
+      if (e.actif) lancerCompte(e.min, e.max, e.fin); else arreterCompte();
       return;
     }
     if (e.genre === "quota") { quota = e.fenetres || []; majCompteurs(); return; }

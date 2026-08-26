@@ -112,6 +112,29 @@ class Voix(Agent):
         # ne change pas le mode, elle rattrape le message en vol. Sans ça il faudrait armer
         # « retenir » avant de parler, donc savoir à l'avance qu'on allait se tromper.
         self._retenir_ce_tour = False
+        # --- la fenetre avant envoi, quand c'est nous qui la tenons (config.TOUR_MANUEL) ---
+        # Un seul detenteur : la tache qui dort jusqu'a l'echeance EST la decision d'envoyer.
+        # La page ne fait que lire l'echeance publiee. Avant, la page comptait de son cote et
+        # LiveKit decidait du sien : deux horloges pour une decision, et le bouton « retenir »
+        # arrivait parfois apres coup.
+        self._fenetre: asyncio.Task | None = None
+        self._fin_fenetre: float = 0.0          # time.monotonic() de l'echeance
+        # Ce qui a ete transcrit pour le tour en cours. Sert a deux choses : ne pas armer de
+        # fenetre quand il n'y a rien a envoyer, et pouvoir reconnaitre un ordre local AVANT
+        # de decider d'attendre ou de retenir.
+        self._dit: str = ""
+        # Un texte retenu attend dans la barre, et il n'est jamais parti.
+        #
+        # Sans ce drapeau, le scenario suivant perdait du texte en silence : on dicte, c'est
+        # retenu (la barre garde la phrase), on reparle, ce second tour PART, et la page vide
+        # la barre — la premiere phrase disparait sans avoir jamais ete envoyee ni signalee.
+        # C'est la version exacte du « texte deja envoye qui reapparait, et parfois seulement
+        # une partie ».
+        #
+        # La retenue devient donc COLLANTE : tant que quelque chose attend une relecture,
+        # rien ne part tout seul par-dessus. C'est aussi ce qu'on a promis en affichant
+        # « relis, puis Entree » — une promesse que la version precedente ne tenait pas.
+        self._retenu_en_attente = False
         # Les pourcentages de fenêtre au départ du tour, pour pouvoir dire à l'arrivée de
         # combien ils ont bougé.
         self._quota_depart: dict[str, float] = {}
@@ -137,6 +160,149 @@ class Voix(Agent):
     def _voir(self, genre: str, **donnees):
         if self.tableau:
             self.tableau.publier(genre, **donnees)
+
+    # --- la fenetre avant envoi -----------------------------------------------------------
+
+    def pourquoi_retenir(self) -> str | None:
+        """La SEULE fonction qui decide si ce tour doit etre retenu, et qui dit pourquoi.
+
+        Trois raisons, dans cet ordre de priorite. « tour » est le rattrapage explicite d'un
+        message pendant son decompte ; il gagne sur tout le reste parce que c'est un geste
+        volontaire et immediat. « mode » est l'interrupteur global. « occupe » est la retenue
+        d'office pendant que Claude travaille : c'est le moment ou l'on parle pour reagir a
+        ce qu'on voit passer, donc celui ou une phrase mal transcrite coute le plus cher.
+
+        Renvoyer la RAISON et pas un booleen n'est pas un detail : le tableau affiche « retenu
+        parce que Claude travaille » plutot que « retenu », et la difference entre les deux est
+        toute la difference entre comprendre et subir.
+        """
+        if self._retenir_ce_tour:
+            return "tour"
+        if self._retenu_en_attente:
+            return "attente"
+        if self.retenir:
+            return "mode"
+        if config.RETENIR_SI_OCCUPE and self.worker.occupe:
+            return "occupe"
+        return None
+
+    # Un ordre local est court par nature : « stop », « chut », « coupe le micro ». La
+    # detection, elle, accepte aussi des combinaisons — « arrêter » + « ça » suffit a declarer
+    # un arret. Or « explique-moi pourquoi il faut arrêter de faire ça » contient les deux, et
+    # n'est pas un ordre : c'est une question. Elle existe deja, cette confusion, mais tant
+    # qu'elle passait par la fenetre on pouvait la rattraper avec « retenir ». Un raccourci
+    # qui l'envoie SANS attendre lui retirerait ce filet.
+    #
+    # D'ou la limite de mots : ce qui est court part tout de suite, ce qui est long attend
+    # comme n'importe quelle phrase. Le sens de l'erreur est le bon — au pire un « stop »
+    # bavard patiente cinq secondes, jamais une question ne devient un ordre irrattrapable.
+    ORDRE_MOTS_MAX = 5
+
+    def _ordre_bref(self, texte: str) -> bool:
+        return (len(texte.split()) <= self.ORDRE_MOTS_MAX
+                and bool(reconnaitre(texte)[0]))
+
+    def _delai_fenetre(self) -> float:
+        """Le delai courant, lu depuis la session et non depuis la constante.
+
+        Apres un reglage fait dans le tableau, la constante ne dit plus la verite et le
+        decompte mentirait — c'est deja arrive."""
+        try:
+            return float(self.sess._opts.endpointing.get("min_delay", config.ECOUTE_MIN))
+        except Exception:
+            return config.ECOUTE_MIN
+
+    def fermer_fenetre(self, publier: bool = True) -> None:
+        """Annule la fenetre en cours. Ne commet rien : c'est une non-action, donc sure."""
+        if self._fenetre and not self._fenetre.done():
+            self._fenetre.cancel()
+        self._fenetre, self._fin_fenetre = None, 0.0
+        if publier:
+            self._voir("ecoute", actif=False)
+
+    def ouvrir_fenetre(self) -> None:
+        """La parole vient de s'arreter : decide quoi faire de ce qui a ete dit.
+
+        Un seul endroit tranche entre les quatre issues possibles, et dans cet ordre :
+
+        1. **rien a envoyer** — aucune transcription : on n'arme rien. Armer sur un silence
+           produisait un decompte qui s'achevait sur un tour vide.
+        2. **une reponse a une permission, ou un ordre local** — ça part TOUT DE SUITE. Faire
+           attendre « arrete » cinq secondes de silence est absurde : c'est une reaction, pas
+           une phrase a relire. C'est le gain le plus sensible du passage en manuel.
+        3. **une raison de retenir** — on ne commet pas. Le texte est deja dans la barre
+           (les resultats intermediaires l'y ont mis au fil de la parole), donc « retenir »
+           n'a rien a deplacer : il suffit de ne rien faire, et le tour en attente est vide.
+        4. **le cas courant** — on arme la fenetre et on publie son echeance exacte.
+        """
+        self.fermer_fenetre(publier=False)
+        texte = self._dit.strip()
+        if not texte:
+            return
+
+        attend_permission = (self.permission_en_cours is not None
+                             and not self.permission_en_cours.done())
+        if attend_permission or self._ordre_bref(texte):
+            self._envoyer_maintenant("immédiat")
+            return
+
+        raison = self.pourquoi_retenir()
+        if raison:
+            # Le tour en attente est abandonne : sans ça il resterait dans LiveKit et
+            # repartirait au prochain envoi, ce qui faisait reapparaitre du texte deja parti.
+            self._oublier_tour()
+            self._voir("dictee", texte=texte, raison=raison,
+                       auto=(raison == "occupe"))
+            self._dit = ""
+            self._retenu_en_attente = True
+            return
+
+        delai = self._delai_fenetre()
+        self._fin_fenetre = time.monotonic() + delai
+        self._voir("ecoute", actif=True, delai=delai,
+                   # L'echeance en horloge murale : la page compte en local, sans rien
+                   # demander, et affiche le temps REEL qui reste avant l'envoi.
+                   fin=(time.time() + delai) * 1000.0,
+                   min=delai, max=config.plafond_ecoute(delai))
+        self._fenetre = asyncio.create_task(self._attendre_puis_envoyer(delai))
+
+    async def _attendre_puis_envoyer(self, delai: float) -> None:
+        try:
+            await asyncio.sleep(delai)
+        except asyncio.CancelledError:
+            return
+        # Relu a l'echeance, pas au depart : « retenir » peut avoir ete arme PENDANT le
+        # decompte, et c'est meme son usage principal.
+        raison = self.pourquoi_retenir()
+        if raison:
+            self._oublier_tour()
+            self._voir("dictee", texte=self._dit.strip(), raison=raison,
+                       auto=(raison == "occupe"))
+            self._dit = ""
+            self._retenu_en_attente = True
+            self.fermer_fenetre()
+            return
+        self._envoyer_maintenant("échéance")
+
+    def _envoyer_maintenant(self, pourquoi: str) -> None:
+        self.fermer_fenetre(publier=False)
+        self._dit = ""
+        try:
+            self.sess.commit_user_turn()
+        except Exception as exc:
+            # Rien a commettre, ou tour deja parti. Ce n'est pas grave, mais un envoi qui
+            # n'arrive pas doit se voir : un clic sans effet visible est pire qu'une erreur.
+            log.info("envoi (%s) sans effet : %s", pourquoi, exc)
+            self._voir("log", niveau="INFO", source="tour",
+                       texte="rien à envoyer pour l'instant")
+        self._voir("ecoute", actif=False)
+
+    def _oublier_tour(self) -> None:
+        """Jette le tour audio en attente sans le commettre."""
+        try:
+            self.sess.clear_user_turn()
+        except Exception:
+            log.debug("aucun tour a oublier", exc_info=True)
 
     def attacher_session(self, session):
         self._session_directe = session
@@ -737,7 +903,11 @@ async def entrypoint(ctx: JobContext):
             # v1-mini runs entirely on this machine. The v1 detector, and the adaptive
             # interruption detector below, are LiveKit Cloud inference: they need
             # LIVEKIT_API_KEY and they send audio off the machine.
-            turn_detection=TurnDetector(version=config.DETECTEUR_TOUR),
+            # « manual » : le VAD continue de signaler debut et fin de parole, mais
+            # LiveKit ne commet plus le tour — c'est Voix.ouvrir_fenetre qui decide. Voir
+            # config.TOUR_MANUEL pour le pourquoi : une seule horloge, celle qu'on affiche.
+            turn_detection=("manual" if config.TOUR_MANUEL
+                            else TurnDetector(version=config.DETECTEUR_TOUR)),
             # Le vrai correctif au problème « il m'envoie avant que j'aie fini » : le défaut
             # de 0,5 s faisait d'une pause pour réfléchir une fin de phrase, et la suite
             # repartait comme un second message par-dessus le premier.
@@ -795,6 +965,9 @@ async def entrypoint(ctx: JobContext):
         # Les résultats intermédiaires arrivent entiers et grandissants : ils remplacent.
         tableau.publier("partiel", texte=ev.transcript, final=bool(ev.is_final))
         if ev.is_final:
+            # Accumule, jamais remplace : une phrase entrecoupee de pauses arrive en
+            # plusieurs finales, et n'en garder que la derniere perdait tout le debut.
+            agent._dit = (agent._dit + " " + ev.transcript).strip()
             tableau.publier("transcrit", actif=False)
 
     @session.on("agent_state_changed")
@@ -808,6 +981,11 @@ async def entrypoint(ctx: JobContext):
     @session.on("user_state_changed")
     def _etat_utilisateur(ev):
         if str(ev.new_state) == "speaking":
+            # On reparle : la fenetre se referme sans rien envoyer, et le texte deja transcrit
+            # est CONSERVE. C'est ce qui rend les pauses de trois a cinq secondes possibles —
+            # une pause pour reflechir ne coupe plus la phrase en deux messages.
+            if config.TOUR_MANUEL:
+                agent.fermer_fenetre(publier=False)
             tableau.publier("ecoute", actif=False, parle=True)
         elif str(ev.old_state) == "speaking":
             # La transcription commence ici. Avec un moteur sans texte en direct, c'est la
@@ -817,10 +995,15 @@ async def entrypoint(ctx: JobContext):
             # Le silence commence ici, pas avant : c'est la seule transition qui compte.
             # Lu depuis la session, pas depuis la constante : après un réglage, la
             # constante ne dit plus la vérité et le décompte mentirait.
-            reglage = session._opts.endpointing
-            tableau.publier("ecoute", actif=True,
-                            min=reglage.get("min_delay", config.ECOUTE_MIN),
-                            max=reglage.get("max_delay", config.plafond_ecoute()))
+            if config.TOUR_MANUEL:
+                # C'est ici que tout se decide, et ouvrir_fenetre publie elle-meme l'echeance
+                # exacte : la page n'estime plus rien.
+                agent.ouvrir_fenetre()
+            else:
+                reglage = session._opts.endpointing
+                tableau.publier("ecoute", actif=True,
+                                min=reglage.get("min_delay", config.ECOUTE_MIN),
+                                max=reglage.get("max_delay", config.plafond_ecoute()))
 
     # Le message est réellement parti quand il entre dans le contexte de conversation. Les
     # transcriptions finales, elles, tombent plusieurs fois par tour dès qu'on marque une
@@ -900,6 +1083,9 @@ async def entrypoint(ctx: JobContext):
             libelle = await worker.changer_modele(cle, temporaire=False)
             if libelle:
                 tableau.publier("ordre", texte=f"modèle changé depuis le tableau : {libelle}")
+        elif nom == "barre_vide":
+            # La barre a ete videe a la main : plus rien n'attend, la retenue collante tombe.
+            agent._retenu_en_attente = False
         elif nom == "texte":
             # Écrire au lieu de parler, sans créer un second chemin.
             #
@@ -917,6 +1103,8 @@ async def entrypoint(ctx: JobContext):
             # llm_node publie la ligne « toi » pour tous les canaux ; on lui dit seulement
             # que celui-ci vient du clavier.
             agent.marquer_tape()
+            # La barre part : plus rien n'attend de relecture, la retenue collante se libere.
+            agent._retenu_en_attente = False
             session.generate_reply(user_input=propos, input_modality="text")
         elif nom == "effort":
             cle = str(donnees.get("cle") or "")
@@ -1003,19 +1191,20 @@ async def entrypoint(ctx: JobContext):
             # tour-là qu'on veut relire, pas tous les suivants.
             agent._retenir_ce_tour = True
             tableau.publier("ordre", texte="ce message sera retenu dans la barre")
+            # Agir MAINTENANT : on a cliqué « retenir », on n'attend pas la fin d'un décompte
+            # dont on vient précisément de décider qu'il ne devait pas aboutir.
+            if config.TOUR_MANUEL and agent._fenetre:
+                agent.fermer_fenetre(publier=False)
+                agent._oublier_tour()
+                tableau.publier("dictee", texte=agent._dit.strip(), raison="tour", auto=False)
+                agent._dit = ""
+                agent._retenir_ce_tour = False
         elif nom == "envoyer":
             # Contourner l'attente sans la raccourcir pour tout le monde : la fenêtre reste
             # longue pour pouvoir réfléchir à voix haute, et ce bouton dit « j'ai fini ».
-            try:
-                session.commit_user_turn()
-            except Exception as exc:
-                # Rien à envoyer, ou tour déjà parti : ça n'a rien de grave, mais il faut le
-                # dire plutôt que de laisser un clic sans effet visible.
-                log.info("envoi immédiat sans effet : %s", exc)
-                tableau.publier("log", niveau="INFO", source="tour",
-                                texte="rien à envoyer pour l'instant")
-            else:
-                tableau.publier("ecoute", actif=False)
+            # Le meme chemin que l'echeance : un seul endroit commet, donc un seul
+            # comportement a comprendre et a tester.
+            agent._envoyer_maintenant("bouton")
         elif nom == "arreter":
             # The reason this button exists: with the microphone cut you can no longer say
             # "stop", so the page has to carry the stop.

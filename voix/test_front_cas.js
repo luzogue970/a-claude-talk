@@ -757,5 +757,60 @@ fermer(); fermer();
 dire(pastille.textContent === 'deconnecte',
      'apres trois echecs : "' + pastille.textContent + '"');
 
+// ---- le decompte lit l'echeance, il ne la recalcule pas ----------------------------------
+titre('le decompte affiche est celui qui decide');
+// C'etait le vrai defaut : la page comptait de son cote, LiveKit decidait du sien. Quand les
+// deux divergeaient on lisait « encore 4 s » et le message etait deja parti — donc « retenir »
+// arrivait apres coup. L'agent publie maintenant l'echeance exacte en horloge murale.
+emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5, fin: Date.now() + 5000 });
+dire(finMin === finMax,
+     'avec une echeance exacte, aucune extension possible : finMin === finMax');
+const restant = (finMin - Date.now()) / 1000;
+dire(restant > 4.5 && restant <= 5.05,
+     'et le reste affiche vient de l echeance publiee (' + restant.toFixed(2) + ' s)');
+// Sans `fin` (ancien mode automatique) la page estime, et l extension redevient possible :
+// la ou LiveKit decide, la page ne PEUT que deviner, et le dire est plus honnete.
+emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5 });
+dire(finMax > finMin, 'sans echeance publiee, la page retombe sur une estimation avec plafond');
+emettre({ genre: 'ecoute', actif: false });
+dire(finMin === null, 'la fin de la fenetre efface le decompte');
+
+// ---- retenu : la raison s affiche, et elle s efface --------------------------------------
+titre('un texte retenu dit POURQUOI il l est');
+const note = document.getElementById('note-barre');
+for (const [raison, attendu] of [['occupe', /Claude travaille/],
+                                 ['mode', /retenir/],
+                                 ['tour', /rattrap/]]) {
+  emettre({ genre: 'dictee', texte: 'une phrase a relire', raison: raison });
+  dire(!note.hidden && attendu.test(note.textContent),
+       'raison « ' + raison + '  » : "' + note.textContent + '"');
+  dire(champ.value === 'une phrase a relire',
+       'et le texte est bien depose dans la barre, en entier');
+}
+// Le corps de la ligne du flux porte aussi la raison : en relisant l historique on doit
+// pouvoir distinguer « je l ai retenu » de « il a ete retenu pour moi ».
+dire(/rattrap/.test(corps({ genre: 'dictee', texte: 'x', raison: 'tour' })),
+     'la ligne du flux distingue les trois raisons');
+dire(/travaillait/.test(corps({ genre: 'dictee', texte: 'x', raison: 'occupe' })),
+     'y compris la retenue d office');
+
+// Une explication qui survit a son objet devient fausse : parler ou envoyer l efface.
+emettre({ genre: 'ecoute', actif: false, parle: true });
+dire(note.hidden, 'reparler efface la note : la situation a change');
+emettre({ genre: 'dictee', texte: 'encore', raison: 'mode' });
+dire(!note.hidden, 'elle revient au depot suivant');
+emettre({ genre: 'toi', texte: 'encore' });
+dire(note.hidden, 'et un message reellement parti l efface aussi');
+// Le brouillon TAPE survit deliberement a l envoi d une dictee : on peut avoir ecrit une
+// phrase, parle ensuite, et le tour vocal parti ne doit pas emporter ce qu on avait ecrit.
+// La protection contre le texte retenu qui survit a un envoi est ailleurs, cote agent : la
+// retenue est collante, donc aucun tour vocal ne part tant qu un texte attend une relecture.
+champ.value = 'un brouillon tape'; champ.oninput();
+ouvrirDictee();
+poserDictee('et une dictee', false);
+emettre({ genre: 'toi', texte: 'et une dictee' });
+dire(champ.value === 'un brouillon tape',
+     'un envoi vocal ne retire que la dictee, jamais le brouillon tape : "' + champ.value + '"');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

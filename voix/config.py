@@ -165,6 +165,28 @@ ECOUTE_PALIERS = (2.0, 3.0, 5.0, 8.0, 10.0, 15.0, 20.0)
 # ce sont des reactions, pas des taches a relire.
 RETENIR_SI_OCCUPE = os.environ.get("VOIX_RETENIR_OCCUPE", "1") not in ("0", "non", "false")
 
+# Qui decide qu'un tour est fini : nous, ou LiveKit.
+#
+# En automatique, LiveKit commet le tour quand son detecteur juge la phrase terminee, et la
+# page affiche un compte a rebours *estime* a partir des memes reglages. Deux horloges pour
+# une seule decision : quand elles divergent, on lit « encore 4 s » et le message est deja
+# parti. C'est la cause de « la phase de retenir, des fois je ne peux pas la faire » — le
+# bouton arrivait apres la decision, pas avant.
+#
+# En manuel, le VAD continue de signaler debut et fin de parole, mais LiveKit ne commet plus
+# rien : l'agent arme une fenetre, publie sa fin exacte, et commet a l'echeance. Le decompte
+# affiche EST celui qui decide. Et « retenir » n'a plus rien a rattraper — il suffit de ne
+# pas commettre, ce qui est une non-action, donc infaillible.
+#
+# Ce qu'on perd : l'extension semantique du detecteur, qui allongeait l'attente quand la
+# phrase sonnait inachevee. Le plancher genereux et la remise a zero des qu'on reparle
+# couvrent le meme besoin, visiblement au lieu de silencieusement.
+#
+# Ce qu'on gagne en plus : un ordre local (« arrete », « coupe le micro ») part
+# IMMEDIATEMENT au lieu d'attendre le silence complet. En automatique il patientait
+# ECOUTE_MIN comme n'importe quelle phrase, ce qui est absurde pour un ordre d'arret.
+TOUR_MANUEL = os.environ.get("VOIX_TOUR_MANUEL", "1") not in ("0", "non", "false")
+
 # Le plafond suit le plancher au lieu d'etre fixe. Sinon regler le plancher a 15 s le
 # placerait au-dessus d'un plafond de 12 s, et la fenetre « phrase inachevee » deviendrait
 # plus COURTE que la fenetre normale — un reglage qui se retourne contre celui qui le fait.

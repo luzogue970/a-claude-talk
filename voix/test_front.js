@@ -80,6 +80,13 @@ globalThis.document = {
   body: { scrollHeight: 0 },
 };
 globalThis.window = { innerHeight: 800, scrollY: 0, scrollTo() {} };
+// La page utilise requestAnimationFrame pour ne declencher une transition CSS qu'apres que
+// l'element est dans le flux. Le talon l'execute TOUT DE SUITE : ce qui est asynchrone dans
+// un navigateur doit rester observable dans un test, sinon on ne verifie que le premier
+// etat. Ne pas le modeliser du tout faisait planter tout le script — un talon incomplet ne
+// donne pas un test moins precis, il donne un test qui n'existe pas.
+globalThis.requestAnimationFrame = f => { f(); return 1; };
+globalThis.cancelAnimationFrame = () => {};
 globalThis.document.querySelector = () => elem("main");
 globalThis.addEventListener = () => {};
 globalThis.envoyes = [];

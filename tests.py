@@ -33,6 +33,8 @@ SUITES = [
     ("journal", "test_journal.py", "py", "historique : portée par dossier, états, reprise", False),
     ("consommation", "test_consommation.py", "py",
      "quotas des moteurs : ce qui est compté, ce qui prime dessus", False),
+    ("fenetre", "test_fenetre.py", "py",
+     "fenêtre avant envoi : décompte, retenue, ordres immédiats", False),
     ("pupitre", "test_pupitre.py", "py", "conversations parallèles : baux micro et parole", False),
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),
