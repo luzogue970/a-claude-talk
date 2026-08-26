@@ -28,6 +28,22 @@ from worker import Worker  # noqa: E402
 dit: list[str] = []
 demandes: list[str] = []
 
+# Cette suite observait beaucoup et ne verifiait rien : elle affichait des compteurs, sortait
+# avec 0, et le lanceur la comptait verte pour zero verification. C'est la suite la PLUS
+# couteuse — un vrai Claude, un vrai quota — et c'etait la seule a ne rien prouver. Un feu
+# vert paye au prix d'un appel API et qui ne teste rien est un mauvais echange.
+ok = ko = 0
+
+
+def dire(vrai, quoi):
+    global ok, ko
+    if vrai:
+        ok += 1
+        print(f"  ok    {quoi}")
+    else:
+        ko += 1
+        print(f"  ECHEC {quoi}")
+
 
 async def main():
     pp = PorteParole()
@@ -100,14 +116,22 @@ async def main():
     if os.path.isfile(essai):
         os.remove(essai)
     await tour("Cree un fichier _essai_auto.md contenant juste le mot bonjour.", True)
-    for _ in range(20):  # l'ecriture peut aboutir juste apres le debrief
-        if os.path.isfile(essai):
+    # Attendre que le WORKER ait fini, pas un delai fixe. `tour()` rend la main des que la
+    # voix a dit « c'est parti » — le travail continue derriere. Dix secondes suffisaient la
+    # plupart du temps, et l'assertion echouait le reste du temps sur une machine chargee :
+    # un test qui depend de la vitesse du moment ne mesure pas ce qu'il pretend mesurer, et
+    # un rouge intermittent finit par etre ignore, ce qui coute plus cher que pas de test.
+    for _ in range(240):                        # deux minutes de patience, verifiees chaque 0,5 s
+        if os.path.isfile(essai) and not worker.occupe:
             break
         await asyncio.sleep(0.5)
-    print(f"  fichier cree            : {os.path.isfile(essai)}")
-    print(f"  permissions demandees   : {len(demandes)} (doit etre 0 en mode auto)")
+    dire(os.path.isfile(essai),
+         "un tour de travail va jusqu'a ecrire le fichier demande")
+    dire(not demandes,
+         f"aucune permission demandee en mode {config.PERMISSION} ({len(demandes)} vue(s))")
     outils = [n for n, _ in worker.journal.outils]
-    print(f"  outils du tour          : {outils}")
+    dire(any(n in ("Write", "Edit", "Bash") for n in outils),
+         f"et l'outil d'ecriture apparait dans le journal : {outils}")
     if os.path.isfile(essai):
         os.remove(essai)
 
@@ -119,6 +143,22 @@ async def main():
 
     from collections import Counter
     compte = Counter(e["genre"] for e in tableau.histoire)
+
+    print("\n=== ce que la boucle a reellement produit ===")
+    # Une ligne « toi » signifie « ce message a ete pris en compte ». Sans elle, en relisant
+    # le flux, impossible de savoir ce qui est vraiment parti.
+    dire(compte.get("toi", 0) >= 1, "des lignes « toi » marquent les messages pris en compte")
+    # Les ordres locaux ne doivent JAMAIS atteindre Claude : c'est tout leur interet.
+    dire(compte.get("ordre", 0) >= 5,
+         f"les ordres locaux sont detectes et annonces ({compte.get('ordre', 0)} fois)")
+    dire(dit, "la voix a bien quelque chose a dire a chaque tour")
+    # Le mode manuel change QUI decide de l'envoi : si la constante est a False sans qu'on
+    # l'ait voulu, tout le decompte visible retombe silencieusement sur une estimation.
+    dire(config.TOUR_MANUEL,
+         "le tour est en mode manuel : c'est l'agent qui commet, donc le decompte affiche decide")
+    dire(agent.pourquoi_retenir() is None,
+         "au repos, aucune raison de retenir — sinon plus rien ne partirait jamais")
+    print(f"  ·     {len(compte)} genres publiés : {', '.join(sorted(compte))}")
     print(f"\n=== tableau : {len(tableau.histoire)} evenements ===")
     for genre, n in compte.most_common():
         print(f"   {genre:12} {n}")
@@ -130,6 +170,8 @@ async def main():
     if pp.client:
         await pp.client.disconnect()
     print(f"\n=== {len(dit)} prise(s) de parole capturee(s) ===")
+    print(f"\n  {ok} ok, {ko} echec(s)")
+    return 1 if ko else 0
 
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))

@@ -576,6 +576,15 @@ class Voix(Agent):
         # part vers le fournisseur. La mesurer ici plutot qu'a cote garantit qu'elle suit
         # l'etat REEL du micro, pas l'intention.
         consommation.micro(effectif)
+        # Couper le micro vaut « j'ai fini de parler ».
+        #
+        # En manuel, la fin de tour vient du VAD. Si le micro se coupe PENDANT la parole, ce
+        # signal peut ne jamais arriver : le texte deja transcrit resterait alors dans la
+        # barre sans decompte et sans envoi, et rien n'expliquerait pourquoi. La coupure
+        # tranche donc elle-meme — ouvrir_fenetre decidera d'attendre, d'envoyer ou de
+        # retenir, exactement comme un silence normal.
+        if config.TOUR_MANUEL and not effectif and self._dit.strip():
+            self.ouvrir_fenetre()
         if publier:
             self._voir("micro", actif=effectif, voulu=self.micro_voulu, bail=bail)
         return effectif

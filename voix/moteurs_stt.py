@@ -145,6 +145,22 @@ def construire(cle: str, vad=None):
         from livekit.plugins import assemblyai
         # `language_codes` au pluriel : le singulier est deprecie depuis la 1.6.
         return assemblyai.STT(language_codes=[courte], keyterms_prompt=mots[:100])
+    if cle == "soniox":
+        from livekit.plugins import soniox
+        from livekit.plugins.soniox.stt import STTOptions
+        # Le vocabulaire passe par `context`, qui accepte une simple chaine : Soniox le lit
+        # comme un contexte de conversation plutot que comme une liste de mots a forcer.
+        return soniox.STT(api_key=config.SONIOX_KEY,
+                          params=STTOptions(language_hints=[courte],
+                                            context=", ".join(mots[:100])))
+    if cle == "google":
+        from livekit.plugins import google as gg
+        # `keywords` attend des couples (mot, poids) et non des chaines — verifie dans la
+        # signature du plugin. Le poids 10 est le maximum accepte par l'API ; les termes du
+        # projet sont precisement ceux qu'on veut voir gagner contre un mot courant.
+        return gg.STT(languages=[langue], interim_results=True, punctuate=True,
+                      keywords=[(m, 10.0) for m in mots[:100]],
+                      credentials_file=config.GOOGLE_CREDENTIALS or None)
     if cle == "groq":
         from livekit.plugins import groq
         from livekit.agents import stt as stt_api

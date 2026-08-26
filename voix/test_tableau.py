@@ -464,6 +464,32 @@ def tout_genre_affiche_a_un_filtre():
     # definition, donc modifier la premiere ne faisait rien — un reglage change qui reste sans
     # effet, sans aucun message d'erreur. C'est le pire symptome possible sur un fichier de
     # configuration : on croit avoir agi.
+    # Le trou qu'il bouche : faster-whisper etait importe par stt_local et absent de
+    # requirements.txt. Sur cette machine tout marchait — il avait ete installe a la main —
+    # et une installation neuve plantait au premier repli vers le local. Le genre de panne
+    # qui n'arrive qu'a celui a qui on partage le depot.
+    print("\n=== chaque plugin importe est declare dans requirements ===")
+    racine = Path(__file__).parent
+    exigences = (racine.parent / "requirements.txt").read_text(encoding="utf-8")
+    manquants = []
+    for fichier in sorted(racine.glob("*.py")):
+        texte = fichier.read_text(encoding="utf-8")
+        for plugin in set(re.findall(r"from livekit\.plugins import (\w+)", texte)
+                          + re.findall(r"from livekit\.plugins\.(\w+)", texte)
+                          + re.findall(r"livekit\.plugins\.(\w+)", texte)):
+            # turn-detector s'importe sous un autre nom que celui du paquet.
+            paquet = {"turn_detector": "turn-detector"}.get(plugin, plugin)
+            if f"livekit-plugins-{paquet}==" not in exigences:
+                manquants.append(f"{plugin} (dans {fichier.name})")
+    dire(not manquants,
+         "tout plugin importe est epingle" + (f" — MANQUENT : {sorted(set(manquants))}"
+                                              if manquants else ""))
+    # Et l'inverse : les versions doivent toutes s'accorder, sinon pip fait remonter le noyau
+    # tout seul — c'est exactement ce qu'a fait livekit-plugins-deepgram en tirant la 1.7.0.
+    versions = set(re.findall(r"^livekit-(?:agents|plugins-[\w-]+)==([\d.]+)", exigences, re.M))
+    dire(len(versions) == 1,
+         f"une seule version de livekit epinglee partout : {sorted(versions)}")
+
     print("\n=== aucune constante definie deux fois ===")
     racine = Path(__file__).parent
     for fichier in ("config.py", "moteurs_stt.py", "consommation.py"):

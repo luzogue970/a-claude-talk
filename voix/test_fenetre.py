@@ -277,6 +277,28 @@ async def principal():
     dire(v._fenetre is not None, "la barre partie, le tour suivant repart normalement")
     v.fermer_fenetre()
 
+    # --- couper le micro vaut « j'ai fini » ----------------------------------------------
+    print("\n=== couper le micro tranche le tour en cours ===")
+    v = neuve()
+    v.micro_voulu = False
+    v.inscription = None
+    applique = []
+    v.sess.input = type("I", (), {"set_audio_enabled": lambda s, x: applique.append(x)})()
+    v._dit = "une phrase interrompue par la coupure"
+    v.appliquer_micro(publier=False)
+    dire(v._fenetre is not None or v.sess.commis == 1,
+         "le texte deja transcrit n'est pas abandonne : la fenetre s'ouvre ou le tour part")
+    v.fermer_fenetre()
+
+    # Et sans rien de transcrit, couper le micro ne declenche rien du tout.
+    v = neuve()
+    v.micro_voulu = False
+    v.inscription = None
+    v.sess.input = type("I", (), {"set_audio_enabled": lambda s, x: None})()
+    v.appliquer_micro(publier=False)
+    dire(v._fenetre is None and v.sess.commis == 0,
+         "micro coupe sans rien avoir dit : aucun tour vide n'est fabrique")
+
     print(f"\n  {ok} ok, {ko} echec(s)")
     return 1 if ko else 0
 

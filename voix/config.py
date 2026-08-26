@@ -123,6 +123,14 @@ WORKDIR = os.environ.get("VOIX_WORKDIR", os.getcwd())
 # carries a badge for it.
 PERMISSION = os.environ.get("VOIX_PERMISSION", "bypassPermissions")
 
+# Les cles des moteurs de reconnaissance ajoutes apres Azure et Deepgram. Elles vivent dans
+# ~/.config/claude-talk/secrets.env, jamais dans le depot. Une cle absente n'est pas une
+# erreur : moteurs_stt.chaine() retire simplement le moteur de la chaine.
+SONIOX_KEY = os.environ.get("SONIOX_API_KEY", "")
+# Google fait exception : ce n'est pas une cle mais le CHEMIN d'un fichier JSON de compte de
+# service. C'est la variable standard du SDK Google, d'ou son nom conserve tel quel.
+GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+
 # --- ecoute et interruption --------------------------------------------------
 # Read by agent.py and shown in the startup panel, so what the page displays is the value
 # actually in force rather than a copy that drifts.
