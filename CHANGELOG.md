@@ -7,6 +7,38 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.12.0] — 2026-08-26
+
+### Corrige — un texte deja envoye revenait dans la barre
+
+Deux defauts d'un meme modele trop pauvre : une seule variable portait a la fois le brouillon
+tape et la dictee en cours. Reproduits avant correction.
+
+- Une transcription arrivant APRES l'envoi du tour remettait dans la barre un texte deja
+  envoye, qui repartait au message suivant. LiveKit le fait et le journalise meme.
+- Une phrase coupee par une pause produit deux transcriptions finales, chacune ne contenant
+  que son segment. En se remplacant au lieu de se cumuler, le debut disparaissait.
+- Le routage passait `final` en dur a `false`, donc les segments ne se cumulaient jamais.
+
+Trois etats distincts desormais : le brouillon tape (il survit a l'envoi, c'est ton texte),
+les segments finalises de l'enonce en cours, et un drapeau « dictee ouverte » pose quand tu
+commences a parler. Une transcription hors dictee est ignoree. Seule la jonction est
+normalisee : nettoyer tout le champ detruirait la mise en forme d'un brouillon.
+
+### Ajoute — `tests.py`, une commande avant chaque fusion
+
+Neuf suites, groupees par domaine fonctionnel. Le tableau final dit ce qui est COUVERT par
+domaine, pas seulement combien de tests passent : un compte global rassure sans informer,
+alors qu'un domaine a zero test se voit.
+
+- `vtest`, `vtest --rapide`, `vtest -k <suite>`, `vtest --liste`.
+- Une suite qui s'abstient (Chrome absent, pas de cle) est marquee IGNOREE, jamais confondue
+  avec une suite verte : la confusion donnerait une couverture imaginaire.
+- Une suite ABSENTE fait echouer le lot : un fichier de test disparu ne doit pas passer pour
+  un succes.
+- Il a trouve cinq echecs des sa premiere execution — d'anciens cas qui appelaient l'API de
+  dictee sans l'ouvrir.
+
 ## [1.11.0] — 2026-08-26
 
 ### Corrige — selecteurs vides et panneau absent sur les conversations longues

@@ -824,15 +824,33 @@ instructions de code préservées**.
 
 ## Tests
 
+Une commande, à passer **avant chaque fusion** :
+
 ```fish
-cd voix
-../.venv/bin/python test_noyau.py         # la boucle, sans micro
-../.venv/bin/python test_intentions.py    # les ordres locaux, et ce qui ne doit PAS en etre
-../.venv/bin/python test_conversation.py  # journal, etats, reprise
-../.venv/bin/python test_tableau.py       # invariants du serveur du tableau
-node test_front.js                        # le front, sans navigateur
-node test_rendu.js                        # la mise en page, dans Chrome
+vtest                # tout
+vtest --rapide       # sans ce qui coûte du quota ni n'exige Chrome
+vtest -k tableau     # une seule suite
+vtest --liste        # ce qui existe, et ce que ça couvre
 ```
+
+Le tableau final dit ce qui est couvert **par domaine**, pas seulement combien de tests
+passent : un compte global rassure sans informer, alors qu'un domaine à zéro test se voit.
+
+| Domaine | Ce qu'il protège |
+|---|---|
+| `intentions` | les ordres locaux sur toute formulation, **et ce qui n'en est pas un** |
+| `journal` | historique : portée par dossier, états, reprise |
+| `pupitre` | conversations parallèles : baux micro et parole |
+| `tableau` | serveur : état, commandes, rejeu, retenue |
+| `front` | interface sans navigateur : dictée, filtres, indicateurs |
+| `rendu` | mise en page réelle, mesurée dans Chrome |
+| `noyau` · `boucle` | worker, porte-parole, boucle complète — avec le vrai Claude |
+| `conversation` | assistant « Hey Claude » (désactivé) |
+
+Une suite qui **s'abstient** — Chrome absent, pas de clé — est signalée `IGNORÉE`, jamais
+confondue avec une suite verte : la confusion donnerait une couverture imaginaire. Une suite
+`ABSENTE` fait échouer le lot, parce qu'un fichier de test disparu ne doit pas passer pour un
+succès.
 
 `test_rendu.js` rend la page dans Chrome et mesure la géométrie réelle. Il existe parce que
 `test_front.js` stube le DOM et ne mesure donc aucune mise en page : il a laissé passer un
@@ -929,6 +947,26 @@ rien), et un état d'agent non traduit (`idle` n'est jamais émis par LiveKit). 
 cours a été observé en direct sur sa WebSocket : socket stable 40 s, aucune erreur publiée, et
 six événements `micro` alternant correctement. Le serveur était donc innocent, et il ne
 restait que la page.
+
+### Le texte déjà envoyé qui revenait dans la barre
+
+Deux défauts d'un même modèle trop pauvre, tous deux **reproduits avant correction**.
+
+Une seule variable portait à la fois le brouillon tapé et la dictée en cours. Conséquences :
+
+- **Une transcription arrivant après l'envoi du tour** — LiveKit le fait, il le journalise
+  même — remettait dans la barre un texte déjà envoyé, qui repartait au message suivant.
+- **Une phrase coupée par une pause** produit deux transcriptions finales, chacune ne
+  contenant que son propre segment. En se remplaçant au lieu de se cumuler, le début
+  disparaissait de la barre.
+
+Trois états distincts, désormais : le **brouillon** que tu avais tapé — il survit à l'envoi de
+la dictée, c'est ton texte — les **segments** déjà finalisés de l'énoncé en cours, et le
+drapeau **dictée ouverte**, posé quand tu commences à parler et retiré quand l'énoncé est
+consommé. Une transcription hors dictée est ignorée.
+
+Sept scénarios verrouillent le cycle, dont ceux-là et : taper pendant une dictée reprend la
+main, et le texte consolidé du serveur fait autorité en mode retenu.
 
 ### Le bug du « micro coupé qui ne coupe pas »
 

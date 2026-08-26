@@ -1446,28 +1446,65 @@ function majEnvoyer() {
 // l'énoncé, et le texte reconnu s'ajoute à cette base. Champ vide, la dictée le remplit ;
 // champ déjà rempli d'une correction, elle s'ajoute à la suite. Rien n'est jamais écrasé,
 // parce qu'écraser une correction qu'on vient de taper serait la pire des trahisons.
-let base = null;              // contenu du champ avant l'énoncé en cours
+// Trois choses distinctes, et les confondre produisait deux bugs reproduits :
+//
+// - `brouillon` : ce que TU avais tapé avant de parler. Il doit survivre à l'envoi de la
+//   dictée — c'est ton texte, pas celui de la machine.
+// - `segments`  : les morceaux déjà finalisés de la dictée EN COURS. Une pause de deux
+//   secondes coupe la phrase en deux transcriptions finales, et chacune ne contient que son
+//   propre segment. En les remplaçant au lieu de les cumuler, le début disparaissait de la
+//   barre.
+// - `dicteeOuverte` : y a-t-il une dictée en cours. Sans ce drapeau, une transcription
+//   arrivant APRÈS l'envoi du tour — LiveKit le fait, il le journalise même — remettait dans
+//   la barre un texte déjà envoyé, qui repartait au message suivant.
+let brouillon = null, segments = "", dicteeOuverte = false;
 let retenir = false;
 
+// Une dictée s'ouvre quand tu commences à parler, et pas avant : c'est ce qui délimite un
+// énoncé, et donc ce qui permet d'ignorer les transcriptions en retard.
+function ouvrirDictee() {
+  if (dicteeOuverte) return;
+  brouillon = champ.value ? champ.value.trimEnd() + " " : "";
+  segments = "";
+  dicteeOuverte = true;
+}
+
 function poserDictee(texte, definitif) {
-  if (base === null) base = champ.value ? champ.value.trimEnd() + " " : "";
-  champ.value = base + texte;
-  champ.classList.toggle("dictee", !definitif);
+  // Rien à écrire hors dictée : une transcription tardive appartient à un tour déjà parti.
+  if (!dicteeOuverte) return;
+  if (definitif) {
+    // Cumulé, pas remplacé : la suite de la phrase s'écrit derrière ce segment.
+    segments = (segments + texte).trim() + " ";
+    texte = "";
+  }
+  // Seule la JONCTION est normalisée. Nettoyer tout le champ détruirait la mise en forme
+  // d'un brouillon tapé — retours à la ligne compris.
+  const suite = segments ? texte.replace(/^\s+/, "") : texte;
+  champ.value = (brouillon + segments + suite).trimEnd();
+  champ.classList.toggle("dictee", true);
   majEnvoyer();
   // La dictée écrit sans passer par oninput : sans cet appel le champ ne grandirait que
   // quand on tape, c'est-à-dire jamais pendant qu'on parle.
   ajusterHauteur();
-  if (definitif) { base = null; champ.classList.remove("dictee"); }
+}
+
+// La dictée est consommée. `garde` porte le texte à laisser dans la barre — celui que le
+// serveur a retenu — ou rien du tout si le tour est parti chez Claude.
+function fermerDictee(garde) {
+  const debut = brouillon || "";
+  champ.value = (garde ? (debut + garde) : debut).trimEnd();
+  brouillon = null;
+  segments = "";
+  dicteeOuverte = false;
+  champ.classList.remove("dictee");
+  majEnvoyer();
+  ajusterHauteur();
 }
 
 // Fin de tour en mode envoi direct : le texte est parti chez Claude, la barre se vide.
+// Le tour est parti chez Claude : la dictée disparaît de la barre, le brouillon tapé reste.
 function viderDictee() {
-  // trimEnd : la base porte l'espace de jonction ajouté pour la concaténation. Rendre un
-  // brouillon doit rendre exactement le brouillon, pas le brouillon plus une espace.
-  if (base !== null) { champ.value = base.trimEnd(); majEnvoyer(); }
-  base = null;
-  champ.classList.remove("dictee");
-  ajusterHauteur();   // revenu vide, le champ reprend sa taille d'origine
+  if (dicteeOuverte) fermerDictee(null);
 }
 
 // --- au bout de combien de silence le message part -------------------------------------
@@ -1560,7 +1597,11 @@ addEventListener("keydown", ev => {
 // valeur posée par le script ne le déclenche pas — donc ceci ne peut venir que de toi, et ce
 // que tu écris devient la nouvelle base de la dictée suivante.
 champ.oninput = () => {
-  base = null;
+  // Taper reprend la main : ce que tu écris devient le brouillon, et la dictée en cours est
+  // abandonnée. Sans ça, la transcription suivante écraserait ta correction.
+  brouillon = null;
+  segments = "";
+  dicteeOuverte = false;
   champ.classList.remove("dictee");
   majEnvoyer();
   ajusterHauteur();
@@ -1708,13 +1749,18 @@ function recevoir(e) {
       return;
     }
     if (e.genre === "partiel") {
-      poserDictee(e.texte || "", false);
+      // `final` doit être transmis : une transcription finale ne remplace pas la précédente,
+      // elle s'ajoute derrière. Le passer en dur à `false` faisait disparaître le début de
+      // toute phrase coupée par une pause — et une pause de deux secondes suffit.
+      poserDictee(e.texte || "", !!e.final);
       ajouter(e);
       return;
     }
     // Déposé pour relecture : la dictée devient définitive dans la barre, à toi de jouer.
     if (e.genre === "dictee") {
-      poserDictee(e.texte || "", true);
+      // Le texte du serveur est le texte CONSOLIDÉ du tour : il fait autorité sur les
+      // segments accumulés côté page, qui peuvent avoir manqué un morceau.
+      fermerDictee(e.texte || "");
       champ.focus();
       ajouter(e);            // et une ligne, sinon rien ne dit qu'on a parlé pour rien
       return;
@@ -1723,6 +1769,10 @@ function recevoir(e) {
     if (e.genre === "toi" && !e.tape) { viderDictee(); }
     if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }
     if (e.genre === "ecoute") {
+      // `parle` marque le DÉBUT de la parole : c'est là qu'une nouvelle dictée s'ouvre, et
+      // nulle part ailleurs. Ce repère est ce qui permet d'ignorer une transcription en
+      // retard, qui appartient au tour précédent.
+      if (e.parle) ouvrirDictee();
       if (e.actif) lancerCompte(e.min, e.max); else arreterCompte();
       return;
     }

@@ -257,13 +257,9 @@ function vdev --description "Liste les peripheriques audio vus par LiveKit"
     set -l py (__voix_py); or return 1
     $py $VOIX_RACINE/voix/agent.py console --list-devices
 end
-function vtest --description "Tests sans audio : noyau puis boucle complete"
+function vtest --description "Toutes les suites — a passer avant chaque fusion"
     set -l py (__voix_py); or return 1
-    echo "=== noyau : worker + porte-parole ==="
-    $py $VOIX_RACINE/voix/test_noyau.py; or return 1
-    echo
-    echo "=== boucle : via AgentSession.run() ==="
-    $py $VOIX_RACINE/voix/test_boucle.py
+    $py $VOIX_RACINE/tests.py $argv
 end
 function vaec --description "2e couche d'annulation d'echo (PipeWire), si de l'echo passe"
     if pactl list short sources | string match -q '*echo-cancel-source*'

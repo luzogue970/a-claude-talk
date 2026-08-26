@@ -198,15 +198,27 @@ dire(!leve, 'sans ligne de tour, la mesure se perd sans exception');
 
 // ---- dictee dans la barre ---------------------------------------------------------------
 titre('dictee dans la barre de saisie');
-champ.value = ''; base = null;
+// Une dictee doit etre OUVERTE pour ecrire : c'est ce qui permet d'ignorer une transcription
+// arrivant apres l'envoi du tour. Ecrire hors dictee ne doit rien faire.
+champ.value = ''; champ.oninput();
+poserDictee('perdu dans le vide', false);
+dire(champ.value === '', 'hors dictee, rien ne s ecrit : ' + JSON.stringify(champ.value));
+
+ouvrirDictee();
 poserDictee('renomme la vari', false);
 dire(champ.value === 'renomme la vari', 'le texte s ecrit a mesure');
 poserDictee('renomme la variable', false);
-dire(champ.value === 'renomme la variable', 'les partiels remplacent, ils ne s empilent pas');
+dire(champ.value === 'renomme la variable',
+     'les partielles se remplacent, elles ne s empilent pas');
 poserDictee('renomme la variable.', true);
-dire(champ.value === 'renomme la variable.' && base === null,
-     'le definitif clot la dictee');
-champ.value = 'corrige a la main'; base = null;
+dire(champ.value === 'renomme la variable.' && dicteeOuverte === true,
+     'un segment final se fige mais NE clot PAS la dictee : la phrase peut continuer');
+poserDictee(' et lance les tests', false);
+dire(champ.value === 'renomme la variable. et lance les tests',
+     'la suite s ecrit derriere le segment fige : ' + champ.value);
+
+champ.value = 'corrige a la main'; champ.oninput();
+ouvrirDictee();
 poserDictee('et ajoute un test', false);
 dire(champ.value === 'corrige a la main et ajoute un test',
      'une dictee s ajoute a une correction tapee, elle ne l ecrase pas');
@@ -294,7 +306,8 @@ dire(parseInt(btnBas.style.bottom) === parseInt(champ.style.height) + 14 - 0 || 
      'le bouton « suivre » suit aussi la barre');
 
 // la dictee ecrit sans oninput : elle doit ajuster quand meme
-champ.value = ''; base = null; ajusterHauteur();
+champ.value = ''; champ.oninput(); ajusterHauteur();
+ouvrirDictee();
 poserDictee('a'.repeat(300), false);
 dire(hauteur() > 36, 'une dictee longue fait grandir le champ (' + hauteur() + ' px)');
 viderDictee();
@@ -350,6 +363,74 @@ dire(mots > 40, 'la bulle explique vraiment : ' + mots + ' mots');
 dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passent quand meme');
 dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
      'et renvoie vers le bouton du decompte');
+
+// ---- cycle de vie de la dictee ----------------------------------------------------------
+// Deux bugs reproduits avant correction, et ce sont les cas les plus couteux du systeme :
+// un texte deja envoye qui revient dans la barre et repart au message suivant, et une
+// phrase coupee par une pause dont le debut disparait.
+titre('dictee : rien ne revient, rien ne se perd');
+const val = () => champ.value;
+
+// 1. une phrase coupee par une pause : deux transcriptions finales, chacune partielle
+champ.value = ''; brouillon = null; segments = ''; dicteeOuverte = false;
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'renomme la variable', final: false });
+dire(val() === 'renomme la variable', 'le direct s ecrit : ' + val());
+emettre({ genre: 'partiel', texte: 'renomme la variable', final: true });
+emettre({ genre: 'partiel', texte: 'qui gere le silence', final: false });
+dire(val() === 'renomme la variable qui gere le silence',
+     'le second segment s AJOUTE au premier : ' + val());
+emettre({ genre: 'partiel', texte: 'qui gere le silence', final: true });
+dire(val() === 'renomme la variable qui gere le silence',
+     'et le final ne le duplique pas : ' + val());
+
+// 2. le tour part : la barre se vide
+emettre({ genre: 'toi', texte: 'renomme la variable qui gere le silence' });
+dire(val() === '', 'apres envoi, la barre est vide : ' + JSON.stringify(val()));
+dire(dicteeOuverte === false, 'et la dictee est fermee');
+
+// 3. LE bug : une transcription qui arrive APRES l envoi
+emettre({ genre: 'partiel', texte: 'qui gere le silence', final: true });
+dire(val() === '', 'une transcription tardive ne remet RIEN dans la barre');
+emettre({ genre: 'partiel', texte: 'encore du retard', final: false });
+dire(val() === '', 'ni une partielle tardive');
+
+// 4. le tour suivant repart propre
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'lance les tests', final: false });
+dire(val() === 'lance les tests', 'le tour suivant ne traine pas l ancien : ' + val());
+emettre({ genre: 'toi', texte: 'lance les tests' });
+
+// 5. un brouillon tape SURVIT a l envoi de la dictee : c est ton texte, pas celui du micro
+champ.value = 'note pour moi'; champ.oninput();
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'et corrige le test', final: false });
+dire(val() === 'note pour moi et corrige le test',
+     'la dictee s ajoute derriere le brouillon : ' + val());
+emettre({ genre: 'toi', texte: 'et corrige le test' });
+dire(val() === 'note pour moi',
+     'la dictee partie, le brouillon reste : ' + JSON.stringify(val()));
+
+// 6. retenu : le texte consolide du serveur reste dans la barre
+champ.value = ''; champ.oninput();
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'ajoute un export', final: false });
+emettre({ genre: 'dictee', texte: 'ajoute un export CSV', auto: true });
+dire(val() === 'ajoute un export CSV',
+     'retenu : le texte du serveur fait autorite : ' + val());
+dire(dicteeOuverte === false, 'et la dictee est fermee');
+emettre({ genre: 'partiel', texte: 'du retard encore', final: true });
+dire(val() === 'ajoute un export CSV',
+     'une transcription tardive ne le pollue pas : ' + val());
+
+// 7. taper pendant une dictee reprend la main
+champ.value = ''; champ.oninput();
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'mauvaise transcription', final: false });
+champ.value = 'ma correction'; champ.oninput();
+emettre({ genre: 'partiel', texte: 'mauvaise transcription encore', final: false });
+dire(val() === 'ma correction',
+     'la transcription n ecrase pas une correction tapee : ' + val());
 
 // ---- l attente de transcription est visible ---------------------------------------------
 titre('transcription : l attente ne doit pas etre muette');
