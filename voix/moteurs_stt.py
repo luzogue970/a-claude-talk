@@ -203,18 +203,22 @@ def enregistrer_preference(ordre: str | None):
 # --- l'ordre automatique -----------------------------------------------------------------
 # Quatre classes, dans cet ordre. Ce qui les separe est une question a chaque fois differente :
 #
-#   0. un credit unique encore ABONDANT (au-dessus de sa reserve). Autant profiter du
-#      meilleur moteur maintenant : 430 h couvrent cinq ans a raison de 7 h/mois, donc
-#      « garder la reserve » serait theorique tant qu'elle est pleine.
-#   1. un quota mensuel. Il revient le mois prochain : le depenser ne coute rien.
+#   0. un QUOTA MENSUEL. C'est le seul qui se PERD : les heures d'aout non consommees ne
+#      reviennent pas, elles disparaissent. Ne pas les depenser, c'est les jeter. Un credit,
+#      lui, attendra le mois prochain sans rien perdre. Le mensuel passe donc devant, meme
+#      quand un credit fait un peu mieux au banc — le petit ecart de qualite coute moins
+#      cher que des heures gratuites perdues chaque mois.
+#   1. un credit unique encore ABONDANT (au-dessus de sa reserve). C'est le relais naturel
+#      quand les mensuels sont a sec, et il reste devant tout le reste.
 #   2. un credit unique passe SOUS sa reserve. Il se garde pour les mois ou les mensuels
-#      seront epuises — c'est precisement a ça qu'il sert.
+#      seront epuises tot — c'est precisement a ça qu'il sert.
 #   3. les moteurs sans texte en direct, et le local. Ils transcrivent tres bien mais ne
 #      rendent rien avant la fin de la phrase, ce qui supprime la relecture avant envoi.
 #      Utilisables, jamais souhaitables.
 #
 # Et hors classe : un moteur constate epuise part a la fin, quelle que soit sa qualite.
-# A classe egale, `qualite` tranche.
+# A classe egale, `qualite` tranche — donc Speechmatics (le meilleur des bancs publics)
+# ouvre la chaine, et Deepgram (le meilleur mesure ici) prend le relais.
 
 
 def _classe(cle: str, restes: dict) -> tuple[int, int]:
@@ -224,10 +228,10 @@ def _classe(cle: str, restes: dict) -> tuple[int, int]:
         return (3, m.qualite)
     if e.get("epuise") or (e.get("reste_s") is not None and e["reste_s"] <= 0):
         return (4, m.qualite)
-    if not m.renouvelable:
-        assez = e.get("reste_s") is None or e["reste_s"] > (m.reserve_h or 0) * 3600
-        return ((0 if assez else 2), m.qualite)
-    return (1, m.qualite)
+    if m.renouvelable:
+        return (0, m.qualite)
+    assez = e.get("reste_s") is None or e["reste_s"] > (m.reserve_h or 0) * 3600
+    return ((1 if assez else 2), m.qualite)
 
 
 def ordre_auto() -> list[str]:

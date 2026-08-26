@@ -222,39 +222,56 @@ def sans_cles(f):
 
 vider()
 ordre = sans_cles(MS.ordre_auto)
-dire(ordre[0] == "deepgram",
-     f"credit abondant en tete — le meilleur mesure d'abord (ici {ordre[0]})")
+# La regle et sa raison : un quota MENSUEL se perd s'il n'est pas consomme, un credit attend
+# sans rien perdre. Le mensuel passe donc devant, meme quand un credit fait un peu mieux au
+# banc — le petit ecart de qualite coute moins cher que des heures gratuites jetees chaque mois.
+dire(MS.PAR_CLE[ordre[0]].renouvelable,
+     f"un quota mensuel ouvre la chaine : c'est le seul qui se perd (ici {ordre[0]})")
+dire(ordre[0] == "speechmatics",
+     f"et c'est le meilleur des mensuels qui ouvre (ici {ordre[0]})")
+premier_credit = next(c for c in ordre if not MS.PAR_CLE[c].renouvelable and c != "local")
+dire(all(ordre.index(c) < ordre.index(premier_credit)
+         for c in ordre if MS.PAR_CLE[c].renouvelable and MS.PAR_CLE[c].direct),
+     "TOUS les mensuels passent avant le premier credit")
+dire(premier_credit == "deepgram",
+     f"et le relais est le meilleur credit mesure (ici {premier_credit})")
 dire(ordre[-1] == "local", "le local ferme toujours la marche : il ne peut pas manquer")
 dire(ordre.index("groq") > ordre.index("azure"),
      "un moteur sans texte en direct passe derriere tous ceux qui en ont")
 
 # Sous sa reserve, le credit recule derriere les mensuels : c'est a ça que sert la reserve.
+# Un credit passe SOUS sa reserve recule derriere les autres credits : il se garde pour les
+# mois ou les mensuels seront epuises tot, ce qui est exactement sa raison d'etre.
 C.ajouter("deepgram", (430 - 90) * 3600)
 ordre = sans_cles(MS.ordre_auto)
-# La tete revient a AssemblyAI et non a Speechmatics, et c'est juste : c'est un autre credit
-# encore abondant, donc la meme regle s'applique. Un mensuel ne reprend la tete que quand
-# plus aucun credit n'est au-dessus de sa reserve — verifie juste apres.
-dire(ordre[0] == "assemblyai",
-     f"sous sa reserve, le credit recule ; un autre credit abondant prend la tete (ici {ordre[0]})")
-dire(ordre.index("deepgram") > ordre.index("azure"),
-     "et il se place derriere TOUS les mensuels, pas juste le premier")
+dire(ordre.index("deepgram") > ordre.index("assemblyai"),
+     "sous sa reserve, un credit recule derriere les credits encore abondants")
+dire(ordre.index("deepgram") > ordre.index("gladia"),
+     "et il reste derriere les mensuels, comme tous les credits")
+dire(ordre.index("deepgram") < ordre.index("local"),
+     "mais devant le local : un credit garde vaut mieux que 7 s de latence")
 
-C.ajouter("assemblyai", (330 - 20) * 3600)
-C.ajouter("soniox", (50 - 2) * 3600)
+# Tous les mensuels epuises : les credits prennent le relais, dans l'ordre de qualite.
+for c in ("speechmatics", "gladia", "azure", "google"):
+    C.constater_epuise(c, "quota")
 ordre = sans_cles(MS.ordre_auto)
-dire(ordre[0] == "speechmatics",
-     f"plus aucun credit abondant : un mensuel reprend la tete (ici {ordre[0]})")
-dire(all(ordre.index(c) > ordre.index("azure")
-         for c in ("deepgram", "assemblyai", "soniox")),
-     "les trois credits sous reserve attendent derriere les mensuels")
+dire(not MS.PAR_CLE[ordre[0]].renouvelable,
+     f"mensuels a sec : un credit prend la tete (ici {ordre[0]})")
+dire(ordre[0] == "assemblyai",
+     f"et c'est un credit ABONDANT, pas celui passe sous reserve (ici {ordre[0]})")
 dire(ordre.index("deepgram") < ordre.index("local"),
      "mais il reste devant le local : un credit garde vaut mieux que 7 s de latence")
 
-# Un constat d'epuisement l'envoie a la fin, quelle que soit sa qualite.
+# Un constat d'epuisement l'envoie a la fin, quelle que soit sa qualite. On repart d'un
+# etat propre : les blocs precedents ont epuise plusieurs moteurs, et comparer deux moteurs
+# tous les deux epuises ne prouverait rien.
+vider()
 C.constater_epuise("speechmatics", "Quota exceeded")
 ordre = sans_cles(MS.ordre_auto)
 dire(ordre.index("speechmatics") > ordre.index("gladia"),
      "un moteur constate epuise part a la fin, meme s'il etait le meilleur")
+dire(ordre.index("speechmatics") > ordre.index("local"),
+     "derriere le local meme : mieux vaut 7 s de latence qu'un moteur qui refusera")
 
 # Le pire cas : tout est epuise. La chaine doit rester non vide, sinon on devient sourd.
 for c in ("deepgram", "speechmatics", "gladia", "azure", "assemblyai", "soniox", "google"):
