@@ -49,6 +49,16 @@ class Moteur:
     # Les credits en dollars sont convertis au tarif temps reel du fournisseur, d'ou des
     # valeurs arrondies : un ordre de grandeur suffit pour voir venir l'epuisement.
     quota_h: float | None = None
+    # A-t-on VU ce moteur rendre une phrase complete, sur cette machine, avec cette
+    # configuration ? Pas « est-il bon en general » : les bancs publics disent Speechmatics
+    # meilleur que Deepgram, et pourtant ici il rend « Renomme la variable qui gere » puis
+    # s'arrete, ou rien du tout. Une transcription tronquee est le pire des resultats — elle
+    # ne ressemble pas a une panne, elle ressemble a une instruction. On agit dessus.
+    #
+    # Un moteur non demontre reste dans la chaine, simplement derriere ceux qui ont fait la
+    # preuve : il peut se rattraper sans qu'un tour en fasse les frais. Relancer banc_stt.py
+    # est ce qui doit faire evoluer ce champ, pas une intuition.
+    demontre: bool = False
     # Combien d'heures garder EN RESERVE sur un credit unique. Au-dessus de ce seuil le
     # credit est traite comme abondant et passe devant les quotas mensuels : autant profiter
     # du meilleur moteur. En dessous, il repasse derriere et se garde pour les mois ou les
@@ -75,19 +85,19 @@ class Moteur:
 MOTEURS: tuple[Moteur, ...] = (
     Moteur("speechmatics", "Speechmatics", "SPEECHMATICS_API_KEY",
            "8 h/mois, renouvele, sans carte", True, True, True,
-           "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)", quota_h=8, qualite=2),
+           "bon sur les bancs publics (6,4 %), mais ici il tronque ses phrases ou reste muet — a revoir", quota_h=8, qualite=2),
     Moteur("gladia", "Gladia", "GLADIA_API_KEY",
            "4 h/mois de temps reel, renouvele", True, True, True,
-           "annonce par son editeur comme le meilleur sur le francais", quota_h=4, qualite=3),
+           "annonce le meilleur sur le francais par son editeur ; mesure ici, il coupe a la premiere proposition", quota_h=4, qualite=3),
     Moteur("azure", "Azure", "AZURE_SPEECH_KEY",
            "5 h/mois au palier F0, renouvele", True, True, True,
-           "aussi utilise pour la synthese vocale", quota_h=5, qualite=4),
+           "aussi utilise pour la synthese vocale ; a marche jusqu'a l'epuisement du palier", quota_h=5, qualite=4, demontre=True),
     Moteur("assemblyai", "AssemblyAI", "ASSEMBLYAI_API_KEY",
            "50 $ de credits a l'inscription (~300 h)", False, True, True,
-           "credit unique : garde-le pour quand les quotas mensuels sont epuises", quota_h=330, reserve_h=50, qualite=3),
+           "MESURE le meilleur ici : 3,0 % d'erreur en 2,9 s, le plus rapide des moteurs en ligne", quota_h=330, reserve_h=50, qualite=1, demontre=True),
     Moteur("deepgram", "Deepgram", "DEEPGRAM_API_KEY",
            "200 $ de credits a l'inscription", False, True, True,
-           "nova-3, tres faible latence", quota_h=430, reserve_h=100, qualite=1),
+           "nova-3 ; mesure a 3,0 % d'erreur, aussi bon qu'AssemblyAI mais deux fois plus lent", quota_h=430, reserve_h=100, qualite=2, demontre=True),
     Moteur("soniox", "Soniox", "SONIOX_API_KEY",
            "credits gratuits a l'inscription", False, True, True,
            "temps reel avec resultats intermediaires ; a mesurer sur ta voix",
@@ -103,7 +113,7 @@ MOTEURS: tuple[Moteur, ...] = (
     Moteur("local", "local (faster-whisper)", None,
            "illimite, hors ligne", True, True, False,
            "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine",
-           qualite=6),
+           qualite=6, demontre=True),
 )
 
 PAR_CLE = {m.cle: m for m in MOTEURS}
@@ -130,12 +140,25 @@ def construire(cle: str, vad=None):
                             language=langue, punctuate=True, **extra)
     if cle == "speechmatics":
         from livekit.plugins import speechmatics
+        from livekit.plugins.speechmatics import TurnDetectionMode
         from speechmatics.voice._models import AdditionalVocabEntry
         # Pas une liste de chaines : le plugin attend des objets `AdditionalVocabEntry`.
         # Mesure : passer des chaines leve « 'str' object has no attribute 'content' » — et
         # ca cassait le moteur ENTIER, pas seulement le biais de vocabulaire.
+        # `turn_detection_mode` explicite, et c'est important. Le defaut du plugin est
+        # EXTERNAL : il ne finalise RIEN de lui-meme et attend qu'un tiers ferme le segment.
+        # Or l'agent decide desormais lui-meme de la fin de tour (config.TOUR_MANUEL), donc
+        # le detecteur de LiveKit ne joue plus ce role. Le moteur pouvait rester muet en
+        # transcrivant parfaitement — mesure : le banc lui donnait 48 % d'erreur alors que le
+        # protocole montrait « Renomme la variable qui gere le silence dans config » exact.
+        #
+        # En ADAPTIVE il ferme ses segments tout seul, sur son propre VAD. La regle generale
+        # qu'on en tire : la reconnaissance rend du TEXTE, et c'est nous qui decidons quand le
+        # tour part. Lier les deux cree une dependance invisible entre deux couches, et c'est
+        # celle-la qui rendait le comportement incomprehensible.
         return speechmatics.STT(
             language=courte,
+            turn_detection_mode=TurnDetectionMode.ADAPTIVE,
             additional_vocab=[AdditionalVocabEntry(content=m) for m in mots[:100]])
     if cle == "gladia":
         from livekit.plugins import gladia
@@ -225,8 +248,14 @@ def _classe(cle: str, restes: dict) -> tuple[int, int]:
     m = PAR_CLE[cle]
     e = restes.get(cle) or {}
     if cle == "local" or not m.direct:
-        return (3, m.qualite)
+        return (5, m.qualite)
     if e.get("epuise") or (e.get("reste_s") is not None and e["reste_s"] <= 0):
+        return (6, m.qualite)
+    # Un moteur dont on n'a PAS vu une phrase complete passe derriere tous ceux qui l'ont
+    # prouve — meme s'il est gratuit et renouvelable. Un quota mensuel ne vaut rien si le
+    # moteur rend la moitie de la phrase : on n'economise pas, on se fait mal comprendre.
+    # Il reste dans la chaine pour pouvoir se rattraper, mais sans qu'un tour en paie le prix.
+    if not m.demontre:
         return (4, m.qualite)
     if m.renouvelable:
         return (0, m.qualite)

@@ -111,7 +111,12 @@ def oublier_epuise(cle: str) -> None:
 # compte : une panne se retente, un quota epuise ne se retentera pas avant le mois prochain,
 # et les presenter pareil condamne a rejouer indefiniment un moteur qui ne reviendra pas.
 MOTIFS_QUOTA = ("quota", "exceeded", "insufficient", "out of credit", "limit reached",
-                "403", "429", "payment", "billing", "subscription", "free tier")
+                "403", "429", "payment", "billing", "subscription", "free tier",
+                # « 402 Organization balance exhausted » — le refus de Soniox, mesure. La
+                # liste ne s'ecrit pas d'imagination : chaque motif vient d'un refus reel
+                # rencontre, parce qu'un mot devine ferait passer une panne pour un quota et
+                # condamnerait un moteur qui reviendrait tout seul.
+                "402", "balance exhausted", "no credit", "top up", "autopay")
 
 
 def ressemble_a_un_quota(message: str) -> bool:

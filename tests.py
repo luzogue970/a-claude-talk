@@ -35,6 +35,8 @@ SUITES = [
      "quotas des moteurs : ce qui est compté, ce qui prime dessus", False),
     ("fenetre", "test_fenetre.py", "py",
      "fenêtre avant envoi : décompte, retenue, ordres immédiats", False),
+    ("fusion", "test_fusion.py", "py",
+     "regroupement des transcrits d'une même conversation", False),
     ("pupitre", "test_pupitre.py", "py", "conversations parallèles : baux micro et parole", False),
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),

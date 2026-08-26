@@ -129,8 +129,15 @@ print("\n=== quota ou panne ===")
 for msg in ("Quota exceeded", "HTTP 429 Too Many Requests", "insufficient credits",
             "403 Forbidden", "your free tier has been used"):
     dire(C.ressemble_a_un_quota(msg), f"quota reconnu : « {msg[:34]} »")
+# Mesure sur Soniox : « 402 - Organization balance exhausted ». La liste des motifs ne
+# s'ecrit pas d'imagination — chaque entree vient d'un refus reel rencontre.
+dire(C.ressemble_a_un_quota("402 - Organization balance exhausted. Please add funds"),
+     "le refus 402 de Soniox est reconnu comme un quota, pas comme une panne")
+# Et le piege inverse, que j'ai introduit en ajoutant « balance » tout court : un mot trop
+# large fait passer une panne pour un quota, donc condamne un moteur qui reviendrait seul.
 for msg in ("connection reset by peer", "websocket closed unexpectedly",
-            "invalid audio format", ""):
+            "invalid audio format", "balance sheet parsing failed",
+            "the load balancer refused the connection", ""):
     dire(not C.ressemble_a_un_quota(msg), f"panne, pas quota : « {msg[:34] or 'vide'} »")
 
 # --- le chrono decoupe a la bascule ------------------------------------------------------
@@ -225,16 +232,43 @@ ordre = sans_cles(MS.ordre_auto)
 # La regle et sa raison : un quota MENSUEL se perd s'il n'est pas consomme, un credit attend
 # sans rien perdre. Le mensuel passe donc devant, meme quand un credit fait un peu mieux au
 # banc — le petit ecart de qualite coute moins cher que des heures gratuites jetees chaque mois.
-dire(MS.PAR_CLE[ordre[0]].renouvelable,
-     f"un quota mensuel ouvre la chaine : c'est le seul qui se perd (ici {ordre[0]})")
-dire(ordre[0] == "speechmatics",
-     f"et c'est le meilleur des mensuels qui ouvre (ici {ordre[0]})")
-premier_credit = next(c for c in ordre if not MS.PAR_CLE[c].renouvelable and c != "local")
-dire(all(ordre.index(c) < ordre.index(premier_credit)
-         for c in ordre if MS.PAR_CLE[c].renouvelable and MS.PAR_CLE[c].direct),
-     "TOUS les mensuels passent avant le premier credit")
-dire(premier_credit == "deepgram",
-     f"et le relais est le meilleur credit mesure (ici {premier_credit})")
+# Deux regles, dans cet ordre, et la premiere gagne.
+#
+# 1. Ce qu'on a VU rendre une phrase complete passe devant. Un quota mensuel ne vaut rien si
+#    le moteur rend la moitie de la phrase : on n'economise pas, on se fait mal comprendre —
+#    et une transcription tronquee ne ressemble pas a une panne, elle ressemble a une
+#    instruction, donc on agit dessus.
+# 2. A demonstration egale, le MENSUEL passe devant : c'est le seul qui se perd s'il n'est
+#    pas consomme, un credit attend le mois prochain sans rien perdre.
+dire(MS.PAR_CLE[ordre[0]].demontre,
+     f"la chaine ouvre sur un moteur demontre (ici {ordre[0]})")
+dire(all(ordre.index(c) < ordre.index(d)
+         for c in ordre for d in ordre
+         if MS.PAR_CLE[c].demontre and not MS.PAR_CLE[d].demontre
+         and MS.PAR_CLE[c].direct and MS.PAR_CLE[d].direct),
+     "TOUS les moteurs demontres passent avant les autres")
+# Sur une table vierge c'est Azure qui ouvre, et c'est juste : il est demontre ET mensuel,
+# donc les deux regles le placent en tete. Il ne passe au bout que dans l'etat REEL de cette
+# machine, ou son palier est constate epuise — verifie plus bas. L'assertion porte donc sur la
+# regle, pas sur ce que la machine affiche aujourd'hui.
+dire(MS.PAR_CLE[ordre[0]].demontre and MS.PAR_CLE[ordre[0]].renouvelable,
+     f"le premier est demontre ET mensuel — les deux regles vont dans le meme sens (ici {ordre[0]})")
+dire(ordre.index("assemblyai") < ordre.index("speechmatics"),
+     "un credit demontre passe devant un mensuel qui n'a rien prouve")
+# La regle du mensuel reste vraie ENTRE moteurs demontres — verifie sur une table ou tout
+# est demontre, sinon on ne teste que l'effet de la premiere regle.
+import dataclasses
+tous_demontres = tuple(dataclasses.replace(m, demontre=True) for m in MS.MOTEURS)
+sauve = MS.MOTEURS, MS.PAR_CLE
+MS.MOTEURS, MS.PAR_CLE = tous_demontres, {m.cle: m for m in tous_demontres}
+ordre2 = sans_cles(MS.ordre_auto)
+dire(MS.PAR_CLE[ordre2[0]].renouvelable,
+     f"a demonstration egale, un mensuel ouvre : c'est lui qui se perd (ici {ordre2[0]})")
+premier_credit = next(c for c in ordre2 if not MS.PAR_CLE[c].renouvelable and c != "local")
+dire(all(ordre2.index(c) < ordre2.index(premier_credit)
+         for c in ordre2 if MS.PAR_CLE[c].renouvelable and MS.PAR_CLE[c].direct),
+     "et tous les mensuels passent avant le premier credit")
+MS.MOTEURS, MS.PAR_CLE = sauve
 dire(ordre[-1] == "local", "le local ferme toujours la marche : il ne peut pas manquer")
 dire(ordre.index("groq") > ordre.index("azure"),
      "un moteur sans texte en direct passe derriere tous ceux qui en ont")
@@ -246,8 +280,8 @@ C.ajouter("deepgram", (430 - 90) * 3600)
 ordre = sans_cles(MS.ordre_auto)
 dire(ordre.index("deepgram") > ordre.index("assemblyai"),
      "sous sa reserve, un credit recule derriere les credits encore abondants")
-dire(ordre.index("deepgram") > ordre.index("gladia"),
-     "et il reste derriere les mensuels, comme tous les credits")
+dire(ordre.index("deepgram") < ordre.index("gladia"),
+     "et il reste devant un moteur non demontre, credit ou pas : la preuve compte d'abord")
 dire(ordre.index("deepgram") < ordre.index("local"),
      "mais devant le local : un credit garde vaut mieux que 7 s de latence")
 
