@@ -190,5 +190,84 @@ dire(len(reels) == len(moteurs_stt.MOTEURS), "la vraie table de moteurs passe sa
 dire(all(m["palier_s"] for m in reels if m["cle"] not in ("local", "groq")),
      "chaque moteur payant a un palier chiffre — sinon aucune jauge n'est possible")
 
+# --- l'ordre de la chaine suit ce qu'il reste -------------------------------------------
+# C'est le choix explicite : le meilleur moteur en tete tant que son credit est abondant,
+# puis il recule pour garder sa reserve. Une regle qui ne se verifie pas est une regle qui
+# derive : ces tests sont la pour qu'un renommage de champ ou un palier corrige ne la casse
+# pas en silence.
+print("\n=== l'ordre de la chaine reagit aux quotas ===")
+import os as _os
+_os.environ.pop("VOIX_STT", None)
+_os.environ["VOIX_STT_PREF"] = ""            # pas de preference enregistree qui gagnerait
+import moteurs_stt as MS
+
+
+def sans_cles(f):
+    """Fait comme si TOUTES les cles etaient presentes : l'ordre ne doit pas dependre de
+    ce qui est installe sur la machine de celui qui lance les tests."""
+    vraies = {}
+    for m in MS.MOTEURS:
+        if m.cle_env:
+            vraies[m.cle_env] = _os.environ.get(m.cle_env)
+            _os.environ[m.cle_env] = "test"
+    try:
+        return f()
+    finally:
+        for k, v in vraies.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
+vider()
+ordre = sans_cles(MS.ordre_auto)
+dire(ordre[0] == "deepgram",
+     f"credit abondant en tete — le meilleur mesure d'abord (ici {ordre[0]})")
+dire(ordre[-1] == "local", "le local ferme toujours la marche : il ne peut pas manquer")
+dire(ordre.index("groq") > ordre.index("azure"),
+     "un moteur sans texte en direct passe derriere tous ceux qui en ont")
+
+# Sous sa reserve, le credit recule derriere les mensuels : c'est a ça que sert la reserve.
+C.ajouter("deepgram", (430 - 90) * 3600)
+ordre = sans_cles(MS.ordre_auto)
+# La tete revient a AssemblyAI et non a Speechmatics, et c'est juste : c'est un autre credit
+# encore abondant, donc la meme regle s'applique. Un mensuel ne reprend la tete que quand
+# plus aucun credit n'est au-dessus de sa reserve — verifie juste apres.
+dire(ordre[0] == "assemblyai",
+     f"sous sa reserve, le credit recule ; un autre credit abondant prend la tete (ici {ordre[0]})")
+dire(ordre.index("deepgram") > ordre.index("azure"),
+     "et il se place derriere TOUS les mensuels, pas juste le premier")
+
+C.ajouter("assemblyai", (330 - 20) * 3600)
+C.ajouter("soniox", (50 - 2) * 3600)
+ordre = sans_cles(MS.ordre_auto)
+dire(ordre[0] == "speechmatics",
+     f"plus aucun credit abondant : un mensuel reprend la tete (ici {ordre[0]})")
+dire(all(ordre.index(c) > ordre.index("azure")
+         for c in ("deepgram", "assemblyai", "soniox")),
+     "les trois credits sous reserve attendent derriere les mensuels")
+dire(ordre.index("deepgram") < ordre.index("local"),
+     "mais il reste devant le local : un credit garde vaut mieux que 7 s de latence")
+
+# Un constat d'epuisement l'envoie a la fin, quelle que soit sa qualite.
+C.constater_epuise("speechmatics", "Quota exceeded")
+ordre = sans_cles(MS.ordre_auto)
+dire(ordre.index("speechmatics") > ordre.index("gladia"),
+     "un moteur constate epuise part a la fin, meme s'il etait le meilleur")
+
+# Le pire cas : tout est epuise. La chaine doit rester non vide, sinon on devient sourd.
+for c in ("deepgram", "speechmatics", "gladia", "azure", "assemblyai", "soniox", "google"):
+    C.constater_epuise(c, "quota")
+ordre = sans_cles(lambda: MS.chaine("auto"))
+dire("local" in ordre, "tous les paliers vides : le local reste, on ne devient jamais sourd")
+
+# Un ordre impose a la main gagne sur tout le calcul : c'est une decision de l'utilisateur.
+impose = sans_cles(lambda: MS.chaine("azure,local"))
+dire(impose[0] == "azure",
+     "un ordre impose gagne sur le calcul, meme sur un palier constate epuise")
+
+vider()
+
 print(f"\n  {ok} ok, {ko} echec(s)")
 sys.exit(1 if ko else 0)

@@ -49,6 +49,18 @@ class Moteur:
     # Les credits en dollars sont convertis au tarif temps reel du fournisseur, d'ou des
     # valeurs arrondies : un ordre de grandeur suffit pour voir venir l'epuisement.
     quota_h: float | None = None
+    # Combien d'heures garder EN RESERVE sur un credit unique. Au-dessus de ce seuil le
+    # credit est traite comme abondant et passe devant les quotas mensuels : autant profiter
+    # du meilleur moteur. En dessous, il repasse derriere et se garde pour les mois ou les
+    # mensuels sont epuises. Sans ce seuil il fallait choisir une fois pour toutes entre
+    # « le meilleur maintenant » et « la reserve intacte » — le seuil rend les deux vrais,
+    # chacun a son moment. Ne concerne pas les quotas renouvelables : ils reviennent.
+    reserve_h: float | None = None
+    # Rang de preference a qualite egale de palier, 1 = le meilleur. Vient du banc quand on
+    # a mesure (Deepgram, local), des bancs publics sinon — et un moteur non mesure ne se
+    # declare jamais premier. Ce champ existe parce que l'ordre de declaration ne peut pas
+    # porter deux logiques a la fois : la nature du palier ET la qualite.
+    qualite: int = 5
 
     @property
     def dispo(self) -> bool:
@@ -63,25 +75,35 @@ class Moteur:
 MOTEURS: tuple[Moteur, ...] = (
     Moteur("speechmatics", "Speechmatics", "SPEECHMATICS_API_KEY",
            "8 h/mois, renouvele, sans carte", True, True, True,
-           "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)", quota_h=8),
+           "le meilleur taux d'erreur des bancs publics d'aout 2026 (6,4 %)", quota_h=8, qualite=2),
     Moteur("gladia", "Gladia", "GLADIA_API_KEY",
            "4 h/mois de temps reel, renouvele", True, True, True,
-           "annonce par son editeur comme le meilleur sur le francais", quota_h=4),
+           "annonce par son editeur comme le meilleur sur le francais", quota_h=4, qualite=3),
     Moteur("azure", "Azure", "AZURE_SPEECH_KEY",
            "5 h/mois au palier F0, renouvele", True, True, True,
-           "aussi utilise pour la synthese vocale", quota_h=5),
+           "aussi utilise pour la synthese vocale", quota_h=5, qualite=4),
     Moteur("assemblyai", "AssemblyAI", "ASSEMBLYAI_API_KEY",
            "50 $ de credits a l'inscription (~300 h)", False, True, True,
-           "credit unique : garde-le pour quand les quotas mensuels sont epuises", quota_h=330),
+           "credit unique : garde-le pour quand les quotas mensuels sont epuises", quota_h=330, reserve_h=50, qualite=3),
     Moteur("deepgram", "Deepgram", "DEEPGRAM_API_KEY",
            "200 $ de credits a l'inscription", False, True, True,
-           "nova-3, tres faible latence", quota_h=430),
+           "nova-3, tres faible latence", quota_h=430, reserve_h=100, qualite=1),
+    Moteur("soniox", "Soniox", "SONIOX_API_KEY",
+           "credits gratuits a l'inscription", False, True, True,
+           "temps reel avec resultats intermediaires ; a mesurer sur ta voix",
+           quota_h=50, reserve_h=10, qualite=3),
+    Moteur("google", "Google Cloud", "GOOGLE_APPLICATION_CREDENTIALS",
+           "60 min/mois a vie (le credit d'essai n'est pas compte)", True, True, True,
+           "le palier a vie est petit : bon comme dernier recours en ligne",
+           quota_h=1, qualite=4),
     Moteur("groq", "Groq", "GROQ_API_KEY",
            "palier gratuit avec limites journalieres", True, False, False,
-           "whisper-large-v3 rapide, mais le texte n'arrive qu'a la fin de la phrase"),
+           "whisper-large-v3 rapide, mais le texte n'arrive qu'a la fin de la phrase",
+           qualite=5),
     Moteur("local", "local (faster-whisper)", None,
            "illimite, hors ligne", True, True, False,
-           "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine"),
+           "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine",
+           qualite=6),
 )
 
 PAR_CLE = {m.cle: m for m in MOTEURS}
@@ -162,6 +184,48 @@ def enregistrer_preference(ordre: str | None):
     tmp.replace(PREFERENCE)
 
 
+# --- l'ordre automatique -----------------------------------------------------------------
+# Quatre classes, dans cet ordre. Ce qui les separe est une question a chaque fois differente :
+#
+#   0. un credit unique encore ABONDANT (au-dessus de sa reserve). Autant profiter du
+#      meilleur moteur maintenant : 430 h couvrent cinq ans a raison de 7 h/mois, donc
+#      « garder la reserve » serait theorique tant qu'elle est pleine.
+#   1. un quota mensuel. Il revient le mois prochain : le depenser ne coute rien.
+#   2. un credit unique passe SOUS sa reserve. Il se garde pour les mois ou les mensuels
+#      seront epuises — c'est precisement a ça qu'il sert.
+#   3. les moteurs sans texte en direct, et le local. Ils transcrivent tres bien mais ne
+#      rendent rien avant la fin de la phrase, ce qui supprime la relecture avant envoi.
+#      Utilisables, jamais souhaitables.
+#
+# Et hors classe : un moteur constate epuise part a la fin, quelle que soit sa qualite.
+# A classe egale, `qualite` tranche.
+
+
+def _classe(cle: str, restes: dict) -> tuple[int, int]:
+    m = PAR_CLE[cle]
+    e = restes.get(cle) or {}
+    if cle == "local" or not m.direct:
+        return (3, m.qualite)
+    if e.get("epuise") or (e.get("reste_s") is not None and e["reste_s"] <= 0):
+        return (4, m.qualite)
+    if not m.renouvelable:
+        assez = e.get("reste_s") is None or e["reste_s"] > (m.reserve_h or 0) * 3600
+        return ((0 if assez else 2), m.qualite)
+    return (1, m.qualite)
+
+
+def ordre_auto() -> list[str]:
+    """L'ordre par defaut, recalcule d'apres ce qu'il reste reellement sur chaque palier."""
+    try:
+        import consommation
+        restes = {e["cle"]: e for e in consommation.etat(MOTEURS)}
+    except Exception:
+        # Sans compteur lisible on retombe sur l'ordre de declaration : degrader, jamais
+        # tomber. Un ordre imparfait vaut mieux qu'une session qui refuse de demarrer.
+        restes = {}
+    return sorted((m.cle for m in MOTEURS), key=lambda c: _classe(c, restes))
+
+
 def chaine(demande: str | None = None) -> list[str]:
     """La chaine de repli reellement utilisable, dans l'ordre.
 
@@ -180,7 +244,7 @@ def chaine(demande: str | None = None) -> list[str]:
         demande = env or preference() or "auto"
     demande = (demande or "auto").strip()
     if demande in ("", "auto"):
-        voulus = [m.cle for m in MOTEURS]
+        voulus = ordre_auto()
     else:
         voulus = [c.strip() for c in demande.split(",") if c.strip()]
     retenus = [c for c in voulus if c in PAR_CLE and PAR_CLE[c].dispo]

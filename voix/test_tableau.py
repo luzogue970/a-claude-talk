@@ -459,6 +459,23 @@ def tout_genre_affiche_a_un_filtre():
     On lit les DEUX cotes dans la source : ce qui est publie d'un cote, ce qui est declare de
     l'autre. Un test qui recopierait la liste ne verrait jamais l'oubli.
     """
+    # config.py contenait 155 lignes dupliquees : les sections « ecoute et interruption » a
+    # « tableau de bord » y figuraient deux fois, a l'identique. Python garde la DERNIERE
+    # definition, donc modifier la premiere ne faisait rien — un reglage change qui reste sans
+    # effet, sans aucun message d'erreur. C'est le pire symptome possible sur un fichier de
+    # configuration : on croit avoir agi.
+    print("\n=== aucune constante definie deux fois ===")
+    racine = Path(__file__).parent
+    for fichier in ("config.py", "moteurs_stt.py", "consommation.py"):
+        texte = (racine / fichier).read_text(encoding="utf-8")
+        noms = re.findall(r"^([A-Z][A-Z0-9_]*)\s*=", texte, re.M)
+        noms += re.findall(r"^def ([a-z_][a-z0-9_]*)\(", texte, re.M)
+        vus, doubles = set(), []
+        for n in noms:
+            (doubles.append(n) if n in vus else vus.add(n))
+        dire(not doubles, f"{fichier} : {len(noms)} definitions, aucune en double"
+                          + (f" — DOUBLONS : {sorted(set(doubles))}" if doubles else ""))
+
     print("\n=== chaque genre affiche a un filtre ===")
     racine = Path(__file__).parent
 
