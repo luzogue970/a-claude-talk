@@ -85,12 +85,18 @@ dire(tousGenres.every(e => LIB[e.g] === e.lib),
 dire(new Set(tousGenres.map(e => e.g)).size === tousGenres.length,
      'aucun genre declare dans deux familles');
 
-// le defaut : trois genres bruyants masques
+// Le defaut : les genres qui repetent ou qui bruitent sont decoches.
 const caches = tousGenres.filter(e => e.cache).map(e => e.g).sort();
-// Les quatre genres bruyants : le journal technique, la transcription en cours, la sortie
-// des outils, et l'etat du micro — qui change souvent et ne raconte rien de la conversation.
-dire(JSON.stringify(caches) === JSON.stringify(['log', 'micro', 'partiel', 'resultat']),
-     'masques par defaut : ' + caches.join(', '));
+// Cinq genres, et chacun pour une raison differente : le journal technique et l etat du micro
+// changent souvent sans rien raconter de la conversation ; la transcription en cours et le
+// texte retenu sont deja SOUS LES YEUX dans la barre de saisie, donc la ligne du flux ne fait
+// que les repeter au moment le plus charge ; la sortie des outils est simplement enorme.
+// Tous restent disponibles dans les filtres, pour relire apres coup.
+dire(JSON.stringify(caches) === JSON.stringify(['dictee', 'log', 'micro', 'partiel', 'resultat']),
+     'decoches par defaut : ' + caches.join(', '));
+dire(!actifs.has('dictee'), 'le texte retenu n apparait pas dans le flux au demarrage');
+dire(tousGenres.some(e => e.g === 'dictee'),
+     'mais il reste proposé dans les filtres : decoche n est pas supprime');
 dire(caches.every(g => !actifs.has(g)), 'et ils ne sont effectivement pas actifs');
 
 // le compteur de la famille se lit sans l ouvrir

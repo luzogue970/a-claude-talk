@@ -880,7 +880,11 @@ const GROUPES = [
     { g: "toi",     lib: "toi",      quoi: "tes messages — une ligne par message pris en compte" },
     { g: "partiel", lib: "toi…",     quoi: "la transcription en cours, avant validation", cache: true },
     { g: "voix",    lib: "claude",   quoi: "ce que Claude dit à voix haute" },
-    { g: "dictee",  lib: "retenu",   quoi: "dit mais pas envoyé — ça attend dans la barre" },
+    // Décoché par défaut : le texte retenu est déjà DANS la barre de saisie, avec sa note
+    // qui dit pourquoi. La ligne du flux ne fait que répéter ce qu'on a sous les yeux, et
+    // elle le répète au moment le plus chargé. Elle reste disponible pour relire après coup.
+    { g: "dictee",  lib: "retenu",   quoi: "dit mais pas envoyé — ça attend dans la barre",
+      cache: true },
     { g: "attente", lib: "attente",  quoi: "une autre conversation parle, celle-ci patiente" },
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
