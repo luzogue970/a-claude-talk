@@ -169,6 +169,29 @@ setTimeout(async () => {
     mb.className = "micro-rond ouvert";
   }
 
+  // La pile au-dessus de la barre : ses trois elements ne doivent JAMAIS se recouvrir. Ils
+  // etaient tous ancres au meme « bottom:100% » et se dessinaient l'un sur l'autre — visible
+  // seulement avec des textes assez longs, donc au pire moment.
+  {
+    const pile = document.getElementById("pile-barre");
+    const cog = document.getElementById("cogitation");
+    const att = document.getElementById("en-attente");
+    const nb = document.getElementById("note-barre");
+    if (pile && cog && att && nb) {
+      cog.hidden = att.hidden = nb.hidden = false;
+      cog.querySelector("#mot").textContent = "solutionnage";
+      att.innerHTML = '<span class="quoi">2 messages a la fin de la lecture</span>'
+        + '<span class="dit">' + "un texte deliberement long ".repeat(6) + '</span>';
+      nb.textContent = "message 2 sur 7 · ↑↓ pour naviguer, Echap pour revenir";
+      const r = e => { const b = e.getBoundingClientRect();
+        return { t: Math.round(b.top), b: Math.round(b.bottom),
+                 l: Math.round(b.left), d: Math.round(b.right) }; };
+      releve.pile = { cog: r(cog), att: r(att), note: r(nb), boite: r(pile),
+                      barre: r(document.getElementById("saisie-barre")) };
+      cog.hidden = att.hidden = nb.hidden = true;
+    }
+  }
+
   releve.deborde = {
     page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     corps: document.body.scrollWidth - document.body.clientWidth,
@@ -401,6 +424,22 @@ if (r.animeQuandParle) {
        `parole détectée : les cinq barres sont animées (${r.animeQuandParle})`);
 }
 {
+}
+
+// --- la pile ne se recouvre pas -----------------------------------------------------------
+if (r.pile) {
+  const { cog, att, note, barre } = r.pile;
+  const chevauche = (a2, b2) => a2.b > b2.t + 1 && b2.b > a2.t + 1
+                             && a2.d > b2.l + 1 && b2.d > a2.l + 1;
+  dire(!chevauche(cog, att), `cogitation et attente ne se recouvrent pas `
+       + `(${cog.t}..${cog.b} vs ${att.t}..${att.b})`);
+  dire(!chevauche(att, note), `attente et note d'historique non plus `
+       + `(${att.t}..${att.b} vs ${note.t}..${note.b})`);
+  dire(!chevauche(cog, note), "cogitation et note non plus");
+  dire(att.b <= barre.t + 1,
+       `et la pile reste AU-DESSUS de la barre (${att.b} <= ${barre.t})`);
+  dire(note.d <= r.deborde.vue && att.d <= r.deborde.vue,
+       "aucun element de la pile ne sort de la fenêtre");
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

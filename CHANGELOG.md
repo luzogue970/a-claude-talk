@@ -7,6 +7,39 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.17.0] — 2026-08-27
+
+### Ajoute — l'historique des messages, aux flèches
+Flèche haut et bas dans la barre de saisie, comme dans les champs de recherche d'un éditeur.
+Ce que ça sert : retrouver un message qui n'est pas parti, en renvoyer un avec une correction,
+récupérer une phrase perdue par une coupure de liaison.
+
+Les détails qui font que c'est utilisable : la flèche ne navigue que si le curseur ne peut PAS
+bouger (haut sur la première ligne, bas sur la dernière), sinon elle déplace le curseur comme
+dans n'importe quel champ multiligne ; le brouillon en cours est gardé et revient intact quand
+on redescend ; taper sort de la navigation, donc l'historique n'est jamais réécrit ; Échap
+annule la navigation avant de rendre le clavier. Les cent derniers messages, écrits comme
+dictés, conservés dans le stockage local — un historique en mémoire disparaîtrait avec le bug
+qu'il devait réparer.
+
+### Ajoute — un message envoyé pendant une lecture reste visible
+Il part bien, mais LiveKit le met en file derrière la parole en cours. La barre se vidait
+aussitôt et aucune ligne n'apparaissait avant plusieurs secondes : le texte semblait s'être
+évaporé et on ne savait pas s'il fallait le retaper. Il s'affiche maintenant en grisé avec
+« envoi à la fin de la lecture », et disparaît quand la ligne « toi » atteste sa prise en
+compte — le seul signal qui l'atteste vraiment.
+
+### Ajoute — couper la lecture depuis la barre
+Le bouton existait, mais collé à la réponse concernée dans le flux : il fallait remonter la
+retrouver, alors qu'on veut couper au moment où l'on décide de reprendre la parole — et à ce
+moment-là on est en bas. Même forme et même taille que le micro, parce que c'est le même genre
+de geste. Il n'apparaît que pendant une lecture.
+
+### Corrige — trois éléments flottants se recouvraient au-dessus de la barre
+Cogitation, message en attente et note d'historique étaient tous ancrés au même
+`bottom:100%` : ils se dessinaient l'un sur l'autre dès que les textes s'allongeaient. Ils
+sont empilés, et le test de rendu mesure qu'aucune paire ne se chevauche.
+
 ## [1.16.0] — 2026-08-27
 
 ### Corrige — CINQ moteurs sur sept ne se chargeaient pas

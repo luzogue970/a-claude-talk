@@ -95,6 +95,11 @@ function elem(nom) {
     addEventListener(t, f) { ((this._ev = this._ev || {})[t] ||= []).push(f); },
     _declenche(t, ev) { for (const f of (this._ev || {})[t] || []) f(ev); },
     focus() {}, blur() {},
+    // Le curseur du champ. Les fleches ne prennent la main que si le curseur ne peut PAS
+    // bouger — premiere ou derniere ligne — donc sans ces trois proprietes le test ne
+    // verifiait rien de ce comportement, qui est justement le plus delicat.
+    selectionStart: 0, selectionEnd: 0,
+    setSelectionRange(d, f) { this.selectionStart = d; this.selectionEnd = f; },
     // scrollHeight simule : ~48 caracteres par ligne de 21 px, plus le rembourrage. Sans ca
     // ajusterHauteur() n'aurait rien a mesurer et le test ne verifierait rien.
     get scrollHeight() {
@@ -164,6 +169,17 @@ globalThis.window = { innerHeight: 800, scrollY: 0, scrollTo() {} };
 // un navigateur doit rester observable dans un test, sinon on ne verifie que le premier
 // etat. Ne pas le modeliser du tout faisait planter tout le script — un talon incomplet ne
 // donne pas un test moins precis, il donne un test qui n'existe pas.
+// Le stockage local, modelise. La page y garde l'historique des messages : sans lui, le
+// try/catch avalait tout et l'historique n'etait jamais teste — un test vert sur une
+// fonctionnalite absente. On modelise aussi le cas du stockage REFUSE (navigation privee),
+// parce que la page doit continuer de marcher sans.
+globalThis.__stockage = {};
+globalThis.localStorage = {
+  getItem(c) { return Object.prototype.hasOwnProperty.call(__stockage, c) ? __stockage[c] : null; },
+  setItem(c, v) { __stockage[c] = String(v); },
+  removeItem(c) { delete __stockage[c]; },
+  clear() { for (const c of Object.keys(__stockage)) delete __stockage[c]; },
+};
 globalThis.requestAnimationFrame = f => { f(); return 1; };
 globalThis.cancelAnimationFrame = () => {};
 globalThis.document.querySelector = () => elem("main");

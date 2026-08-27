@@ -1058,5 +1058,125 @@ dessinerChoix();
 dire(!/class="vif"/.test(document.getElementById('choix-moteur').innerHTML),
      'micro ferme : plus de marqueur « en cours »');
 
+// ---- l historique aux fleches ------------------------------------------------------------
+titre('remonter dans ce qu on a ecrit');
+function fleche(touche, curseur) {
+  champ.selectionStart = champ.selectionEnd = curseur === undefined ? champ.value.length : curseur;
+  champ._declenche('keydown', { key: touche, preventDefault() {}, metaKey: false,
+                                ctrlKey: false, altKey: false });
+}
+// Etat propre : on repart d une page vierge.
+localStorage.clear(); histo = []; histoPos = -1; histoBrouillon = '';
+socket.readyState = 1;
+for (const t of ['premier message', 'deuxieme message', 'troisieme message']) {
+  champ.value = t; champ.oninput();
+  composer.onsubmit({ preventDefault() {} });
+}
+dire(histo.length === 3 && histo[0] === 'troisieme message',
+     'les envois entrent dans l historique, le plus recent en tete');
+dire(champ.value === '', 'et la barre est videe apres chaque envoi');
+
+// On tape un brouillon, puis on remonte : le brouillon doit survivre.
+champ.value = 'un brouillon en cours'; champ.oninput();
+fleche('ArrowUp');
+dire(champ.value === 'troisieme message',
+     'fleche haut : le dernier message revient (' + champ.value + ')');
+fleche('ArrowUp'); fleche('ArrowUp');
+dire(champ.value === 'premier message', 'on remonte jusqu au plus ancien');
+fleche('ArrowUp');
+dire(champ.value === 'premier message', 'et on ne depasse pas : pas de champ vide surprise');
+fleche('ArrowDown'); fleche('ArrowDown'); fleche('ArrowDown');
+dire(champ.value === 'un brouillon en cours',
+     'redescendre rend le BROUILLON intact : naviguer ne detruit pas ce qu on ecrivait');
+
+// Le curseur garde la priorite dans un texte multiligne : c est ce qui rend la correction
+// d un long message supportable.
+champ.value = 'ligne une\nligne deux'; champ.oninput();
+fleche('ArrowUp', 15);          // curseur sur la deuxieme ligne
+dire(champ.value === 'ligne une\nligne deux',
+     'fleche haut au milieu d un texte : le curseur bouge, l historique ne s en mele pas');
+fleche('ArrowUp', 3);           // curseur sur la premiere ligne
+dire(champ.value === 'troisieme message',
+     'mais sur la PREMIERE ligne, elle navigue');
+
+// Taper sort de la navigation : on modifie une copie, jamais l historique.
+champ.value = 'troisieme message corrige'; champ.oninput();
+dire(histoPos === -1, 'editer sort de la navigation');
+dire(histo[0] === 'troisieme message',
+     'et l historique n est pas reecrit : ' + histo[0]);
+
+// Echap annule la navigation avant de rendre le clavier.
+champ.value = 'brouillon deux'; champ.oninput();
+fleche('ArrowUp');
+dire(champ.value === 'troisieme message', 'on remonte');
+champ._declenche('keydown', { key: 'Escape', preventDefault() {} });
+dire(champ.value === 'brouillon deux', 'Echap ramene au brouillon plutot que de quitter');
+
+// Deux fois le meme message n occupe qu une entree.
+const avant = histo.length;
+champ.value = 'troisieme message'; champ.oninput();
+histoAjouter('troisieme message');
+dire(histo.length === avant, 'le meme message deux fois de suite n est pas duplique');
+
+// Et ça survit au rechargement : c est tout l interet quand « il y a eu un bug ».
+dire(/troisieme message/.test(localStorage.getItem('claude-talk:historique') || ''),
+     'l historique est ecrit dans le stockage local');
+histo = [];
+histoCharger();
+dire(histo.length >= 3 && histo[0] === 'troisieme message',
+     'et se recharge tel quel : ' + histo.length + ' messages retrouves');
+
+// ---- un message envoye pendant une lecture ne disparait pas ------------------------------
+titre('ce qui attend la fin de la lecture');
+// Le defaut : le message PART bien, mais LiveKit le met en file derriere la parole en cours.
+// La barre se vidait aussitot et aucune ligne n apparaissait avant plusieurs secondes : le
+// texte semblait s etre evapore, et on ne savait pas s il fallait le retaper.
+socket.readyState = 1;
+enAttenteLecture = []; majEnAttente();
+// Etat de repos explicite : une section precedente a teste les boutons de lecture et a laisse
+// une lecture en cours. Sans cette remise a zero, on mesurerait l etat laisse par un autre
+// test et non celui qu on decrit.
+emettre({ genre: 'lecture', actif: false });
+const zoneAttente = document.getElementById('en-attente');
+const btnCouper = document.getElementById('couper-lecture');
+
+dire(zoneAttente.hidden, 'au repos, rien n attend');
+dire(btnCouper.hidden, 'et le bouton de coupure est cache : il ne servirait a rien');
+
+emettre({ genre: 'lecture', actif: true, id: 'v1' });
+dire(!btnCouper.hidden,
+     'une lecture commence : le bouton de coupure apparait dans la barre');
+
+champ.value = 'coupe et fais autre chose'; champ.oninput();
+composer.onsubmit({ preventDefault() {} });
+dire(!zoneAttente.hidden, 'un message envoye pendant la lecture reste VISIBLE');
+dire(/coupe et fais autre chose/.test(zoneAttente.textContent),
+     'avec son texte : "' + zoneAttente.textContent.slice(0, 70) + '"');
+dire(/fin de la lecture/.test(zoneAttente.textContent),
+     'et la raison pour laquelle il ne part pas tout de suite');
+dire(champ.value === '', 'la barre est quand meme videe : le message est pris en charge');
+
+// Un second message s ajoute, il ne remplace pas le premier.
+champ.value = 'et aussi ceci'; champ.oninput();
+composer.onsubmit({ preventDefault() {} });
+dire(enAttenteLecture.length === 2, 'deux messages en attente restent deux');
+dire(/2 messages/.test(zoneAttente.textContent),
+     'et on le dit : "' + zoneAttente.textContent.slice(0, 40) + '"');
+
+// La ligne « toi » atteste la prise en compte : c est le seul signal qui le dit.
+emettre({ genre: 'toi', texte: 'coupe et fais autre chose', tape: true });
+dire(enAttenteLecture.length === 1,
+     'le message pris en compte quitte l attente, l autre reste');
+emettre({ genre: 'toi', texte: 'et aussi ceci', tape: true });
+dire(zoneAttente.hidden, 'les deux traites : la zone disparait');
+
+// Cliquer coupe la lecture.
+envoyes.length = 0;
+btnCouper.onclick();
+dire(envoyes.some(o => o.cmd === 'couper_lecture'),
+     'le bouton de la barre coupe bien la lecture');
+emettre({ genre: 'lecture', actif: false });
+dire(btnCouper.hidden, 'la lecture finie, le bouton se retire');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

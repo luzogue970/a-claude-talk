@@ -413,8 +413,10 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 
 /* Le bandeau de cogitation, posé juste au-dessus de la barre de saisie. En position absolue
    pour qu'il apparaisse et disparaisse sans jamais pousser le contenu du flux. */
-#cogitation{position:absolute;bottom:100%;left:16px;margin-bottom:8px;
-  display:flex;gap:8px;align-items:center;background:var(--carte);
+#pile-barre{position:absolute;bottom:100%;left:16px;right:16px;margin-bottom:8px;
+  display:flex;flex-direction:column;align-items:flex-start;gap:6px;pointer-events:none}
+#pile-barre > *{pointer-events:auto;max-width:100%}
+#cogitation{display:flex;gap:8px;align-items:center;background:var(--carte);
   border:1px solid var(--bord);border-radius:999px;padding:5px 13px 5px 10px;
   font-size:12.5px;color:var(--pensee)}
 #cogitation[hidden]{display:none}
@@ -423,13 +425,26 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
    barre, du côté opposé à l'indicateur d'activité pour qu'ils puissent coexister. Elle
    s'efface d'elle-même : une explication qui reste affichée alors que la situation a changé
    devient un mensonge. */
-#note-barre{position:absolute;bottom:100%;right:16px;margin-bottom:8px;
+#note-barre{align-self:flex-end;
   display:flex;gap:7px;align-items:center;background:var(--carte);
   border:1px solid var(--retenu);border-radius:999px;padding:5px 13px;
   font-size:12.5px;color:var(--retenu);
   opacity:0;transition:opacity .25s ease;pointer-events:none}
 #note-barre.montre{opacity:1}
 #note-barre[hidden]{display:none}
+
+/* Le message qui attend la fin de la lecture. Il PART bien — LiveKit le met en file derrière
+   la parole en cours — mais la barre se vidait aussitôt et aucune ligne n'apparaissait avant
+   plusieurs secondes : le texte semblait s'être évaporé. Le montrer en grisé dit les deux
+   choses qui manquaient, qu'il existe encore et pourquoi il ne part pas tout de suite. */
+#en-attente{align-self:stretch;
+  display:flex;gap:9px;align-items:flex-start;background:var(--carte);
+  border:1px solid var(--bord);border-left:2px solid var(--voix);border-radius:10px;
+  padding:9px 13px;font-size:12.5px;color:var(--faible);max-width:1100px}
+#en-attente[hidden]{display:none}
+#en-attente .dit{color:#9aa4b0;flex:1;min-width:0;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+#en-attente .quoi{color:var(--voix);white-space:nowrap;flex:none}
 #cogitation .marque{color:var(--pensee)}
 #mot{font-weight:600;letter-spacing:.01em}
 .points i{font-style:normal;animation:clignote 1.4s ease-in-out infinite}
@@ -617,6 +632,17 @@ body{overflow-x:hidden}
    donc ça reste lisible sans distinguer le rouge du bleu. */
 .micro-rond.coupe .ondes i{height:4px !important;background:#b07575;opacity:.6;
   animation:none}
+
+/* Le bouton de coupure de lecture : même forme et même taille que le micro, parce que c'est
+   le même genre de geste — « tais-toi » à côté de « ne m'écoute plus ». Il pulse doucement
+   pour dire qu'une lecture est en cours ; sans ça, un carré immobile ne se distingue pas
+   d'un bouton décoratif. */
+.micro-rond.coupe-son{font-size:15px;color:var(--voix);border-color:#2f4a37}
+.micro-rond.coupe-son:hover{background:#1b2a20;border-color:var(--voix)}
+.micro-rond.coupe-son[hidden]{display:none}
+@keyframes lit{0%,100%{box-shadow:0 0 0 0 #3fb95000}50%{box-shadow:0 0 0 4px #3fb95024}}
+.micro-rond.coupe-son{animation:lit 1.8s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){ .micro-rond.coupe-son{animation:none} }
 @media (prefers-reduced-motion: reduce){
   /* Pas d'animation, mais un profil plus haut : l'état « on t'entend » doit rester visible
      sans mouvement, sinon on prive d'information ceux qui coupent les animations. */
@@ -828,10 +854,18 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 <main id="flux"></main>
 <button id="bas">↓ suivre</button>
 <div id="saisie-barre">
-  <div id="note-barre" hidden></div>
-  <div id="cogitation" hidden>
-    <span class="spin"></span>
-    <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
+  <!-- Une PILE, et pas trois éléments flottants au même endroit. Ils étaient tous ancrés à
+       « bottom:100% » : la note d'historique se dessinait par-dessus l'extrémité droite de la
+       zone d'attente, et l'indicateur de cogitation par-dessus sa gauche. Ça ne se voyait
+       qu'avec des textes assez longs — donc au pire moment. Empilés, ils ne peuvent plus se
+       recouvrir quelle que soit leur taille. -->
+  <div id="pile-barre">
+    <div id="cogitation" hidden>
+      <span class="spin"></span>
+      <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
+    </div>
+    <div id="en-attente" hidden></div>
+    <div id="note-barre" hidden></div>
   </div>
   <form id="composer" autocomplete="off">
     <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
@@ -842,6 +876,13 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
             title="couper ou rouvrir le micro (touche m)">
       <span class="ondes"><i></i><i></i><i></i><i></i><i></i></span>
     </button>
+    <!-- Couper la lecture depuis ICI. Le bouton existait déjà, mais collé à la réponse
+         concernée, dans le flux : il fallait remonter la retrouver pour s'en servir, alors
+         qu'on veut couper au moment où l'on décide de reprendre la parole — et à ce
+         moment-là on est en bas. Il n'apparaît que pendant une lecture : un bouton grisé en
+         permanence occuperait la place sans jamais servir. -->
+    <button id="couper-lecture" type="button" class="micro-rond coupe-son" hidden
+            title="couper la lecture en cours (ou dis « chut »)">⏹</button>
     <textarea id="saisie" rows="1" class="une-ligne"
               placeholder="écrire au lieu de parler — touche /"
               aria-label="message à envoyer" maxlength="4000"></textarea>
@@ -1443,6 +1484,10 @@ function basculerMicro() {
 }
 btnMicro.onclick = basculerMicro;
 if (microBas) microBas.onclick = basculerMicro;   // le même geste, à l'autre bout de la page
+{
+  const bc = document.getElementById("couper-lecture");
+  if (bc) bc.onclick = () => envoyerCmd({ cmd: "couper_lecture" });
+}
 
 // Le travail en cours est montre, pas annonce. La narration parlee (« toujours dessus, je
 // viens de lancer cat ») a ete retiree : on ne peut pas survoler du son, alors qu'un
@@ -1605,6 +1650,20 @@ function majCompte() {
 // Un mot contre la barre, effacé au premier signe que la situation a changé : on écrit, on
 // envoie, ou une nouvelle dictée s'ouvre. Une explication qui survit à son objet devient
 // fausse, et l'ancienne version restait affichée jusqu'au tour suivant.
+// Les messages envoyés pendant que Claude parle. Ils partent, mais LiveKit les met en file
+// derrière la parole en cours : rien ne se passe pendant plusieurs secondes, et comme la barre
+// s'est vidée le texte a l'air perdu. On le garde affiché jusqu'à ce qu'il soit pris en compte.
+let enAttenteLecture = [];
+function majEnAttente() {
+  const z = document.getElementById("en-attente");
+  if (!z) return;
+  if (!enAttenteLecture.length) { z.hidden = true; return; }
+  const n = enAttenteLecture.length;
+  z.innerHTML = `<span class="quoi">⏳ ${n > 1 ? n + " messages" : "envoi"} à la fin de la `
+    + `lecture</span><span class="dit">${ech(enAttenteLecture.join(" · "))}</span>`;
+  z.hidden = false;
+}
+
 let tempsNote = null;
 // Suit l'état de la barre pour n'envoyer le signal qu'AU CHANGEMENT : une commande par frappe
 // de touche noierait le journal et la liaison.
@@ -1860,6 +1919,10 @@ champ.oninput = () => {
   // La barre vidée à la main libère la retenue collante. Sans ce signal, l'agent croirait
   // qu'un texte attend encore une relecture et retiendrait TOUT indéfiniment — une
   // amélioration qui se transforme en blocage silencieux est pire que le défaut d'origine.
+  // Taper sort de la navigation : ce qu'on modifie devient le brouillon courant, et
+  // l'historique n'est jamais réécrit. Sans ça, corriger un message remonté puis redescendre
+  // aurait perdu la correction.
+  if (histoPos >= 0) { histoPos = -1; noteBarre(null); }
   const videMaintenant = !champ.value.trim();
   if (videMaintenant !== barreVide) {
     barreVide = videMaintenant;
@@ -1907,6 +1970,93 @@ function reserverPlace() {
   if (suivre) window.scrollTo(0, document.body.scrollHeight);
 }
 
+// --- l'historique des messages, aux flèches ---------------------------------------------
+// Ce que ça sert : retrouver ce qu'on a écrit. Un message qui n'est pas parti, un envoi qu'on
+// veut refaire avec une correction, une phrase perdue par une coupure de liaison — sans
+// historique, il faut la retaper de mémoire.
+//
+// Le comportement copie celui des champs de recherche d'un éditeur, parce qu'il est juste :
+//
+// - **La flèche ne navigue que si le curseur ne peut pas bouger.** Haut sur la première ligne,
+//   bas sur la dernière. Sinon elle déplace le curseur, comme dans n'importe quel champ
+//   multiligne. Confondre les deux rendrait la correction d'un long texte insupportable.
+// - **Le brouillon en cours est gardé à l'indice -1.** Remonter puis redescendre le rend
+//   intact : naviguer ne doit jamais détruire ce qu'on était en train d'écrire.
+// - **Taper quoi que ce soit sort de la navigation.** On édite une copie, pas l'historique.
+// - **Ça survit au rechargement de la page.** C'est tout l'intérêt quand « il y a eu un bug » :
+//   un historique en mémoire disparaîtrait avec le problème qu'il devait réparer.
+const HISTO_CLE = "claude-talk:historique";
+const HISTO_MAX = 100;
+let histo = [], histoPos = -1, histoBrouillon = "";
+
+function histoCharger() {
+  try {
+    const brut = localStorage.getItem(HISTO_CLE);
+    histo = brut ? JSON.parse(brut) : [];
+    if (!Array.isArray(histo)) histo = [];
+  } catch (_) {
+    // Navigation privée, stockage refusé, JSON abîmé : on repart sur rien plutôt que de
+    // casser la page pour un confort.
+    histo = [];
+  }
+}
+histoCharger();
+
+function histoAjouter(texte) {
+  texte = (texte || "").trim();
+  if (!texte) return;
+  // Le même message deux fois de suite n'occupe qu'une entrée : remonter dix fois le même
+  // texte ne rend pas service.
+  if (histo[0] === texte) { histoPos = -1; return; }
+  histo.unshift(texte);
+  if (histo.length > HISTO_MAX) histo.length = HISTO_MAX;
+  histoPos = -1;
+  histoBrouillon = "";
+  try { localStorage.setItem(HISTO_CLE, JSON.stringify(histo)); } catch (_) {}
+}
+
+// Le curseur peut-il encore monter (ou descendre) dans le champ ? Si oui, la flèche lui
+// appartient : c'est ce test qui empêche l'historique de voler la navigation d'un long texte.
+function surPremiereLigne() {
+  return champ.selectionStart === champ.selectionEnd
+    && champ.value.lastIndexOf("\n", Math.max(0, champ.selectionStart - 1)) < 0;
+}
+function surDerniereLigne() {
+  return champ.selectionStart === champ.selectionEnd
+    && champ.value.indexOf("\n", champ.selectionStart) < 0;
+}
+
+function histoAller(pas) {
+  const cible = histoPos + pas;
+  if (cible < -1 || cible >= histo.length) return false;
+  // Sauver le brouillon AVANT de quitter le présent, une seule fois : le réécrire à chaque
+  // pas le remplacerait par une entrée d'historique.
+  if (histoPos === -1) histoBrouillon = champ.value;
+  histoPos = cible;
+  champ.value = cible === -1 ? histoBrouillon : histo[cible];
+  // La dictée en cours est abandonnée : on vient de choisir un texte, une transcription qui
+  // arriverait derrière n'aurait rien à faire dedans.
+  brouillon = null; segments = ""; dicteeOuverte = false;
+  champ.classList.remove("dictee");
+  ajusterHauteur();
+  majEnvoyer();
+  // Curseur à la fin : on veut compléter ou corriger la fin, presque jamais le début.
+  const n = champ.value.length;
+  champ.setSelectionRange(n, n);
+  noteBarre(cible === -1 ? null
+    : `message ${cible + 1} sur ${histo.length} · ↑↓ pour naviguer, Échap pour revenir`);
+  return true;
+}
+
+champ.addEventListener("keydown", ev => {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.key === "ArrowUp" && surPremiereLigne()) {
+    if (histoAller(+1)) ev.preventDefault();
+  } else if (ev.key === "ArrowDown" && surDerniereLigne() && histoPos >= 0) {
+    if (histoAller(-1)) ev.preventDefault();
+  }
+});
+
 // Entrée envoie, Maj+Entrée passe à la ligne. Un textarea insère un retour par défaut et ne
 // déclenche pas le submit du formulaire : sans ça, la touche la plus naturelle ne ferait
 // plus rien.
@@ -1923,7 +2073,13 @@ addEventListener("resize", ajusterHauteur);
 // gestionnaire global s'exécute au chargement, et y toucher « champ » avant sa déclaration
 // tuait tout le script — page blanche, sans rien dans le flux pour le dire.
 champ.addEventListener("keydown", ev => {
-  if (ev.key === "Escape") champ.blur();
+  if (ev.key !== "Escape") return;
+  // Échap en cours de navigation ramène au brouillon plutôt que de rendre le clavier : on
+  // vient de remonter dans l'historique et on veut annuler CE geste, pas quitter le champ.
+  // Un second Échap sort, comme avant.
+  if (histoPos >= 0) { histoAller(-1 - histoPos); return; }
+  noteBarre(null);
+  champ.blur();
 });
 
 composer.onsubmit = ev => {
@@ -1938,7 +2094,14 @@ composer.onsubmit = ev => {
   // La liaison tombe pour des raisons banales : l'onglet passe en arrière-plan, le portable
   // se met en veille, l'agent redémarre. C'est exactement là qu'on ne veut pas perdre ce
   // qu'on vient d'écrire.
+  histoAjouter(texte);
   const parti = envoyerCmd({ cmd: "texte", texte });
+  // Une lecture est en cours : le message part mais ne sera traité qu'après. On le garde
+  // visible en grisé plutôt que de laisser un vide de plusieurs secondes.
+  if (parti && lectureEnCours) {
+    enAttenteLecture.push(texte);
+    majEnAttente();
+  }
   if (!parti) {
     // On le DIT plutôt que de laisser croire à un envoi : le message part à la reconnexion.
     noteBarre("hors ligne — le message part dès que la liaison revient");
@@ -2049,6 +2212,18 @@ function recevoir(e) {
     if (e.genre === "lecture") {
       lectureEnCours = e.actif ? e.id : null;
       majBoutonsLecture();
+      // Filet de sécurité : si la lecture s'arrête et que le message n'a toujours pas été
+      // pris en compte dix secondes plus tard, quelque chose s'est mal passé. Mieux vaut
+      // effacer l'attente que la laisser affichée pour toujours — une indication fausse est
+      // pire qu'une absence d'indication.
+      if (!lectureEnCours && enAttenteLecture.length) {
+        setTimeout(() => {
+          if (!lectureEnCours && enAttenteLecture.length) {
+            enAttenteLecture = [];
+            majEnAttente();
+          }
+        }, 10000);
+      }
       return;
     }
     if (e.genre === "micro") {
@@ -2094,7 +2269,22 @@ function recevoir(e) {
       return;
     }
     // Parti chez Claude : la barre n'a plus à porter le texte.
-    if (e.genre === "toi" && !e.tape) { viderDictee(); noteBarre(null); }
+    // La ligne « toi » signifie « pris en compte » : c'est le seul signal qui l'atteste, et
+    // donc le seul moment ou l'attente cesse d'etre vraie. La retirer sur « fin de lecture »
+    // serait faux — le tour n'est pas encore passe par llm_node a cet instant.
+    if (e.genre === "toi" && enAttenteLecture.length) {
+      const i = enAttenteLecture.indexOf((e.texte || "").trim());
+      enAttenteLecture.splice(i >= 0 ? i : 0, 1);
+      majEnAttente();
+    }
+    if (e.genre === "toi" && !e.tape) {
+      // Une dictée prise en compte entre aussi dans l'historique : « les dernières choses que
+      // j'ai écrit » et « ce que j'ai dit » sont la même liste à l'usage — on remonte pour
+      // renvoyer une phrase, sans se souvenir par quel canal elle est passée.
+      histoAjouter(e.texte || "");
+      viderDictee();
+      noteBarre(null);
+    }
     if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }
     if (e.genre === "ecoute") {
       // `parle` marque le DÉBUT de la parole : c'est là qu'une nouvelle dictée s'ouvre, et
@@ -2414,6 +2604,10 @@ function outillerParole(e) {
 
 // « couper » n'a de sens que sur la lecture qui joue : ailleurs, il ne ferait rien.
 function majBoutonsLecture() {
+  // Le bouton de la barre suit le MEME etat que ceux du flux : une seule source, donc pas
+  // moyen qu'ils se contredisent.
+  const bc = document.getElementById("couper-lecture");
+  if (bc) bc.hidden = !lectureEnCours;
   for (const [id, ligne] of lignesVoix) {
     const z = ligne.zoneLecture;
     if (!z) continue;
