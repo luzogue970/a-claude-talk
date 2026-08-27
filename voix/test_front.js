@@ -98,6 +98,13 @@ function elem(nom) {
     // Le curseur du champ. Les fleches ne prennent la main que si le curseur ne peut PAS
     // bouger — premiere ou derniere ligne — donc sans ces trois proprietes le test ne
     // verifiait rien de ce comportement, qui est justement le plus delicat.
+    // La geometrie : sans navigateur il n'y a pas de mise en page, mais le CODE l'interroge —
+    // le placement des panneaux mesure leur position pour ne pas sortir de l'ecran. Rendre des
+    // zeros est honnete : le talon ne sait rien de la geometrie, et c'est test_rendu, dans un
+    // vrai Chrome, qui la verifie. Ne pas la modeliser du tout faisait planter tout le script.
+    getBoundingClientRect() {
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+    },
     selectionStart: 0, selectionEnd: 0,
     setSelectionRange(d, f) { this.selectionStart = d; this.selectionEnd = f; },
     // scrollHeight simule : ~48 caracteres par ligne de 21 px, plus le rembourrage. Sans ca
