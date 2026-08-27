@@ -182,7 +182,6 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 | `VOIX_ECOUTE_MAX` | *(déduit)* | plafond « phrase inachevée » — vide, il suit le plancher (× 2,5) |
 | `VOIX_STT_LOCAL_MODELE` | `small` | `small` (~4 s pour 2 s d'audio, correct) \| `base` (~1,7 s, moins fiable) |
 | `VOIX_TTS` | `azure` | `azure` \| `local` (Piper, pas encore branché) |
-| `VOIX_INPUT_DEVICE` / `VOIX_OUTPUT_DEVICE` | vide | sinon le périphérique système par défaut |
 
 Le vocabulaire biaisé pour la reconnaissance est dans `config.PHRASE_LIST` ; le nom du
 projet et la branche git y sont ajoutés automatiquement. **Ajoute-y ton jargon** : sans ça

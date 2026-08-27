@@ -55,8 +55,17 @@ def claude_binary():
 # The design assumes headphones: with them there is no echo, so the microphone can
 # stay open and barge-in works. On speakers the agent hears itself and interrupts
 # itself, which is exactly the failure the old gating tried to paper over.
-INPUT_DEVICE = os.environ.get("VOIX_INPUT_DEVICE", "")
-OUTPUT_DEVICE = os.environ.get("VOIX_OUTPUT_DEVICE", "")
+# Pas de choix de peripherique ici, et c'est delibere : ces deux constantes existaient, etaient
+# lues depuis l'environnement, et n'etaient utilisees NULLE PART. Le README les documentait
+# pourtant comme reglables — poser VOIX_INPUT_DEVICE ne faisait donc rien du tout, en silence.
+# Une option documentee qui n'agit pas est pire qu'une option absente : on croit avoir regle
+# le probleme et on cherche ailleurs.
+#
+# Le mode console de LiveKit sait choisir un peripherique (set_microphone_enabled accepte un
+# `device`), donc c'est cablable — mais ça demande d'aller dans ses internes, et l'entree audio
+# est precisement le chemin qu'on a certifie : micro coupe, plus un octet ne part. On ne le
+# fragilise pas pour une option qui n'a jamais ete demandee. En attendant, le peripherique est
+# celui du systeme, qui se change dans les reglages du systeme.
 
 # --- moteurs -----------------------------------------------------------------
 # auto = la chaine complete : Azure, puis Deepgram, puis le moteur local. C'est le defaut

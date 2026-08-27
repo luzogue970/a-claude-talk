@@ -1672,9 +1672,17 @@ const btnEnvoyer = document.getElementById("envoyer");
 const composer = document.getElementById("composer");
 
 function majEnvoyer() {
-  const pret = champ.value.trim().length > 0
-    && socket && socket.readyState === WebSocket.OPEN;
-  btnEnvoyer.disabled = !pret;
+  // Le bouton suit le CONTENU du champ, pas l'état de la liaison. Il en dépendait, et Entrée
+  // non : deux chemins pour la même intention, avec deux comportements différents — le clavier
+  // mettait en file, le bouton refusait. Un bouton grisé alors que la touche marche est un
+  // mensonge sur ce qui est possible.
+  btnEnvoyer.disabled = champ.value.trim().length === 0;
+  // L'attente se voit, sans empêcher le geste : le message sera mis en file.
+  const horsLigne = !socket || socket.readyState !== WebSocket.OPEN;
+  btnEnvoyer.classList.toggle("attente", horsLigne && !btnEnvoyer.disabled);
+  btnEnvoyer.title = horsLigne
+    ? "hors ligne — le message sera envoyé à la reconnexion"
+    : "envoyer (Entrée)";
 }
 // --- la dictée s'écrit dans la barre ----------------------------------------------------
 // Le principe qui évite tous les conflits : on retient le contenu du champ au DÉBUT de
@@ -1918,9 +1926,22 @@ champ.addEventListener("keydown", ev => {
 composer.onsubmit = ev => {
   ev.preventDefault();
   const texte = champ.value.trim();
-  if (!texte || !socket || socket.readyState !== WebSocket.OPEN) return;
-  envoyerCmd({ cmd: "texte", texte });   // parti, ou en file : jamais perdu
+  if (!texte) return;
+  // Plus de test sur l'état de la liaison, et c'était un vrai défaut : la fonction sortait
+  // AVANT d'appeler envoyerCmd, qui sait pourtant mettre en file et reconnecter. Liaison
+  // coupée, on tapait un message, on faisait Entrée, et il ne se passait rien — sans un mot.
+  // Le commentaire de cette ligne disait « jamais perdu » alors que le code le jetait.
+  //
+  // La liaison tombe pour des raisons banales : l'onglet passe en arrière-plan, le portable
+  // se met en veille, l'agent redémarre. C'est exactement là qu'on ne veut pas perdre ce
+  // qu'on vient d'écrire.
+  const parti = envoyerCmd({ cmd: "texte", texte });
+  if (!parti) {
+    // On le DIT plutôt que de laisser croire à un envoi : le message part à la reconnexion.
+    noteBarre("hors ligne — le message part dès que la liaison revient");
+  }
   champ.value = "";
+  barreVide = true;
   majEnvoyer();
   ajusterHauteur();
   suivre = true;

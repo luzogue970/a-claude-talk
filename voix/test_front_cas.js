@@ -975,5 +975,43 @@ dire(/historique rechargé/.test(flux.textContent),
 dire(/ici commence le direct/.test(flux.textContent),
      'avec une frontiere claire entre le passe et maintenant');
 
+// ---- un message ecrit ne se perd jamais, liaison coupee comprise -------------------------
+titre('le clavier et le bouton font la meme chose');
+// Le defaut trouve en REGARDANT la page : le bouton dependait de l etat de la liaison, Entree
+// non. Deux chemins pour la meme intention, deux comportements. Pire, onsubmit sortait AVANT
+// d appeler envoyerCmd — qui sait pourtant mettre en file et reconnecter — donc liaison
+// coupee, on tapait, on faisait Entree, et rien ne se passait. Sans un mot. Le commentaire de
+// la ligne disait « jamais perdu » pendant que le code le jetait.
+socket.readyState = 1;
+champ.value = 'un message ecrit en ligne'; champ.oninput();
+dire(btnEnvoyer.disabled === false, 'en ligne, avec du texte : le bouton est actif');
+
+// Liaison coupee : le bouton reste ACTIF, parce que le message sera mis en file.
+socket.readyState = 3; enAttente = [];
+champ.value = 'un message ecrit hors ligne'; champ.oninput();
+dire(btnEnvoyer.disabled === false,
+     'hors ligne, il reste actif : le message sera mis en file, pas jete');
+dire(btnEnvoyer.classList.contains('attente'),
+     'mais l attente se voit — on ne fait pas croire a un envoi immediat');
+dire(/reconnexion/.test(btnEnvoyer.title), 'et l infobulle dit ce qui va se passer');
+
+// Et le geste aboutit : le message part en file, la barre se vide, une note l explique.
+composer.onsubmit({ preventDefault() {} });
+const enFile = enAttente.filter(o => o.cmd === 'texte');
+dire(enFile.length === 1 && enFile[0].texte === 'un message ecrit hors ligne',
+     'le message est bien en file : ' + JSON.stringify(enFile[0] || null));
+dire(champ.value === '', 'la barre est videe : le message est pris en charge');
+const noteHL = document.getElementById('note-barre');
+dire(!noteHL.hidden && /hors ligne/.test(noteHL.textContent),
+     'et on le DIT : "' + noteHL.textContent + '"');
+
+// Champ vide : le bouton reste desactive, en ligne comme hors ligne. Envoyer du vide n a
+// aucun sens et le bouton doit le refuser.
+champ.value = ''; champ.oninput();
+dire(btnEnvoyer.disabled === true, 'champ vide : le bouton refuse, hors ligne aussi');
+socket.readyState = 1;
+champ.value = ''; champ.oninput();
+dire(btnEnvoyer.disabled === true, 'et en ligne aussi');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

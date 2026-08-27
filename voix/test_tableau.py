@@ -510,6 +510,20 @@ def tout_genre_affiche_a_un_filtre():
     # de fond, c'est « transparent » — donc invisible. C'est exactement ce qui est arrive :
     # var(--accent) n'etait definie nulle part et les barres du micro devenaient invisibles
     # au moment ou elles devaient montrer quelque chose. Six usages, aucun message d'erreur.
+    # Une option documentee qui n'agit pas est pire qu'une option absente : on croit avoir
+    # regle le probleme et on cherche ailleurs. VOIX_INPUT_DEVICE etait dans le README et lu
+    # depuis l'environnement, mais utilise nulle part.
+    print("\n=== toute variable VOIX_ documentee est vraiment lue ===")
+    lisible = "".join((racine / f.name).read_text(encoding="utf-8")
+                      for f in racine.glob("*.py"))
+    lisible += (racine.parent / "outils" / "voix.fish").read_text(encoding="utf-8")
+    doc = (racine.parent / "README.md").read_text(encoding="utf-8")
+    promises = set(re.findall(r"`(VOIX_[A-Z0-9_]+)`", doc))
+    mortes = sorted(v for v in promises if v not in lisible)
+    dire(not mortes,
+         f"{len(promises)} variables documentees, toutes lues par le code"
+         + (f" — PROMISES SANS EFFET : {mortes}" if mortes else ""))
+
     print("\n=== toute variable CSS utilisee est definie ===")
     page = (racine / "tableau.py").read_text(encoding="utf-8")
     definies = set(re.findall(r"(--[\w-]+)\s*:", page))
