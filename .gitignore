@@ -1,0 +1,24 @@
+# secrets — jamais dans le depot (voir ~/.config/claude-talk/secrets.env)
+*.conf
+.env
+secrets.env
+
+# artefacts lourds
+*.7z
+venv/
+.venv/
+__pycache__/
+*.onnx
+*.onnx.json
+
+# etat runtime
+*.log
+
+# transcripts des conversations : ils citent le contenu des projets
+conversations/
+
+# tts/ : l'ancien systeme, retire du depot (il reste dans l'historique git). Ce qui subsiste
+# sur le disque n'a rien a faire ici — dont azure.conf, qui contient une cle en clair, et
+# voices/, 268 Mo de voix Piper gardees pour la synthese locale a venir.
+tts/
+_essai_auto.md
