@@ -137,6 +137,17 @@ class Voix(Agent):
         # fenetre quand il n'y a rien a envoyer, et pouvoir reconnaitre un ordre local AVANT
         # de decider d'attendre ou de retenir.
         self._dit: str = ""
+        # Un enonce est-il en cours ? Le pendant exact de `dicteeOuverte` cote page, et son
+        # absence ici etait un vrai defaut : la page se protegeait des transcriptions tardives
+        # pour l'AFFICHAGE, mais l'agent les accumulait quand meme et republiait ensuite un
+        # « dictee » que la page obeit — court-circuitant sa propre protection.
+        #
+        # Le symptome exact : on envoie un message, le moteur rend une derniere finale pour la
+        # queue de l'audio (tous segmentent), elle atterrit dans le tour SUIVANT, et comme
+        # Claude vient de se mettre au travail la retenue d'office la depose dans la barre.
+        # On voyait donc reapparaitre un morceau du message qu'on venait d'envoyer, etiquete
+        # « retenu » alors qu'on n'avait rien retenu du tout.
+        self._dictee_ouverte: bool = False
         # Un texte retenu attend dans la barre, et il n'est jamais parti.
         #
         # Sans ce drapeau, le scenario suivant perdait du texte en silence : on dicte, c'est
@@ -220,6 +231,34 @@ class Voix(Agent):
         return (len(texte.split()) <= self.ORDRE_MOTS_MAX
                 and bool(reconnaitre(texte)[0]))
 
+    def noter_transcription(self, texte: str, final: bool) -> bool:
+        """Retenir une transcription finale — si elle appartient a l'enonce en cours.
+
+        Renvoie True si elle a ete gardee. Le cas qui compte est le FALSE : une finale qui
+        arrive apres le depart du tour appartient au tour precedent. Les moteurs segmentent
+        tous — mesure sur AssemblyAI comme sur Deepgram — donc la queue d'une phrase arrive
+        regulierement apres le commit. L'accumuler la ferait repartir dans le tour suivant, et
+        comme Claude vient de se mettre au travail la retenue d'office la deposerait dans la
+        barre : on voyait reapparaitre un morceau du message qu'on venait d'envoyer, etiquete
+        « retenu » alors qu'on n'avait rien retenu.
+
+        La page se protegeait deja de ça pour l'affichage, mais l'agent republiait ensuite un
+        « dictee » qu'elle obeit — sa propre protection etait court-circuitee. Le garde-fou
+        manquait ici, en amont.
+
+        Methode plutot que code inline dans le gestionnaire d'evenement : c'est ce qui permet
+        au test d'appeler le vrai chemin au lieu d'en recopier une version qui derive.
+        """
+        if not final:
+            return False
+        if not self._dictee_ouverte:
+            log.debug("transcription tardive ignoree : %r", texte)
+            return False
+        # Accumule, jamais remplace : une phrase entrecoupee de pauses arrive en plusieurs
+        # finales, et n'en garder que la derniere perdait tout le debut.
+        self._dit = (self._dit + " " + texte).strip()
+        return True
+
     def _delai_fenetre(self) -> float:
         """Le delai courant, lu depuis la session et non depuis la constante.
 
@@ -272,6 +311,7 @@ class Voix(Agent):
             self._voir("dictee", texte=texte, raison=raison,
                        auto=(raison == "occupe"))
             self._dit = ""
+            self._dictee_ouverte = False
             self._retenu_en_attente = True
             return
 
@@ -297,6 +337,7 @@ class Voix(Agent):
             self._voir("dictee", texte=self._dit.strip(), raison=raison,
                        auto=(raison == "occupe"))
             self._dit = ""
+            self._dictee_ouverte = False
             self._retenu_en_attente = True
             self.fermer_fenetre()
             return
@@ -305,6 +346,7 @@ class Voix(Agent):
     def _envoyer_maintenant(self, pourquoi: str) -> None:
         self.fermer_fenetre(publier=False)
         self._dit = ""
+        self._dictee_ouverte = False
         try:
             self.sess.commit_user_turn()
         except Exception as exc:
@@ -997,9 +1039,12 @@ async def entrypoint(ctx: JobContext):
         # Les résultats intermédiaires arrivent entiers et grandissants : ils remplacent.
         tableau.publier("partiel", texte=ev.transcript, final=bool(ev.is_final))
         if ev.is_final:
-            # Accumule, jamais remplace : une phrase entrecoupee de pauses arrive en
-            # plusieurs finales, et n'en garder que la derniere perdait tout le debut.
-            agent._dit = (agent._dit + " " + ev.transcript).strip()
+            if not agent.noter_transcription(ev.transcript, True):
+                # Dire pourquoi plutot que de jeter en silence : c'est ce silence qui rendait
+                # le defaut incomprehensible quand il se produisait.
+                tableau.publier("log", niveau="DEBUG", source="stt",
+                                texte=f"transcription en retard, déjà envoyée : "
+                                      f"« {ev.transcript[:60]} »")
             tableau.publier("transcrit", actif=False)
 
     @session.on("agent_state_changed")
@@ -1018,6 +1063,9 @@ async def entrypoint(ctx: JobContext):
             # une pause pour reflechir ne coupe plus la phrase en deux messages.
             if config.TOUR_MANUEL:
                 agent.fermer_fenetre(publier=False)
+            # L'enonce s'ouvre ICI et nulle part ailleurs : c'est ce reperage qui permet
+            # d'ignorer une transcription en retard, qui appartient au tour precedent.
+            agent._dictee_ouverte = True
             agent._derniere_parole = time.monotonic()
             tableau.publier("ecoute", actif=False, parle=True)
         elif str(ev.old_state) == "speaking":
@@ -1167,6 +1215,12 @@ async def entrypoint(ctx: JobContext):
             agent.marquer_tape()
             # La barre part : plus rien n'attend de relecture, la retenue collante se libere.
             agent._retenu_en_attente = False
+            # Et l'enonce vocal en cours est consomme lui aussi : ce qu'on vient d'envoyer au
+            # clavier contient deja la dictee relue. Sans ça, une finale arrivant apres
+            # l'envoi repartirait dans le tour suivant — le meme defaut par l'autre porte,
+            # celle des « actions un peu bizarres ».
+            agent._dictee_ouverte = False
+            agent._dit = ""
             session.generate_reply(user_input=propos, input_modality="text")
         elif nom == "effort":
             cle = str(donnees.get("cle") or "")
@@ -1260,6 +1314,7 @@ async def entrypoint(ctx: JobContext):
                 agent._oublier_tour()
                 tableau.publier("dictee", texte=agent._dit.strip(), raison="tour", auto=False)
                 agent._dit = ""
+                agent._dictee_ouverte = False
                 agent._retenir_ce_tour = False
         elif nom == "envoyer":
             # Contourner l'attente sans la raccourcir pour tout le monde : la fenêtre reste

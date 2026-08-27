@@ -349,6 +349,68 @@ async def principal():
     except Exception as exc:
         dire(False, f"impossible de construire une vraie session : {type(exc).__name__}: {exc}")
 
+    # --- une transcription en retard n'appartient pas au tour suivant --------------------
+    # Le defaut, rapporte tel quel : « j'envoie un message, il reapparait directement dans ma
+    # barre et il est affiche dans les logs en retenue alors que pas du tout ».
+    #
+    # L'enchainement exact : on parle, le tour part, Claude se met au travail — puis le moteur
+    # rend une DERNIERE finale pour la queue de l'audio (tous les moteurs segmentent, c'est
+    # mesure sur AssemblyAI comme sur Deepgram). Sans reperage de fin d'enonce, cette finale
+    # atterrit dans le tour suivant ; et comme Claude travaille, la retenue d'office la depose
+    # dans la barre. On voit donc reapparaitre un morceau du message qu'on vient d'envoyer,
+    # etiquete « retenu » alors qu'on n'a rien retenu.
+    #
+    # La page se protegeait deja de ça pour l'affichage — mais l'agent republiait un « dictee »
+    # qu'elle obeit, court-circuitant sa propre protection. Le garde-fou manquait EN AMONT.
+    print("\n=== une transcription en retard ne revient pas ===")
+
+    # Le VRAI chemin de l'agent, pas une copie. Une copie aurait continue de passer apres
+    # qu'on ait retire le garde-fou du code de production — c'est le genre de test qui rassure
+    # sans rien prouver.
+    def transcrire(v, texte, final=True):
+        return v.noter_transcription(texte, final)
+
+    v = neuve()
+    v._dictee_ouverte = True                    # on a commence a parler
+    dire(transcrire(v, "renomme la variable qui gère le silence"),
+         "pendant l'enonce, une finale est bien accumulee")
+    v.ouvrir_fenetre()
+    v._envoyer_maintenant("bouton")
+    dire(v.sess.commis == 1, "le tour part")
+    dire(not v._dictee_ouverte, "et l'enonce est CLOS : c'est ce reperage qui manquait")
+
+    # La finale en retard arrive maintenant, et Claude s'est mis au travail entre-temps.
+    v.worker.occupe = True
+    garde = transcrire(v, "dans config")
+    dire(garde is False, "la finale tardive est refusee")
+    dire(v._dit == "", "elle ne s'accumule pas dans le tour suivant")
+
+    # Et la preuve par le comportement : rien ne se depose dans la barre.
+    avant = len([g for g, _ in v.tableau.publies if g == "dictee"])
+    v.ouvrir_fenetre()
+    apres = len([g for g, _ in v.tableau.publies if g == "dictee"])
+    dire(apres == avant,
+         "aucun « dictee » publie : le message envoye ne reapparait pas dans la barre")
+    dire(v.sess.commis == 1, "et aucun second tour n'est parti non plus")
+
+    # Reparler rouvre l'enonce : la protection ne doit pas rendre l'agent sourd.
+    v._dictee_ouverte = True                    # ce que fait « speaking »
+    dire(transcrire(v, "ajoute un test dessus"),
+         "reparler rouvre l'enonce : on n'est pas devenu sourd")
+    dire(v._dit == "ajoute un test dessus",
+         f"et le nouveau tour part d'un texte PROPRE : {v._dit!r}")
+
+    # Meme chose apres une RETENUE : le tour est consomme, l'enonce doit se fermer.
+    v2 = neuve()
+    v2.retenir = True
+    v2._dictee_ouverte = True
+    v2._dit = "une phrase a relire"
+    v2.ouvrir_fenetre()
+    dire(not v2._dictee_ouverte,
+         "apres une retenue aussi, l'enonce se ferme — le tour est consomme")
+    dire(transcrire(v2, "queue de phrase") is False,
+         "donc une finale tardive ne s'ajoute pas au texte deja depose dans la barre")
+
     print(f"\n  {ok} ok, {ko} echec(s)")
     return 1 if ko else 0
 
