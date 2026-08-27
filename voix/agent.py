@@ -158,6 +158,9 @@ class Voix(Agent):
         # On voyait donc reapparaitre un morceau du message qu'on venait d'envoyer, etiquete
         # « retenu » alors qu'on n'avait rien retenu du tout.
         self._dictee_ouverte: bool = False
+        # De quoi republier la consommation quand elle change, sans que Voix connaisse le
+        # tableau : elle sait juste qu'il y a quelqu'un a prevenir.
+        self._sur_conso = None
         # Un texte retenu attend dans la barre, et il n'est jamais parti.
         #
         # Sans ce drapeau, le scenario suivant perdait du texte en silence : on dicte, c'est
@@ -655,6 +658,10 @@ class Voix(Agent):
         # retenir, exactement comme un silence normal.
         if config.TOUR_MANUEL and not effectif and self._dit.strip():
             self.ouvrir_fenetre()
+        # Fermer le micro solde le chrono sur disque : c'est le moment ou le chiffre change
+        # pour de bon, donc celui ou la page doit l'apprendre.
+        if not effectif and self._sur_conso:
+            self._sur_conso()
         if publier:
             self._voir("micro", actif=effectif, voulu=self.micro_voulu, bail=bail)
         return effectif
@@ -929,6 +936,24 @@ async def entrypoint(ctx: JobContext):
         tableau.publier("consommation", moteurs=consommation.etat(moteurs_stt.MOTEURS))
 
     _publier_conso()
+    agent._sur_conso = _publier_conso
+
+    async def suivre_conso():
+        """Republier pendant que le micro est ouvert.
+
+        Le compteur n'ecrit sur disque qu'a la fermeture du micro — ecrire a chaque trame
+        serait absurde. Mais l'affichage ne se rafraichissait qu'au demarrage et lors d'une
+        bascule de moteur : on parlait dix minutes et le chiffre ne bougeait pas d'une
+        seconde. Le compteur mesurait bien, c'est l'ecart entre ce qui est MESURE et ce qui
+        est MONTRE qui faisait croire a une panne.
+
+        Toutes les vingt secondes, et seulement micro ouvert : au repos rien ne change, donc
+        republier ne servirait qu'a remplir le flux.
+        """
+        while True:
+            await asyncio.sleep(20)
+            if consommation.en_cours()[0]:
+                _publier_conso()
 
     if isinstance(moteur_stt, stt_api.FallbackAdapter):
         # Le label est le chemin complet du module (livekit.plugins.azure.stt.STT), pas le
@@ -1450,6 +1475,7 @@ async def entrypoint(ctx: JobContext):
     publier_conversations()
     asyncio.create_task(surveiller_pupitre())
     asyncio.create_task(veiller_micro())
+    asyncio.create_task(suivre_conso())
     asyncio.create_task(agent.pomper_evenements())
     asyncio.create_task(quota.boucle())
     if config.STT_ENGINE in ("auto", "local"):

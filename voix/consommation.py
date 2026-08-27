@@ -131,6 +131,7 @@ def etat(moteurs) -> list[dict]:
     puissent decrire des moteurs fictifs sans toucher la vraie table).
     """
     d = _lire()
+    encours_cle, encours_s = en_cours()
     out = []
     for m in moteurs:
         e = d.get(m.cle, {})
@@ -138,6 +139,7 @@ def etat(moteurs) -> list[dict]:
         # toujours. Comparer un credit au mois courant ferait croire qu'il se recharge.
         consomme = (e.get("mois", {}).get(_mois(), 0.0) if m.renouvelable
                     else e.get("cumul", 0.0))
+        consomme += (encours_s if m.cle == encours_cle else 0.0)
         palier_s = (m.quota_h or 0) * 3600 or None
         reste = max(0.0, palier_s - consomme) if palier_s else None
         # Un constat d'epuisement ne vaut que pour la periode ou il a ete fait : un quota
@@ -147,8 +149,12 @@ def etat(moteurs) -> list[dict]:
             ep = None
         if ep:
             reste = 0.0
+        # Le temps NON ENCORE ECRIT sur disque, moteur par moteur. Sans lui, l'affichage
+        # reste sur la derniere ecriture et parait fige pendant qu'on parle.
+        vif = encours_s if m.cle == encours_cle else 0.0
         out.append({
             "cle": m.cle,
+            "en_cours_s": round(vif, 1),
             "libelle": m.libelle,
             "dispo": m.dispo,
             "consomme_s": round(consomme, 1),
@@ -224,3 +230,19 @@ def moteur_actif(cle: str | None) -> None:
 def micro(ouvert: bool) -> None:
     """Suit l'ouverture du micro : c'est la seule chose qui consomme du quota."""
     CHRONO.ouvrir(CHRONO._cle) if ouvert else CHRONO.fermer()
+
+
+def en_cours() -> tuple[str | None, float]:
+    """Le moteur en train de consommer, et depuis combien de secondes.
+
+    Ce que ça repare : le compteur n'ecrit sur disque qu'a la FERMETURE du micro, parce
+    qu'ecrire a chaque trame serait absurde. Mais l'affichage lisait ce disque, donc il
+    montrait la valeur du dernier micro ferme et rien d'autre — on parlait dix minutes et le
+    chiffre ne bougeait pas. On croit le compteur casse alors qu'il mesure bien ; c'est
+    l'ecart entre ce qui est mesure et ce qui est MONTRE qui trompe.
+
+    Avec ce couple, la page ajoute elle-meme les secondes ecoulees, sans une requete de plus.
+    """
+    if CHRONO._depuis is None:
+        return None, 0.0
+    return CHRONO._cle, max(0.0, time.monotonic() - CHRONO._depuis)

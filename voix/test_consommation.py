@@ -354,5 +354,45 @@ for _k, _attendu in (("NU", "valeur-nue"), ("AVEC", "valeur-export"),
 dire("export AVEC" not in os.environ,
      "et aucune variable fantome nommee « export ... » n'est creee")
 
+# --- ce qui est MESURE doit etre ce qui est MONTRE --------------------------------------
+# Le defaut, rapporte tel quel : « il me reste encore 329 h 59, alors que j'ai claque plus
+# d'une minute ». Le compteur mesurait bien — 114 s sur disque — mais il n'ecrit qu'a la
+# FERMETURE du micro, et l'affichage ne se rafraichissait qu'au demarrage. On parlait dix
+# minutes et le chiffre ne bougeait pas. L'ecart entre le mesure et le montre fait croire a
+# une panne du mesure.
+print("\n=== le temps en cours compte, avant meme d'etre ecrit ===")
+vider()
+faux_t["v"] = 5000.0
+C.time.monotonic = lambda: faux_t["v"]
+C.CHRONO._depuis, C.CHRONO._cle = None, None
+C.moteur_actif("mensuel")
+C.micro(True)
+faux_t["v"] += 180                      # trois minutes de micro ouvert, rien d'ecrit encore
+
+dire(Path(os.environ["VOIX_CONSO"]).exists() is False
+     or "mensuel" not in Path(os.environ["VOIX_CONSO"]).read_text(),
+     "rien n'est encore ecrit sur disque : on n'ecrit qu'a la fermeture")
+cle, secondes = C.en_cours()
+dire(cle == "mensuel" and abs(secondes - 180) < 1,
+     f"mais en_cours() sait qu'il tourne depuis {secondes:.0f} s sur « {cle} »")
+
+e = par_cle(C.etat(TABLE))["mensuel"]
+dire(abs(e["consomme_s"] - 180) < 1,
+     f"et l'etat publie le compte DEJA : {e['consomme_s']} s consommees")
+dire(abs(e["reste_s"] - (3600 - 180)) < 1,
+     f"le reste en tient compte aussi : {C.duree(e['reste_s'])} — les deux chiffres s'accordent")
+dire(abs(e["en_cours_s"] - 180) < 1,
+     "et « en_cours_s » permet a la page de dire que ça tourne maintenant")
+
+# A la fermeture, le disque rattrape, et le total ne double PAS.
+C.micro(False)
+e = par_cle(C.etat(TABLE))["mensuel"]
+dire(abs(e["consomme_s"] - 180) < 1,
+     f"a la fermeture le total est le meme, pas double : {e['consomme_s']} s")
+dire(e["en_cours_s"] == 0, "et plus rien n'est « en cours »")
+dire(C.en_cours() == (None, 0.0), "le chrono est bien au repos")
+C.time.monotonic = vrai
+vider()
+
 print(f"\n  {ok} ok, {ko} echec(s)")
 sys.exit(1 if ko else 0)

@@ -346,6 +346,9 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
   white-space:nowrap;text-align:right}
 #choix-moteur .reste b{color:var(--texte);font-weight:650}
 #choix-moteur .reste .vide{color:#c9605e;font-weight:650}
+/* « en cours » : ce moteur est en train de consommer, là, maintenant. Sans ce repère, un
+   chiffre qui monte tout seul ressemble à une erreur d'affichage. */
+#choix-moteur .reste .vif{color:var(--accent);font-weight:650}
 
 /* Le sélecteur de conversations. Volontairement proche d'une liste de messagerie plutôt que
    d'un tableau : on choisit une conversation en la RECONNAISSANT, pas en lisant sa fiche
@@ -2162,10 +2165,13 @@ function majResteMoteur() {
   const tete = consoMoteurs.find(m => m.cle === (chaineMoteurs[0] || ""));
   if (!tete) return;
   const reste = tete.epuise ? "palier épuisé (constaté)"
-    : tete.palier_s ? "il reste ~" + dureeCourte(tete.reste_s) + " sur " + dureeCourte(tete.palier_s) + " ce " + (tete.renouvelable ? "mois" : "crédit")
-    : tete.gratuit;
+    : tete.palier_s
+      ? dureeCourte(tete.consomme_s) + " utilisées sur " + dureeCourte(tete.palier_s)
+        + " · il reste ~" + dureeCourte(tete.reste_s)
+      : tete.gratuit;
   pastilleMoteur.title = tete.libelle + " — " + reste
-    + "\nEstimation locale, mesurée micro ouvert. Cliquer pour tout voir.";
+    + "\nMesuré micro ouvert, réactualisé toutes les 20 s pendant que tu parles."
+    + "\nEstimation locale. Cliquer pour tout voir.";
 }
 
 function ordreAvecTete(tete) {
@@ -2188,11 +2194,17 @@ function dessinerChoix() {
     const classe = c.epuise || part >= 1 ? " vide" : part >= 0.8 ? " tendu" : "";
     const jauge = c.palier_s
       ? `<div class="jauge${classe}"><i style="width:${Math.round(part * 100)}%"></i></div>` : "";
+    // Le CONSOMMÉ en évidence, le restant en second. C'était l'inverse, et sur un palier de
+    // 330 h une minute d'usage était invisible : on lisait « il reste 329 h 59 » après avoir
+    // parlé, et on concluait à un compteur cassé. Le chiffre qu'on vient vérifier est ce qu'on
+    // a dépensé, pas ce qui reste — surtout quand ce qui reste se compte en centaines d'heures.
+    const vif = c.en_cours_s > 0 ? ` <span class="vif">· en cours</span>` : "";
     const reste = c.epuise
       ? `<span class="vide">épuisé</span><br>constaté`
       : c.palier_s
-        ? `<b>${ech(dureeCourte(c.reste_s))}</b><br>de ${ech(dureeCourte(c.palier_s))}`
-        : c.consomme_s ? `${ech(dureeCourte(c.consomme_s))}<br>utilisé` : `illimité`;
+        ? `<b>${ech(dureeCourte(c.consomme_s))}</b>${vif}<br>`
+          + `reste ${ech(dureeCourte(c.reste_s))}`
+        : c.consomme_s ? `<b>${ech(dureeCourte(c.consomme_s))}</b>${vif}<br>utilisé` : `illimité`;
     return `<div class="m${m.dispo ? "" : " absent"}">`
       + `<span class="rang">${ech(rang)}</span>`
       + `<span><span class="nom">${ech(m.libelle)}</span> — `

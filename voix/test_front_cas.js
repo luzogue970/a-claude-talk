@@ -1013,5 +1013,50 @@ socket.readyState = 1;
 champ.value = ''; champ.oninput();
 dire(btnEnvoyer.disabled === true, 'et en ligne aussi');
 
+// ---- ce qui est consomme se lit, et se voit tourner --------------------------------------
+titre('le consomme passe devant le restant');
+// Le defaut rapporte : « il me reste encore 329 h 59 alors que j ai claque plus d une minute ».
+// Sur un palier de 330 h, une minute d usage est invisible dans le restant. Le chiffre qu on
+// vient verifier est ce qu on a DEPENSE.
+emettre({ genre: 'moteurs_stt', actif: 'assemblyai', direct: true,
+  chaine: ['assemblyai', 'local'],
+  liste: [{ cle: 'assemblyai', libelle: 'AssemblyAI', dispo: true, rang: 0, streaming: true,
+            gratuit: '50 $ de credits', note: 'le meilleur mesure' },
+          { cle: 'local', libelle: 'local', dispo: true, rang: 1, streaming: false,
+            gratuit: 'illimite', note: 'hors ligne' }] });
+emettre({ genre: 'consommation', moteurs: [
+  { cle: 'assemblyai', libelle: 'AssemblyAI', dispo: true, consomme_s: 114, palier_s: 1188000,
+    reste_s: 1187886, part: 0.0001, renouvelable: false, gratuit: '50 $', en_cours_s: 12 },
+  { cle: 'local', libelle: 'local', dispo: true, consomme_s: 0, palier_s: null, reste_s: null,
+    part: null, renouvelable: true, gratuit: 'illimite', en_cours_s: 0 },
+]});
+dessinerChoix();
+const pm = document.getElementById('choix-moteur');
+dire(/<b>1 min<\/b>/.test(pm.innerHTML),
+     'le consomme est en evidence : 1 min, et non noye dans 329 h de restant');
+dire(/reste 329 h/.test(pm.innerHTML), 'le restant reste affiche, en second');
+// On vise le MARQUEUR, pas la chaine : le pied du panneau contient deja « ne peut pas changer
+// en cours de session », et chercher « en cours » y matchait toujours — un test vert par
+// accident, qui aurait laisse passer la disparition du marqueur.
+dire(/class="vif"[^>]*>· en cours/.test(pm.innerHTML),
+     'et « en cours » dit que ce moteur consomme MAINTENANT — sinon un chiffre qui monte '
+     + 'tout seul ressemble a une erreur');
+dire(/illimité/.test(pm.innerHTML), 'un moteur sans palier reste marque illimite');
+
+// La pastille dit aussi le consomme, pas seulement le reste.
+dire(/utilisées sur/.test(pastilleMoteur.title),
+     'la pastille annonce le consomme au survol : "' + pastilleMoteur.title.split(String.fromCharCode(10))[0] + '"');
+dire(/20 s/.test(pastilleMoteur.title),
+     'et dit a quel rythme le chiffre se rafraichit');
+
+// Moteur au repos : pas de mention « en cours », sinon elle ne voudrait plus rien dire.
+emettre({ genre: 'consommation', moteurs: [
+  { cle: 'assemblyai', libelle: 'AssemblyAI', dispo: true, consomme_s: 114, palier_s: 1188000,
+    reste_s: 1187886, part: 0.0001, renouvelable: false, gratuit: '50 $', en_cours_s: 0 },
+]});
+dessinerChoix();
+dire(!/class="vif"/.test(document.getElementById('choix-moteur').innerHTML),
+     'micro ferme : plus de marqueur « en cours »');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);
