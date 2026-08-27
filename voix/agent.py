@@ -158,6 +158,7 @@ class Voix(Agent):
         # On voyait donc reapparaitre un morceau du message qu'on venait d'envoyer, etiquete
         # « retenu » alors qu'on n'avait rien retenu du tout.
         self._dictee_ouverte: bool = False
+        self._dernier_tour_utilisateur: str | None = None
         # De quoi republier la consommation quand elle change, sans que Voix connaisse le
         # tableau : elle sait juste qu'il y a quelqu'un a prevenir.
         self._sur_conso = None
@@ -370,6 +371,19 @@ class Voix(Agent):
                        texte="rien à envoyer pour l'instant")
         self._voir("ecoute", actif=False)
 
+    async def _titrer(self, question: str) -> None:
+        """Nommer la conversation d'apres son sujet, en arriere-plan."""
+        try:
+            from porte_parole import titrer
+            titre = await titrer(question, self._dernier_debrief or "")
+        except Exception:
+            log.debug("titre indisponible", exc_info=True)
+            return
+        if titre and self.conv:
+            self.conv.note_titre(titre)
+            log.info("conversation intitulée « %s »", titre)
+            self._voir("session", id=self.conv.session_id, titre=titre)
+
     def _oublier_tour(self) -> None:
         """Jette le tour audio en attente sans le commettre."""
         try:
@@ -492,6 +506,8 @@ class Voix(Agent):
             self._quota_depart = self.quota.instantane()
         if self.conv:
             self.conv.tour_utilisateur(texte)
+            # Garde pour le titre : c'est la premiere DEMANDE qui dit le sujet, pas la reponse.
+            self._dernier_tour_utilisateur = texte
         await self.worker.envoyer(texte)
         self._debut_tour = self._debut_tour or time.monotonic()
         # Deliberately short: the real answer arrives later through session.say(), so this
@@ -706,6 +722,10 @@ class Voix(Agent):
             # La ligne du flux reçoit ses boutons quand le texte complet existe.
             self._voir("parole_fin", id=cle, mots=len(self._dernier_debrief.split()))
         if self.conv:
+            # Le titre, apres le PREMIER echange et une seule fois. En tache de fond : un
+            # appel de modele, meme sur Haiku, n'a pas a retarder la parole qui suit.
+            if self.conv.tours <= 2 and not self.conv.titre:
+                asyncio.create_task(self._titrer(self._dernier_tour_utilisateur or ""))
             self.conv.tour_claude(self._dernier_debrief or "", outils=journal_lignes(journal_),
                                   jetons=getattr(journal_, "jetons", None),
                                   duree=getattr(journal_, "duree_s", None))
@@ -1199,6 +1219,35 @@ async def entrypoint(ctx: JobContext):
             libelle = await worker.changer_modele(cle, temporaire=False)
             if libelle:
                 tableau.publier("ordre", texte=f"modèle changé depuis le tableau : {libelle}")
+        elif nom == "nouvelle_conversation":
+            if worker.occupe:
+                tableau.publier("log", niveau="WARNING", source="session",
+                                texte="pas maintenant : une tâche est en cours. "
+                                      "« arrête » d'abord, ou attends la fin.")
+            else:
+                dit = await worker.nouvelle_conversation()
+                if not dit:
+                    tableau.publier("log", niveau="WARNING", source="session",
+                                    texte="ouverture impossible — voir les erreurs ci-dessus")
+                else:
+                    # Clore l'ancien transcript AVANT d'en ouvrir un neuf : sans ça l'index
+                    # le garde « en cours » indefiniment, et la liste affiche une conversation
+                    # vivante qui ne l'est plus.
+                    if agent.conv:
+                        agent.conv.clore("nouvelle conversation ouverte")
+                    # Un transcript neuf, sinon la conversation neuve s'ecrirait a la suite de
+                    # l'ancienne dans le meme fichier et la liste les confondrait.
+                    neuve = journal.Conversation(
+                        projet=Path(config.WORKDIR).name,
+                        modele=worker.modele, effort=worker.effort,
+                        chemin=config.WORKDIR)
+                    agent.conv = neuve
+                    worker._conv = neuve
+                    log.info("nouvelle conversation dans %s", neuve.fichier)
+                    tableau.vider()
+                    tableau.publier("vider")
+                    tableau.publier("ordre", texte=dit + " Les précédentes restent reprenables.")
+                    publier_conversations()
         elif nom == "conversations":
             # Rafraichi a l'ouverture du panneau plutot qu'en continu : la liste ne change
             # qu'entre deux lancements, et relire l'index a chaque seconde pour rien serait
@@ -1385,6 +1434,7 @@ async def entrypoint(ctx: JobContext):
             for c in journal.conversations(config.WORKDIR, sous_arbre=True, limite=40):
                 liste.append({
                     "session_id": c.get("session_id"),
+                    "titre": c.get("titre"),
                     "projet": c.get("projet"),
                     "chemin": c.get("chemin"),
                     "tours": c.get("tours", 0),

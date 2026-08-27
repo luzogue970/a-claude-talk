@@ -311,6 +311,23 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #moteur.montre{display:inline-flex}
 #moteur:hover{border-color:#4b5563;color:var(--texte)}
 #moteur.replie{border-color:var(--outil);color:#e3b341}
+
+/* Le bouton des conversations n'avait AUCUN style propre : il héritait du bouton générique et
+   détonnait à côté des pastilles de l'en-tête, plus grand et plus dur. Même forme que
+   #moteur — c'est la forme de référence ici, et deux éléments voisins qui font la même chose
+   (ouvrir un panneau) doivent se ressembler.
+   Le chiffre est mis en avant dans le libellé plutôt que le mot : c'est lui qu'on lit. */
+#convs{border:1px solid var(--bord);border-radius:999px;padding:2px 10px 2px 8px;
+  font-size:11.5px;color:var(--faible);cursor:pointer;white-space:nowrap;
+  display:inline-flex;gap:5px;align-items:center;background:none;font-family:inherit;
+  transition:border-color .15s,color .15s,background .15s}
+#convs:hover{border-color:#4b5563;color:var(--texte);background:#1a1f27}
+/* Borne + ellipse : le titre est genere par un modele, donc sa longueur ne se controle pas
+   depuis ici. Sans borne, un titre bavard elargissait l'en-tete et poussait les pastilles de
+   quota hors de vue. */
+#convs b{color:var(--texte);font-weight:650;max-width:230px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+#convs .rond{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
 #moteur::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--voix)}
 #moteur.replie::before{background:var(--outil)}
 
@@ -387,6 +404,11 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #choix-conv .meta{color:#5a636e;margin-top:3px}
 #choix-conv .ici{color:var(--accent)}
 #choix-conv .titre{color:#5a636e;padding:8px 11px 4px;letter-spacing:.02em}
+/* L'action est distincte des entrées de liste : bordée en pointillé, sans pastille d'état.
+   La mêler aux conversations existantes ferait cliquer dessus par erreur. */
+#choix-conv .c.neuve{border:1px dashed #3a4250;border-left-width:1px;margin-bottom:4px}
+#choix-conv .c.neuve .nom{color:var(--accent)}
+#choix-conv .c.neuve .plus{display:inline-block;width:15px;text-align:center;font-weight:700}
 #choix-conv .pied{border-top:1px solid var(--bord);margin-top:8px;padding:9px 11px 4px;
   color:var(--faible);line-height:1.5}
 #choix-moteur .pied{border-top:1px solid var(--bord);margin-top:8px;padding-top:8px;
@@ -831,7 +853,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <div id="choix-moteur" hidden></div>
   </span>
   <span class="avec-choix">
-    <button type="button" id="convs" title="les conversations de ce dossier">💬 conversations</button>
+    <button type="button" id="convs" title="les conversations de ce dossier"></button>
     <div id="choix-conv" hidden></div>
   </span>
   <span id="compte" title="temps avant envoi automatique">
@@ -2068,7 +2090,11 @@ champ.addEventListener("keydown", ev => {
   }
 });
 
-addEventListener("resize", ajusterHauteur);
+addEventListener("resize", () => {
+  ajusterHauteur();
+  placerPanneau(document.getElementById("choix-moteur"));
+  placerPanneau(document.getElementById("choix-conv"));
+});
 // Échap rend le clavier aux raccourcis, sans envoyer. Attaché ici et pas plus haut : le
 // gestionnaire global s'exécute au chargement, et y toucher « champ » avant sa déclaration
 // tuait tout le script — page blanche, sans rien dans le flux pour le dire.
@@ -2370,6 +2396,19 @@ function ordreAvecTete(tete) {
   return [tete, ...suite].join(",");
 }
 
+// Un panneau ancré à droite de son bouton sort par la gauche quand le bouton s'est déplacé —
+// et il se déplace, parce que le titre de la conversation courante est généré par un modèle et
+// que sa longueur pousse tout l'en-tête. Le CSS ne peut pas connaître la place disponible : on
+// la mesure à l'ouverture. Mesuré : le panneau des moteurs sortait de 47 px en fenêtre de
+// 860 px, donc une partie de la liste était inatteignable.
+function placerPanneau(el) {
+  if (!el || el.hidden) return;
+  el.style.maxWidth = "";
+  const r = el.getBoundingClientRect();
+  const place = r.right - 12;                 // du bord gauche de l'écran au bord droit du panneau
+  if (r.width > place) el.style.maxWidth = Math.max(240, place) + "px";
+}
+
 function dessinerChoix() {
   const b = document.getElementById("choix-moteur");
   const lignes = inventaireMoteurs.map(m => {
@@ -2450,12 +2489,16 @@ function ilYA(iso) {
 
 function majConvs() {
   const vraies = convs.filter(c => c.session_id && c.tours);
-  btnConvs.textContent = "💬 " + (vraies.length || "aucune")
-    + (vraies.length > 1 ? " conversations" : " conversation");
   const c = vraies.find(x => x.session_id === convCourante);
+  // Le nom de la conversation courante d'abord, le compte ensuite : ce qu'on veut savoir d'un
+  // coup d'oeil est « où suis-je », pas « combien y en a-t-il ».
+  const nom = c ? (c.titre || c.projet || "sans nom") : "nouvelle conversation";
+  btnConvs.innerHTML = `<span class="rond"></span><b>${ech(nom)}</b>`
+    + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "");
   btnConvs.title = c
-    ? `en cours : ${c.projet} — ${c.tours} tours\nCliquer pour en reprendre une autre.`
-    : "aucune conversation reprise — celle-ci est neuve";
+    ? `${c.titre ? c.titre + " · " : ""}${c.projet} — ${c.tours} tours`
+      + `\nCliquer pour en reprendre une autre, ou en ouvrir une neuve.`
+    : "conversation neuve — cliquer pour en reprendre une, ou en ouvrir une autre";
 }
 
 function dessinerConvs() {
@@ -2465,12 +2508,15 @@ function dessinerConvs() {
   // de zéro — précisément le silence qu'on cherche à supprimer.
   const utiles = convs.filter(c => c.session_id && c.tours);
   const perdues = convs.length - utiles.length;
-  if (!utiles.length) {
-    b.innerHTML = `<div class="pied">Aucune conversation à reprendre dans ce dossier.<br>`
-      + `Celle-ci est neuve — elle apparaîtra ici au prochain lancement.</div>`;
-    return;
-  }
-  let section = null, html = "";
+
+  // En HAUT, et toujours present — meme quand la liste est vide. C'est une action, pas une
+  // entree de liste : la meler aux conversations existantes ferait cliquer dessus par erreur.
+  let html = `<button type="button" class="c neuve" data-neuve="1">`
+    + `<span class="haut"><span class="nom"><span class="plus">+</span> nouvelle conversation`
+    + `</span></span>`
+    + `<div class="dit">Repart d'un contexte vide, pour un autre sujet. `
+    + `Les conversations en cours sont conservées et restent reprenables.</div></button>`;
+  let section = null;
   for (const c of utiles) {
     const titre = c.ici ? "ce dossier" : (c.sous ? "sous-dossiers" : "ailleurs");
     if (titre !== section) { section = titre; html += `<div class="titre">${ech(titre)}</div>`; }
@@ -2486,14 +2532,23 @@ function dessinerConvs() {
       + `data-sid="${ech(c.session_id)}"${morte ? " disabled" : ""} `
       + `title="${ech(et[1])}">`
       + `<span class="haut"><span class="nom">`
-      + `<span class="etat ${et[0]}"></span>${ech(c.projet || "?")}`
+      + `<span class="etat ${et[0]}"></span>${ech(c.titre || c.projet || "?")}`
       + (active ? ` <span class="ici">· en cours</span>` : "")
       + (morte ? ` <span class="ici">· ouverte ailleurs</span>` : "")
       + `</span><span class="quand">${ech(ilYA(c.maj))}</span></span>`
       + `<div class="dit">${ech(c.apercu || "(rien n'y a encore été dit)")}</div>`
-      + `<div class="meta">${c.tours} tour${c.tours > 1 ? "s" : ""}`
+      + `<div class="meta">`
+      + (c.titre ? `${ech(c.projet || "?")} · ` : "")
+      + `${c.tours} tour${c.tours > 1 ? "s" : ""}`
       + (c.reprises > 1 ? `<span class="repr">↻ ${c.reprises}</span>` : "")
       + (c.sous ? ` · ./${ech(c.sous)}` : "") + `</div></button>`;
+  }
+  if (!utiles.length) {
+    html += `<div class="pied">Aucune autre conversation dans ce dossier — celle-ci `
+      + `apparaîtra ici dès son premier échange.</div>`;
+    b.innerHTML = html;
+    brancherChoixConv(b);
+    return;
   }
   html += `<div class="pied">`
     + `Reprendre garde <b>tout le contexte</b> : Claude Code relit sa session sur disque, `
@@ -2504,9 +2559,21 @@ function dessinerConvs() {
     + (perdues ? `<br>${perdues} lancement(s) sans session enregistrée — rien à y reprendre.` : "")
     + `</div>`;
   b.innerHTML = html;
+  brancherChoixConv(b);
+}
+
+// Les gestionnaires, en un seul endroit : le panneau se redessine dans deux branches (liste
+// vide ou non) et brancher deux fois laissait la version vide sans aucun clic actif.
+function brancherChoixConv(b) {
   for (const bouton of [...b.querySelectorAll("[data-sid]")]) {
     bouton.onclick = () => {
       envoyerCmd({ cmd: "reprendre", session_id: bouton.getAttribute("data-sid") });
+      b.hidden = true;
+    };
+  }
+  for (const bouton of [...b.querySelectorAll("[data-neuve]")]) {
+    bouton.onclick = () => {
+      envoyerCmd({ cmd: "nouvelle_conversation" });
       b.hidden = true;
     };
   }
@@ -2518,7 +2585,7 @@ btnConvs.onclick = ev => {
   b.hidden = !b.hidden;
   // Rafraîchi à l'ouverture plutôt qu'en continu : la liste ne bouge qu'entre deux
   // lancements, et relire l'index chaque seconde pour rien serait du travail pur.
-  if (!b.hidden) { envoyerCmd({ cmd: "conversations" }); dessinerConvs(); }
+  if (!b.hidden) { envoyerCmd({ cmd: "conversations" }); dessinerConvs(); placerPanneau(b); }
 };
 addEventListener("click", ev => {
   const b = document.getElementById("choix-conv");
@@ -2529,7 +2596,7 @@ pastilleMoteur.onclick = ev => {
   ev.stopPropagation();
   const b = document.getElementById("choix-moteur");
   b.hidden = !b.hidden;
-  if (!b.hidden) dessinerChoix();
+  if (!b.hidden) { dessinerChoix(); placerPanneau(b); }
 };
 addEventListener("click", ev => {
   const b = document.getElementById("choix-moteur");

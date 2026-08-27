@@ -16,6 +16,7 @@ en cours, pas la conversation.
 """
 
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,9 @@ INDEX = RACINE / "index.jsonl"
 
 def _horodatage() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+log = logging.getLogger("voix.journal")
 
 
 class Conversation:
@@ -53,6 +57,11 @@ class Conversation:
         self.session_id: str | None = None
         self.reprise = reprise
         self.tours = 0
+        # Le SUJET de la conversation, ecrit une fois apres le premier echange. La liste les
+        # nommait d'apres le dossier : quatre conversations sur le meme projet s'appelaient
+        # toutes pareil et il fallait lire la derniere phrase de chacune pour deviner laquelle
+        # etait laquelle.
+        self.titre: str | None = None
         nom = f"{self.debut:%Y-%m-%d_%H%M}_{projet}".replace("/", "-")
         # Le nom est a la MINUTE, et deux lancements du meme projet dans la meme minute
         # tombaient donc sur le meme fichier : le second ecrivait par-dessus le premier, et
@@ -84,6 +93,27 @@ class Conversation:
             fh.write(texte)
 
     # --- ce qui se passe ------------------------------------------------------
+    def note_titre(self, titre: str):
+        """Poser le titre, une seule fois.
+
+        Jamais rejoue : un titre qui change en cours de route rend la liste inutilisable — on
+        cherche « celle sur les notifications » et elle s'appelle autrement. La premiere valeur
+        gagne, y compris sur une reprise ou le sujet a derive.
+        """
+        titre = " ".join((titre or "").split())
+        if self.titre or not titre:
+            return
+        self.titre = titre[:60]
+        try:
+            contenu = self.fichier.read_text(encoding="utf-8")
+            if contenu.startswith("# Conversation"):
+                fin = contenu.index("\n")
+                contenu = f"# {self.titre}\n\n_{self.projet}_" + contenu[fin:]
+                self.fichier.write_text(contenu, encoding="utf-8")
+        except (OSError, ValueError):
+            log.debug("titre non ecrit dans le transcript", exc_info=True)
+        self.indexer()
+
     def note_session(self, session_id: str):
         """Le SDK ne donne l'identifiant qu'au premier message : on le recolle apres coup."""
         if self.session_id or not session_id:
@@ -135,6 +165,7 @@ class Conversation:
             "projet": self.projet,
             "chemin": self.chemin,
             "session_id": self.session_id,
+            "titre": self.titre,
             "debut": self.debut.isoformat(timespec="seconds"),
             "maj": datetime.now().isoformat(timespec="seconds"),
             "fin": self.fin,
@@ -287,6 +318,7 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
                 "fichiers": [],
                 "etat": lc.get("etat"),
                 "modele": lc.get("modele"),
+                "titre": lc.get("titre"),
                 # Pose des la creation : il n'etait ecrit que dans la branche « plus recent
                 # que ce qu'on avait », jamais franchie pour le premier lancement du groupe.
                 # La cle manquait donc sur toute conversation d'un seul lancement.
@@ -310,6 +342,10 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
             g["pid"] = lc.get("pid")
         if lc.get("chemin") and not g["chemin"]:
             g["chemin"] = lc["chemin"]
+        # Le titre vient du premier lancement qui en a un : une conversation reprise garde le
+        # sujet sous lequel on la connait, meme si un lancement plus recent n'a pas de titre.
+        if lc.get("titre") and not g.get("titre"):
+            g["titre"] = lc["titre"]
         g["ici"] = g["ici"] or lc.get("ici")
         g["sous"] = g["sous"] or lc.get("sous")
     # Meme tri que l'index, en une seule cle : ce qui est ICI d'abord, puis ses descendants,
@@ -632,7 +668,10 @@ def apercu(limite: int = 15, ici: str | None = None, tout: bool = False) -> list
 
         etiquette = {"en cours": "● en cours", "fermée": "○ fermée",
                      "interrompue": "◍ interrompue"}.get(d["etat"], d["etat"])
-        sortie.append(f"  {i:2d}. {d.get('projet') or '?':<24} {etiquette}")
+        nom = d.get("titre") or d.get("projet") or "?"
+        sortie.append(f"  {i:2d}. {nom[:34]:<34} {etiquette}")
+        if d.get("titre") and d.get("projet"):
+            sortie.append(f"      {d['projet']}")
 
         # Le couple demarrage / derniere activite. Pour une conversation vivante la
         # « fin » n'existe pas encore : ce qui compte est la derniere fois qu'elle a bouge.

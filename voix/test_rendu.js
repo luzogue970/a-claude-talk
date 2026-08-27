@@ -86,8 +86,12 @@ const LISTES = [
         palier_s: 28800, reste_s: 0, part: 1, renouvelable: true, epuise: true,
         gratuit: "8 h/mois", motif: "Quota exceeded for this month" },
     ] },
+  // Un titre volontairement long : il est genere par un modele, donc sa longueur echappe au
+  // controle de la page. Sans borne il elargissait l'en-tete et poussait les pastilles de
+  // quota hors de vue.
   { n: 6, genre: "conversations", dossier: "/home/x/dev/insnap", courante: "sid-a", liste: [
-      { session_id: "sid-a", projet: "insnap", tours: 59, reprises: 7, ici: true,
+      { session_id: "sid-a", projet: "insnap", ici: true, tours: 59, reprises: 7,
+        titre: "refonte complete du parcours d'inscription et des notifications differees",
         maj: new Date(Date.now() - 300000).toISOString(), etat: "en cours",
         apercu: "l inscription whatsapp sur l appli semble ne pas marcher et l ux ui a ce niveau non plus" },
       { session_id: "sid-b", projet: "echec", tours: 38, reprises: 5, sous: "claudesque/echec",
@@ -129,6 +133,9 @@ setTimeout(async () => {
     const el = document.getElementById(id);
     if (!el) continue;
     el.hidden = false;
+    // Comme a l'ouverture reelle : c'est le placement mesure qui empeche le panneau de sortir,
+    // pas le CSS seul. Ne pas l'appeler ici testerait un etat que l'utilisateur ne voit jamais.
+    if (typeof placerPanneau === "function") placerPanneau(el);
     const r = el.getBoundingClientRect();
     releve.panneaux[id] = { l: Math.round(r.left), d: Math.round(r.right),
                             w: Math.round(r.width) };
@@ -351,8 +358,8 @@ if (bo.microBas && bo.champBoite) {
        `et il precede le champ, du cote ou va la main (${bo.microBas.l} < ${bo.champBoite.l})`);
 }
 if (bo.convs) {
-  dire(bo.convs.w > 0 && bo.convs.w < 240,
-       `le bouton des conversations reste compact (${bo.convs.w} px)`);
+  dire(bo.convs.w > 0 && bo.convs.w < 300,
+       `le bouton des conversations reste borné malgré un titre long (${bo.convs.w} px)`);
 }
 
 // --- rien ne doit deborder sur le cote --------------------------------------------------

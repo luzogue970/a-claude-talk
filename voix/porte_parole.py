@@ -23,7 +23,11 @@ from claude_agent_sdk import (
     ThinkingConfigDisabled,
 )
 
+import logging
+
 import config
+
+log = logging.getLogger("voix.porte_parole")
 
 INSTRUCTION = """Tu es la voix de Claude Code. Il vient de terminer un tour de travail et tu
 le racontes A L'ORAL, comme un collegue competent qui explique de vive voix ce qu'il a fait.
@@ -219,3 +223,59 @@ class PorteParole:
     async def dire(self, journal) -> str:
         """Non-streaming convenience wrapper, used by the tests."""
         return "".join([m async for m in self.dire_flux(journal)]).strip()
+
+
+async def titrer(question: str, reponse: str) -> str:
+    """Un titre court pour la conversation, tire de son premier echange.
+
+    Pourquoi ça existe : la liste nommait les conversations d'apres le DOSSIER. Quatre
+    conversations ouvertes sur le meme projet s'appelaient donc toutes « insnap », et il
+    fallait lire l'apercu de la derniere phrase pour deviner de quoi chacune parlait. Un titre
+    qui dit le sujet fait ce travail une fois pour toutes.
+
+    Genere une seule fois, au premier echange, et jamais rejoue : un titre qui change en cours
+    de route rend la liste inutilisable — on cherche « celle sur les notifications » et elle
+    s'appelle maintenant autrement.
+
+    Client jetable plutot que celui du porte-parole : sa session garde l'historique des
+    reformulations a l'oral, et y glisser une demande de titre la pollue pour tous les tours
+    suivants. Le cout est un lancement de processus, une fois par conversation.
+    """
+    extrait = (question or "").strip()[:600]
+    if not extrait:
+        return ""
+    client = ClaudeSDKClient(ClaudeAgentOptions(
+        model=config.SPEAKER_MODEL,
+        cli_path=config.claude_binary(),
+        cwd=config.WORKDIR,
+        allowed_tools=[],
+        thinking=ThinkingConfigDisabled(type="disabled"),
+        system_prompt=(
+            "Tu donnes un titre court a une conversation de travail, en français. "
+            "Trois a six mots, sans article inutile, sans guillemets, sans point final. "
+            "Le SUJET, pas une reformulation de la demande : « refonte du parcours "
+            "d'inscription », pas « l'utilisateur demande de refondre ». "
+            "Reponds par le titre seul, rien d'autre."),
+    ))
+    try:
+        await client.connect()
+        await client.query(f"Premier message :\n{extrait}\n\n"
+                           f"Debut de reponse :\n{(reponse or '').strip()[:400]}")
+        morceaux: list[str] = []
+        async for message in client.receive_response():
+            for bloc in getattr(message, "content", []) or []:
+                texte = getattr(bloc, "text", None)
+                if texte:
+                    morceaux.append(texte)
+    except Exception:
+        log.debug("titre impossible", exc_info=True)
+        return ""
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+    titre = " ".join("".join(morceaux).split())
+    # Un modele qui bavarde malgre la consigne ne doit pas remplir la liste d'un paragraphe.
+    titre = titre.strip(" .\"'«»").split("\n")[0]
+    return titre[:60]

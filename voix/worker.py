@@ -437,6 +437,48 @@ class Worker:
             pass
         return f"conversation {sid[:8]} reprise."
 
+    async def nouvelle_conversation(self) -> str:
+        """Ouvrir une conversation NEUVE, sans toucher aux autres.
+
+        Meme mecanique que changer_conversation — reconstruire le client, puisque le SDK fige
+        la session a la construction — mais avec `resume=None` : Claude Code cree alors une
+        session vierge. Les precedentes ne sont ni fermees ni supprimees ; elles restent
+        reprenables depuis le selecteur.
+
+        Le cas d'usage : changer de sujet dans le meme dossier. Reprendre par defaut est ce
+        qu'on veut en revenant continuer, mais pas quand on attaque autre chose — le contexte
+        precedent devient alors du bruit qu'on paie a chaque tour.
+        """
+        if not self.client:
+            return ""
+        if self.occupe:
+            return ""
+        ancien, ancienne_pompe = self.client, self._pompe
+        try:
+            nouveau = ClaudeSDKClient(self._options(reprendre=None))
+            await nouveau.connect()
+        except Exception as exc:
+            log.warning("nouvelle conversation impossible : %s", exc)
+            self._voir("erreur", niveau="WARNING", source="session",
+                       texte=f"impossible d'ouvrir une conversation neuve : {exc}")
+            return ""
+        self.client = nouveau
+        # Remis a zero pour que le drainer recolte l'identifiant du NOUVEAU client. Et
+        # `reprise` a None : sans ça la verification de reprise croirait qu'on voulait
+        # reprendre l'ancienne et signalerait un echec qui n'existe pas.
+        self.session_id = None
+        self.reprise = None
+        self.journal = Journal()
+        self._pompe = asyncio.create_task(self._drainer())
+
+        if ancienne_pompe:
+            ancienne_pompe.cancel()
+        try:
+            await ancien.disconnect()
+        except Exception:
+            pass
+        return "nouvelle conversation ouverte."
+
     async def _rendre_le_modele(self):
         if not self._rendre_apres_tour or not self.client:
             return

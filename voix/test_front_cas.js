@@ -835,10 +835,14 @@ emettre({ genre: 'conversations', dossier: '/a/projet', courante: 'sid-en-cours'
     maj: new Date(Date.now() - 26 * 3600000).toISOString(), apercu: "continue" },
   { session_id: null, projet: 'abandonnee', tours: 0, reprises: 1, etat: 'fermée', apercu: '' },
 ]});
-dire(/2 conversations|3 conversations/.test(btnConvs.textContent),
-     'le bouton compte les conversations reprenables : "' + btnConvs.textContent + '"');
-dire(!/4/.test(btnConvs.textContent),
-     'et NE compte pas le lancement sans session : il n y a rien a y reprendre');
+// Le bouton nomme la conversation COURANTE, le compte vient en second : ce qu on veut savoir
+// d un coup d oeil est « ou suis-je », pas « combien y en a-t-il ».
+dire(/insnap/.test(btnConvs.textContent),
+     'le bouton nomme la conversation courante : "' + btnConvs.textContent + '"');
+dire(/\+2/.test(btnConvs.textContent),
+     'et compte les autres reprenables, sans le lancement sans session');
+dire(!/\+3/.test(btnConvs.textContent),
+     'le lancement sans session_id n est pas compte : il n y a rien a y reprendre');
 
 dessinerConvs();
 const panneau = document.getElementById('choix-conv');
@@ -880,6 +884,49 @@ const ordre = envoyes.find(o => o.cmd === 'reprendre');
 dire(ordre && ordre.session_id === 'sid-autre',
      'cliquer demande la reprise de CETTE conversation');
 dire(panneau.hidden, 'et le panneau se referme');
+
+// ---- le titre, et la conversation neuve --------------------------------------------------
+// Le defaut : la liste nommait les conversations d apres le DOSSIER. Quatre conversations sur
+// le meme projet s appelaient toutes « insnap » et il fallait lire la derniere phrase de
+// chacune pour deviner laquelle etait laquelle.
+emettre({ genre: 'conversations', dossier: '/a/insnap', courante: 'sid-t1', liste: [
+  { session_id: 'sid-t1', projet: 'insnap', titre: 'refonte du parcours d inscription',
+    tours: 12, reprises: 2, ici: true, etat: 'en cours',
+    maj: new Date(Date.now() - 6e4).toISOString(), apercu: 'reprends sur le SMS' },
+  { session_id: 'sid-t2', projet: 'insnap', tours: 4, reprises: 1, ici: true, etat: 'fermée',
+    maj: new Date(Date.now() - 9e5).toISOString(), apercu: 'sans titre celle-ci' },
+]});
+dessinerConvs();
+dire(/refonte du parcours d inscription/.test(panneau.innerHTML),
+     'le titre remplace le nom du dossier quand il existe');
+dire(/insnap · 12 tours/.test(panneau.innerHTML),
+     'et le dossier reste visible en second : deux sujets peuvent vivre dans deux dossiers');
+dire(/insnap<\/span>/.test(panneau.innerHTML) || /insnap/.test(panneau.innerHTML),
+     'une conversation sans titre garde le nom du dossier');
+dire(/refonte du parcours/.test(btnConvs.textContent),
+     'et le bouton de l en-tete porte le titre courant : "' + btnConvs.textContent + '"');
+
+// La conversation neuve est une ACTION, distincte des entrees de liste.
+dire(/data-neuve="1"/.test(panneau.innerHTML), 'le panneau propose d en ouvrir une neuve');
+dire(/conservées et restent reprenables/.test(panneau.innerHTML),
+     'et dit ce qui arrive aux autres — sinon on n ose pas cliquer');
+dire(panneau.innerHTML.indexOf('data-neuve') < panneau.innerHTML.indexOf('data-sid'),
+     'elle est EN HAUT, avant la liste');
+socket.readyState = 1; envoyes.length = 0;
+panneau.querySelector('[data-neuve="1"]').onclick();
+dire(envoyes.some(o => o.cmd === 'nouvelle_conversation'),
+     'cliquer demande bien une conversation neuve');
+dire(panneau.hidden, 'et le panneau se referme');
+
+// Liste vide : l action doit RESTER proposee, sinon on ne peut jamais en creer une.
+emettre({ genre: 'conversations', dossier: '/a/vide', courante: null, liste: [] });
+dessinerConvs();
+dire(/data-neuve="1"/.test(panneau.innerHTML),
+     'liste vide : on peut toujours en ouvrir une neuve');
+socket.readyState = 1; envoyes.length = 0;
+panneau.querySelector('[data-neuve="1"]').onclick();
+dire(envoyes.some(o => o.cmd === 'nouvelle_conversation'),
+     'et le clic est branche la aussi — les deux branches du dessin doivent l armer');
 
 // ---- le micro du bas ---------------------------------------------------------------------
 titre('deux boutons, un seul micro');

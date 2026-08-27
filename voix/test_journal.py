@@ -184,6 +184,50 @@ def principal():
          "une conversation sans session_id n'est pas reprenable : Claude n'en a pas trace")
 
     shutil.rmtree(boite, ignore_errors=True)
+    # --- le titre, pose une fois -------------------------------------------------------
+    # La liste nommait les conversations d'apres le dossier : quatre sur le meme projet
+    # s'appelaient toutes pareil. Un titre dit le sujet, une fois pour toutes.
+    print("\n=== le titre nomme le sujet, et ne change plus ===")
+    c = journal.Conversation("titre-test", "claude-opus-5", "xhigh", chemin="/a/projet/t")
+    c.note_session("sess-titre")
+    c.tour_utilisateur("refonds le parcours d'inscription")
+    c.tour_claude("c'est parti")
+    c.note_titre("refonte du parcours d'inscription")
+    dire(c.titre == "refonte du parcours d'inscription", f"le titre est pose : {c.titre}")
+
+    # Jamais rejoue : on cherche « celle sur les notifications » et elle doit encore s'appeler
+    # ainsi trois jours plus tard.
+    c.note_titre("tout autre chose")
+    dire(c.titre == "refonte du parcours d'inscription",
+         "un second titre est IGNORE : la premiere valeur gagne")
+
+    entree = [d for d in journal.historique(50, "/a/projet")
+              if d["projet"] == "titre-test"][0]
+    dire(entree.get("titre") == "refonte du parcours d'inscription",
+         "il est ecrit dans l'index, donc lisible sans ouvrir le fichier")
+    dire("# refonte du parcours d'inscription" in c.fichier.read_text(encoding="utf-8"),
+         "et il devient le titre du transcript, pour qui le relit a la main")
+
+    conv = [d for d in journal.conversations("/a/projet") if d["projet"] == "titre-test"][0]
+    dire(conv.get("titre") == "refonte du parcours d'inscription",
+         "le regroupement le remonte")
+
+    # Une reprise sans titre garde celui sous lequel on connait la conversation.
+    time.sleep(0.01)
+    c2 = journal.Conversation("titre-test", "claude-opus-5", "xhigh", chemin="/a/projet/t")
+    c2.note_session("sess-titre")
+    c2.tour_utilisateur("continue")
+    c2.tour_claude("ok")
+    conv = [d for d in journal.conversations("/a/projet") if d["projet"] == "titre-test"][0]
+    dire(conv.get("titre") == "refonte du parcours d'inscription",
+         "une reprise sans titre garde celui du premier lancement")
+    dire(conv["reprises"] == 2, "et c'est bien la meme conversation, reprise deux fois")
+
+    # Un titre vide ou blanc ne remplace rien : mieux vaut le nom du dossier qu'un vide.
+    c3 = journal.Conversation("sans-titre", "m", "e", chemin="/a/projet/s")
+    c3.note_titre("   ")
+    dire(c3.titre is None, "un titre vide est refuse")
+
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
 
