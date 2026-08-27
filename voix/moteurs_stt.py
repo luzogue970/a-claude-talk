@@ -59,6 +59,12 @@ class Moteur:
     # preuve : il peut se rattraper sans qu'un tour en fasse les frais. Relancer banc_stt.py
     # est ce qui doit faire evoluer ce champ, pas une intuition.
     demontre: bool = False
+    # Le module du plugin LiveKit, s'il en a un. Sert au prechargement : LiveKit REFUSE
+    # d'enregistrer un plugin hors du fil principal, et un plugin s'enregistre a l'import. Or
+    # l'agent tourne dans un fil de travail : un import paresseux dans construire() arrive
+    # donc toujours trop tard. C'est ainsi que cinq moteurs sur sept etaient silencieusement
+    # retires de la chaine — elle etait annoncee complete et n'avait que Deepgram et le local.
+    module: str | None = None
     # Combien d'heures garder EN RESERVE sur un credit unique. Au-dessus de ce seuil le
     # credit est traite comme abondant et passe devant les quotas mensuels : autant profiter
     # du meilleur moteur. En dessous, il repasse derriere et se garde pour les mois ou les
@@ -85,31 +91,31 @@ class Moteur:
 MOTEURS: tuple[Moteur, ...] = (
     Moteur("speechmatics", "Speechmatics", "SPEECHMATICS_API_KEY",
            "8 h/mois, renouvele, sans carte", True, True, True,
-           "bon sur les bancs publics (6,4 %), mais ici il tronque ses phrases ou reste muet — a revoir", quota_h=8, qualite=2),
+           "bon sur les bancs publics (6,4 %), mais ici il tronque ses phrases ou reste muet — a revoir", quota_h=8, qualite=2, module="livekit.plugins.speechmatics"),
     Moteur("gladia", "Gladia", "GLADIA_API_KEY",
            "4 h/mois de temps reel, renouvele", True, True, True,
-           "annonce le meilleur sur le francais par son editeur ; mesure ici, il coupe a la premiere proposition", quota_h=4, qualite=3),
+           "annonce le meilleur sur le francais par son editeur ; mesure ici, il coupe a la premiere proposition", quota_h=4, qualite=3, module="livekit.plugins.gladia"),
     Moteur("azure", "Azure", "AZURE_SPEECH_KEY",
            "5 h/mois au palier F0, renouvele", True, True, True,
-           "aussi utilise pour la synthese vocale ; a marche jusqu'a l'epuisement du palier", quota_h=5, qualite=4, demontre=True),
+           "aussi utilise pour la synthese vocale ; a marche jusqu'a l'epuisement du palier", quota_h=5, qualite=4, demontre=True, module="livekit.plugins.azure"),
     Moteur("assemblyai", "AssemblyAI", "ASSEMBLYAI_API_KEY",
            "50 $ de credits a l'inscription (~300 h)", False, True, True,
-           "MESURE le meilleur ici : 3,0 % d'erreur en 2,9 s, le plus rapide des moteurs en ligne", quota_h=330, reserve_h=50, qualite=1, demontre=True),
+           "MESURE le meilleur ici : 3,0 % d'erreur en 2,9 s, le plus rapide des moteurs en ligne", quota_h=330, reserve_h=50, qualite=1, demontre=True, module="livekit.plugins.assemblyai"),
     Moteur("deepgram", "Deepgram", "DEEPGRAM_API_KEY",
            "200 $ de credits a l'inscription", False, True, True,
-           "nova-3 ; mesure a 3,0 % d'erreur, aussi bon qu'AssemblyAI mais deux fois plus lent", quota_h=430, reserve_h=100, qualite=2, demontre=True),
+           "nova-3 ; mesure a 3,0 % d'erreur, aussi bon qu'AssemblyAI mais deux fois plus lent", quota_h=430, reserve_h=100, qualite=2, demontre=True, module="livekit.plugins.deepgram"),
     Moteur("soniox", "Soniox", "SONIOX_API_KEY",
            "credits gratuits a l'inscription", False, True, True,
            "temps reel avec resultats intermediaires ; a mesurer sur ta voix",
-           quota_h=50, reserve_h=10, qualite=3),
+           quota_h=50, reserve_h=10, qualite=3, module="livekit.plugins.soniox"),
     Moteur("google", "Google Cloud", "GOOGLE_APPLICATION_CREDENTIALS",
            "60 min/mois a vie (le credit d'essai n'est pas compte)", True, True, True,
            "le palier a vie est petit : bon comme dernier recours en ligne",
-           quota_h=1, qualite=4),
+           quota_h=1, qualite=4, module="livekit.plugins.google"),
     Moteur("groq", "Groq", "GROQ_API_KEY",
            "palier gratuit avec limites journalieres", True, False, False,
            "whisper-large-v3 rapide, mais le texte n'arrive qu'a la fin de la phrase",
-           qualite=5),
+           qualite=5, module="livekit.plugins.groq"),
     Moteur("local", "local (faster-whisper)", None,
            "illimite, hors ligne", True, True, False,
            "4 a 7 s par phrase, et AUCUN texte en direct ; l'audio ne quitte pas la machine",
@@ -117,6 +123,38 @@ MOTEURS: tuple[Moteur, ...] = (
 )
 
 PAR_CLE = {m.cle: m for m in MOTEURS}
+
+
+def precharger() -> tuple[list[str], list[tuple[str, str]]]:
+    """Importer les plugins de la chaine MAINTENANT, depuis le fil principal.
+
+    A appeler au chargement du module de l'agent, avant que LiveKit ne demarre son fil de
+    travail. Sans ça, l'import se fait au moment de construire le moteur — donc dans le fil de
+    travail — et LiveKit leve « Plugins must be registered on the main thread ». Le moteur est
+    alors retire de la chaine, avec un avertissement noye dans le demarrage : on croit avoir
+    sept moteurs et on en a deux.
+
+    Le piege etait invisible parce que tout ce qui verifiait ces moteurs — le banc d'essai, les
+    tests — tournait sur le fil principal. Le seul contexte ou le defaut se produit est
+    l'application reelle. C'est la meme lecon que la cle lue avec `source` au lieu du parseur :
+    verifier autrement que l'application ne verifie rien.
+
+    Chaque import est protege : un plugin absent ou casse retire son moteur, il ne doit pas
+    empecher l'agent de demarrer. Degrader, jamais tomber.
+    """
+    import importlib
+    charges: list[str] = []
+    refuses: list[tuple[str, str]] = []
+    for cle in chaine():
+        m = PAR_CLE.get(cle)
+        if not m or not m.module:
+            continue
+        try:
+            importlib.import_module(m.module)
+            charges.append(cle)
+        except Exception as exc:
+            refuses.append((cle, f"{type(exc).__name__}: {exc}"))
+    return charges, refuses
 
 
 def construire(cle: str, vad=None):

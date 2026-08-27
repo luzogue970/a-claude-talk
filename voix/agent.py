@@ -53,6 +53,7 @@ import stt_local
 
 import config
 import journal
+
 from intentions import modele_demande, reconnaitre
 from porte_parole import PorteParole
 from quota import Quota
@@ -60,6 +61,15 @@ from tableau import Tableau
 from worker import Worker
 
 log = logging.getLogger("voix")
+# Les plugins de reconnaissance s'importent ICI, sur le fil principal, et pas au moment de
+# construire le moteur. LiveKit refuse d'enregistrer un plugin hors du fil principal, or
+# l'agent tourne dans un fil de travail : un import paresseux arrivait donc toujours trop tard
+# et le moteur etait retire de la chaine. Mesure sur une vraie session : la chaine s'annonçait
+# « AssemblyAI → Deepgram → Speechmatics → Gladia → local → Soniox → Azure » et il ne restait
+# que Deepgram et le local, les cinq autres ecartes par un mur d'avertissements au demarrage.
+_charges, _refuses = moteurs_stt.precharger()
+for _cle, _pourquoi in _refuses:
+    log.warning("moteur « %s » indisponible : %s", _cle, _pourquoi)
 
 
 def journal_lignes(j) -> list[str]:
@@ -1453,5 +1463,16 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    # PAS de basicConfig ici, et c'est la correction d'un vrai defaut d'affichage : LiveKit
+    # installe son propre handler sur la racine (cli/log.py, setup_logging → root.addHandler)
+    # et ne retire jamais ceux qui existent deja. Notre handler restait donc en place et CHAQUE
+    # ligne s'imprimait deux fois — une fois brute, une fois au format colore de LiveKit. Le
+    # demarrage faisait le double de sa longueur, et une trace d'erreur apparaissait deux fois
+    # de suite, ce qui donne l'impression que le probleme s'est produit deux fois.
+    #
+    # LiveKit met la racine en DEBUG en mode console : nos lignes « voix » s'affichent donc,
+    # et au bon format. Ce qui est journalise AVANT ce reglage — les avertissements de
+    # prechargement des plugins — passe par le handler de dernier recours de Python, qui
+    # imprime les WARNING sur stderr : rien n'est perdu.
+    logging.getLogger("voix").setLevel(logging.INFO)
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

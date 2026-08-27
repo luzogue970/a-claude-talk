@@ -490,9 +490,16 @@ def tout_genre_affiche_a_un_filtre():
     manquants = []
     for fichier in sorted(racine.glob("*.py")):
         texte = fichier.read_text(encoding="utf-8")
-        for plugin in set(re.findall(r"from livekit\.plugins import (\w+)", texte)
-                          + re.findall(r"from livekit\.plugins\.(\w+)", texte)
-                          + re.findall(r"livekit\.plugins\.(\w+)", texte)):
+        # Ancre en DEBUT DE LIGNE : sans ça, une phrase de documentation qui cite
+        # « from livekit.plugins import X » devenait un plugin a epingler. C'est arrive, et le
+        # faux positif est pire qu'un oubli — on cherche a corriger une dependance qui n'existe
+        # pas. Les chaines de caracteres litterales restent couvertes, elles, parce qu'un
+        # import dynamique s'ecrit bien en debut de ligne dans le code qui l'execute.
+        motifs = (re.findall(r"^\s*from livekit\.plugins import (\w+)", texte, re.M)
+                  + re.findall(r"^\s*from livekit\.plugins\.(\w+)", texte, re.M)
+                  + re.findall(r"^\s*import livekit\.plugins\.(\w+)", texte, re.M)
+                  + re.findall(r'"livekit\.plugins\.(\w+)"', texte))
+        for plugin in set(motifs):
             # turn-detector s'importe sous un autre nom que celui du paquet.
             paquet = {"turn_detector": "turn-detector"}.get(plugin, plugin)
             if f"livekit-plugins-{paquet}==" not in exigences:

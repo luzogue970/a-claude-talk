@@ -7,6 +7,45 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [1.16.0] — 2026-08-27
+
+### Corrige — CINQ moteurs sur sept ne se chargeaient pas
+La chaine s'annonçait « AssemblyAI → Deepgram → Speechmatics → Gladia → local → Soniox →
+Azure » et il ne restait que Deepgram et le local. AssemblyAI, Speechmatics, Gladia et Soniox
+etaient ecartes au demarrage, chacun avec un `RuntimeError: Plugins must be registered on the
+main thread` noye dans un mur de traces.
+
+Un plugin LiveKit s'enregistre A L'IMPORT, et `Plugin.register_plugin` refuse hors du fil
+principal. Or l'agent tourne dans un fil de travail : un `from livekit.plugins import X` ecrit
+paresseusement dans `construire()` arrivait donc toujours au mauvais moment. Azure et Silero
+marchaient parce qu'ils sont importes en tete de `agent.py`.
+
+Les plugins de la chaine sont desormais precharges au chargement du module de l'agent, sur le
+fil principal, chacun protege : un plugin casse retire son moteur, il n'empeche pas de demarrer.
+
+Pourquoi rien ne l'avait vu : le banc d'essai, les tests et mes verifications a la main
+tournaient tous sur le fil principal. Le seul contexte ou le defaut se produit est
+l'application reelle — la meme lecon que la cle lue avec `source` au lieu du parseur de
+l'application. La nouvelle suite `fil` construit chaque moteur DEPUIS un fil secondaire, et
+verifie dans un interpreteur NEUF que l'agent precharge vraiment. La premiere version de ce
+test restait verte sans le prechargement, parce qu'elle avait charge les plugins elle-meme.
+
+### Corrige — chaque ligne de journal s'imprimait deux fois
+`logging.basicConfig` posait un handler sur la racine, et LiveKit ajoute le sien sans retirer
+ceux qui existent. Le demarrage faisait donc le double de sa longueur, et une trace d'erreur
+apparaissait deux fois de suite — ce qui donne l'impression que le probleme s'est produit deux
+fois. LiveKit met deja la racine en DEBUG en mode console.
+
+### Corrige — un message ecrit pouvait se perdre en silence
+`composer.onsubmit` sortait avant d'appeler `envoyerCmd`, qui sait pourtant mettre en file et
+reconnecter. Liaison coupee : on tapait, on faisait Entree, rien ne se passait. Le bouton
+dependait de l'etat de la liaison, la touche non — deux chemins, deux comportements.
+
+### Corrige — deux reglages documentes ne faisaient rien
+`VOIX_INPUT_DEVICE` et `VOIX_OUTPUT_DEVICE` etaient lus depuis l'environnement et utilises
+nulle part. Un test verifie maintenant que toute variable `VOIX_` citee dans le README est
+vraiment lue par le code.
+
 ## [1.15.0] — 2026-08-27
 
 ### Verifie — micro coupe, plus un octet ne part vers le nuage
