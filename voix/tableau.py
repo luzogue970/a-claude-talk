@@ -236,10 +236,14 @@ class Tableau:
 
 PAGE = r"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>claude-talk</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Cpath%20d%3D%27M15.13%2011.89Q15.38%207.50%2016.00%202.20Q16.62%207.50%2016.87%2011.89Z%20M17.30%2012.01Q19.12%209.54%2021.40%206.65Q20.03%2010.07%2018.81%2012.88Z%20M19.12%2013.19Q23.05%2011.21%2027.95%209.10Q23.67%2012.29%2019.99%2014.70Z%20M20.11%2015.13Q23.15%2015.47%2026.80%2016.00Q23.15%2016.53%2020.11%2016.87Z%20M19.99%2017.30Q23.67%2019.71%2027.95%2022.90Q23.05%2020.79%2019.12%2018.81Z%20M18.81%2019.12Q20.03%2021.93%2021.40%2025.35Q19.12%2022.46%2017.30%2019.99Z%20M16.87%2020.11Q16.62%2024.50%2016.00%2029.80Q15.38%2024.50%2015.13%2020.11Z%20M14.70%2019.99Q12.88%2022.46%2010.60%2025.35Q11.97%2021.93%2013.19%2019.12Z%20M12.88%2018.81Q8.95%2020.79%204.05%2022.90Q8.33%2019.71%2012.01%2017.30Z%20M11.89%2016.87Q8.85%2016.53%205.20%2016.00Q8.85%2015.47%2011.89%2015.13Z%20M12.01%2014.70Q8.33%2012.29%204.05%209.10Q8.95%2011.21%2012.88%2013.19Z%20M13.19%2012.88Q11.97%2010.07%2010.60%206.65Q12.88%209.54%2014.70%2012.01Z%27%20fill%3D%27%2358a6ff%27%2F%3E%3C%2Fsvg%3E">
 <style>
 :root{
+  color-scheme:dark;
   --fond:#0e1116; --carte:#161b22; --bord:#272e37; --texte:#d7dde5; --faible:#8b949e;
   --toi:#58a6ff; --voix:#3fb950; --pensee:#a371f7; --outil:#d29922; --erreur:#f85149;
   --permission:#ff7b72; --tour:#39c5cf;
@@ -825,6 +829,122 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 
 #bas{position:fixed;bottom:62px;right:16px;background:var(--carte);border:1px solid var(--bord);
   color:var(--faible);border-radius:999px;padding:6px 14px;font-size:12px;cursor:pointer;display:none;font-family:inherit}
+
+/* ── Telephone ─────────────────────────────────────────────────────────────
+   Regles mesurees, pas devinees : chaque bloc corrige un defaut constate en
+   rendant la page dans WebKit a la taille d un iPhone (inspect-tableau).
+   Rien ne change au-dessus de 760 px. */
+@media (max-width: 760px) {
+
+  html, body { overflow-x: clip; max-width: 100vw; }
+  body { font-size: 15px; }
+
+  /* --- En-tete ------------------------------------------------------------
+     Mesure : .rang-bas faisait 856 px dans 390. Ses deux enfants (filtres et
+     compteurs) ne se repliaient pas. Chacun devient une rangee qui defile. */
+  header { padding: calc(8px + env(safe-area-inset-top)) 12px 8px; gap: 6px 8px;
+    background: #0e1116; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  header h1 { font-size: 15px; gap: 6px; }
+  header h1 .marque { width: 19px; height: 19px; }
+  #etat { order: 1; font-size: 12px; }
+  .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
+  .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px; }
+  #alerte-entete { order: 1; flex: 0 1 auto; min-width: 0; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pupitre { order: 4; width: 100%; font-size: 12px; }
+  #activite { order: 5; width: 100%; gap: 5px; }
+  .act { font-size: 11px; padding: 2px 8px; }
+  .rang-bas { order: 9; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
+  #filtres, #compteurs {
+    flex: 1 1 100%; min-width: 0; flex-wrap: nowrap; overflow-x: auto;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px;
+  }
+  #filtres::-webkit-scrollbar, #compteurs::-webkit-scrollbar { display: none; }
+  #filtres button { flex: 0 0 auto; min-height: 34px; padding: 5px 11px; font-size: 12px; }
+  #compteurs { font-size: 11px; gap: 6px; }
+  #compteurs > * { flex: 0 0 auto; white-space: nowrap; }
+  #compte, #travail { white-space: nowrap; }
+  #pupitre, .zone-direct, .rang-bas, #alerte-entete { max-height: 240px;
+    transition: max-height .2s ease-out, opacity .15s ease-out, margin .2s ease-out; }
+  header.compact #pupitre, header.compact .zone-direct, header.compact .rang-bas,
+  header.compact #alerte-entete {
+    max-height: 0; opacity: 0; overflow: hidden; pointer-events: none;
+    padding-top: 0; padding-bottom: 0; border-top-width: 0; margin: -6px 0 0; }
+
+  /* --- Selects --------------------------------------------------------------
+     Mesure : appearance « auto » → WebKit peint le controle natif en blanc,
+     quel que soit le fond declare. On dessine nous-memes. */
+  select {
+    -webkit-appearance: none; appearance: none;
+    background-color: var(--carte); color: var(--texte);
+    border: 1px solid var(--bord); border-radius: 999px;
+    padding: 6px 26px 6px 10px; font: inherit; font-size: 13px; min-height: 40px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27 width%3D%2710%27 height%3D%276%27%3E%3Cpath d%3D%27M1 1l4 4 4-4%27 fill%3D%27none%27 stroke%3D%27%239aa1b1%27 stroke-width%3D%271.6%27%2F%3E%3C%2Fsvg%3E");
+    min-width: 64px; text-overflow: ellipsis;
+    background-repeat: no-repeat; background-position: right 9px center; background-size: 10px 6px;
+  }
+
+  /* --- Flux ------------------------------------------------------------------
+     Mesure : la grille de bureau (62 | 92 | 14 | 1fr) laisse ~200 px au texte
+     sur 390. Sur telephone : une ligne d en-tete compacte, puis le corps sur
+     toute la largeur. */
+  #flux { padding: 8px 10px calc(150px + env(safe-area-inset-bottom)); }
+  .ev { grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 8px; padding: 9px 0; }
+  .ev .t { grid-column: 1; text-align: left; font-size: 10.5px; }
+  .ev .badge { grid-column: 2; font-size: 10.5px; }
+  .ev .pip { grid-column: 3; align-self: center; }
+  .ev .corps { grid-column: 1 / -1; font-size: 15px; line-height: 1.5; }
+  .ev.g-reprise { grid-template-columns: auto minmax(0, 1fr); }
+  .ev.g-reprise > * { grid-column: auto; }
+  .ev .corps pre, .ev .corps code { font-size: 12px; max-width: 100%; overflow-x: auto;
+                                    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .lecture button { min-height: 32px; padding: 4px 12px; }
+
+  /* --- Barre de saisie ---------------------------------------------------------
+     Mesure : le textarea faisait 34 px de large, les boutons fixes 332. Il prend
+     desormais la premiere ligne avec le micro et « envoyer » ; le reglage de
+     delai et « retenir » passent sur une seconde ligne, plus discrete. */
+  #saisie-barre { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  #saisie-barre form { flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+  #micro-bas, #couper-lecture { order: 1; width: 48px; height: 48px; flex: 0 0 auto; }
+  #saisie {
+    order: 2; flex: 1 1 200px; min-width: 160px;
+    font-size: 16px;   /* en dessous, iOS zoome sur le champ et desaxe la page */
+    padding: 12px 14px; height: 48px; max-height: 36vh; border-radius: 22px;
+  }
+  #envoyer { order: 3; min-height: 48px; min-width: 48px; padding: 0 16px; font-size: 14px; flex: 0 0 auto; }
+  #delai, .avec-info { order: 10; }
+  #delai { min-height: 40px; font-size: 12.5px; padding: 4px 26px 4px 12px; }
+  .avec-info { gap: 6px; }
+  .avec-info button { min-height: 40px; padding: 5px 14px; font-size: 13px; }
+  #retenir-info { min-width: 40px; }
+
+  #pile-barre { left: 12px; right: 12px; }
+  #cogitation, #note-barre, #en-attente { font-size: 12px; max-width: 100%; }
+  #bas { bottom: calc(140px + env(safe-area-inset-bottom)); }
+
+  /* --- Panneaux flottants -------------------------------------------------------- */
+  #choix-moteur, #choix-conv, .bulle, #retenir-aide {
+    left: 10px !important; right: 10px !important; width: auto !important;
+    max-width: calc(100vw - 20px) !important; max-height: 65vh; overflow-y: auto;
+  }
+  #choix-conv button, #choix-moteur .m { min-height: 42px; }
+}
+
+@media (max-width: 420px) {
+  header { padding-left: 10px; padding-right: 10px; }
+  header h1 { font-size: 14px; }
+  #flux { padding-left: 8px; padding-right: 8px; }
+  .zone-controles button { padding: 6px 9px; font-size: 12.5px; }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  header { padding-top: 5px; padding-bottom: 5px; }
+  header #activite, header #pupitre { display: none; }
+  #flux { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+  #saisie { max-height: 28vh; }
+}
 </style></head><body>
 <header>
   <h1>
@@ -2739,6 +2859,24 @@ function brancher() {
     setTimeout(() => { reconnexionPrevue = false; brancher(); }, 1200);
   };
 }
+// Sur téléphone, l'en-tête complet prend un quart de l'écran. Dès qu'on lit la conversation,
+// il se replie à ses deux premières lignes (titre, état, micro, arrêter, modèle) et redevient
+// entier en haut de page. Hystérésis : replier retire ~110 px au document, et sur une page
+// courte le défilement retomberait sous le seuil — l'en-tête battrait. On ne replie donc
+// qu'avec de la marge, et on ne déplie qu'au sommet. La feuille de bureau ignore la classe.
+const __entete = document.querySelector("header");
+let __replie = false;
+function __plierEntete() {
+  const marge = document.documentElement.scrollHeight - innerHeight;
+  if (!__replie && scrollY > 160 && marge > 320) __replie = true;
+  else if (__replie && scrollY < 8) __replie = false;
+  else return;
+  __entete.classList.toggle("compact", __replie);
+}
+if (__entete && typeof addEventListener === "function") {
+  addEventListener("scroll", __plierEntete, { passive: true });
+}
+
 brancher();
 
 addEventListener("scroll", () => {
