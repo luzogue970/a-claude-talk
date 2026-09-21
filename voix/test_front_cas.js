@@ -1267,5 +1267,40 @@ dire(!!envoiImage && !envoiImage.texte.includes('blob:'),
 dire(jointes.length === 0, 'les pieces sont retirees apres l envoi');
 dire(imagesPretes === 0 && btnEnvoyer.disabled, 'et le bouton retombe au repos');
 
+// ---- ce qui est parti mais pas encore pris en compte ------------------------------------
+titre('messages en vol : visibles jusqu a l echo, rendus en cas d echec');
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0; enVol.length = 0;
+noteBarre(null);
+champ.value = 'corrige le titre de la page';
+composer.onsubmit({ preventDefault() {} });
+dire(enVol.length === 1 && enVol[0].texte === 'corrige le titre de la page',
+     'le message envoye est en vol');
+dire(!document.getElementById('en-vol').hidden, 'et la barre le montre');
+dire(champ.value === '', 'le champ est vide : il est parti');
+emettre({ genre: 'toi', texte: 'corrige le titre de la page', tape: true });
+dire(enVol.length === 0, 'l echo « toi » du serveur le retire');
+dire(document.getElementById('en-vol').hidden, 'et la barre se referme');
+
+champ.value = 'deploie en prod';
+composer.onsubmit({ preventDefault() {} });
+emettre({ genre: 'erreur', commande: 'texte', message: 'deploie en prod',
+          texte: 'la commande « texte » a echoue — details dans les logs' });
+dire(champ.value === 'deploie en prod', 'un echec du serveur remet le message dans le champ');
+dire(enVol.length === 0, 'et il n est plus en vol');
+const noteEchec = document.getElementById('note-barre');
+dire(!noteEchec.hidden && /echoue/.test(noteEchec.textContent),
+     'la raison est affichee : ' + noteEchec.textContent);
+dire(noteEchec.classList.contains('collante'), 'et elle reste tant qu on n ecrit pas');
+champ.oninput();
+dire(noteEchec.hidden, 'ecrire la fait disparaitre');
+
+champ.value = 'autre message'; composer.onsubmit({ preventDefault() {} });
+emettre({ genre: 'erreur', texte: 'quota Azure de transcription épuisé' });
+dire(enVol.length === 1 && champ.value === '',
+     'une erreur sans rapport avec un message ne le rend pas');
+dire(!noteEchec.hidden, 'mais elle se lit dans la barre');
+emettre({ genre: 'toi', texte: 'autre message' });
+dire(enVol.length === 0, 'et le message suit son cours');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);
