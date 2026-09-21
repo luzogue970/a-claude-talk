@@ -283,6 +283,14 @@ body{margin:0;background:var(--fond);color:var(--texte);
 header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(8px);
   border-bottom:1px solid var(--bord);padding:9px 16px;display:flex;gap:10px 14px;
   align-items:center;flex-wrap:wrap}
+/* Le chemin du retour. La page est servie comme une destination parmi d'autres : sans lui,
+   revenir a la liste des sessions demandait le bouton « precedent » du navigateur — qui
+   n'existe pas quand la page tourne en plein ecran sur un telephone. */
+#retour{display:none;align-items:center;justify-content:center;width:30px;height:30px;
+  border:1px solid var(--bord);border-radius:9px;color:var(--faible);text-decoration:none;
+  font-size:16px;line-height:1;flex:none}
+#retour[href]{display:inline-flex}
+#retour:hover{border-color:#4b5563;color:var(--texte)}
 /* Une zone ne se coupe pas en deux : ses elements se replient ensemble ou pas du tout. */
 .zone{display:inline-flex;gap:8px;align-items:center;flex-wrap:nowrap}
 .zone-direct{margin-left:auto}
@@ -830,6 +838,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     background: #0e1116; backdrop-filter: none; -webkit-backdrop-filter: none; }
   header h1 { font-size: 15px; gap: 6px; }
   header h1 .marque { width: 19px; height: 19px; }
+  #retour { width: 40px; height: 40px; font-size: 18px; }
   #etat { order: 1; font-size: 12px; }
   .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
@@ -929,6 +938,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 }
 </style></head><body>
 <header>
+  <!--RETOUR-->
   <h1>
     <svg class="marque" viewBox="0 0 32 32" aria-hidden="true">
       <path d="M15.13 11.89Q15.38 7.50 16.00 2.20Q16.62 7.50 16.87 11.89Z M17.30 12.01Q19.12 9.54 21.40 6.65Q20.03 10.07 18.81 12.88Z M19.12 13.19Q23.05 11.21 27.95 9.10Q23.67 12.29 19.99 14.70Z M20.11 15.13Q23.15 15.47 26.80 16.00Q23.15 16.53 20.11 16.87Z M19.99 17.30Q23.67 19.71 27.95 22.90Q23.05 20.79 19.12 18.81Z M18.81 19.12Q20.03 21.93 21.40 25.35Q19.12 22.46 17.30 19.99Z M16.87 20.11Q16.62 24.50 16.00 29.80Q15.38 24.50 15.13 20.11Z M14.70 19.99Q12.88 22.46 10.60 25.35Q11.97 21.93 13.19 19.12Z M12.88 18.81Q8.95 20.79 4.05 22.90Q8.33 19.71 12.01 17.30Z M11.89 16.87Q8.85 16.53 5.20 16.00Q8.85 15.47 11.89 15.13Z M12.01 14.70Q8.33 12.29 4.05 9.10Q8.95 11.21 12.88 13.19Z M13.19 12.88Q11.97 10.07 10.60 6.65Q12.88 9.54 14.70 12.01Z"/>
@@ -2909,3 +2919,13 @@ document.getElementById("bas").onclick = () => {
 };
 </script></body></html>
 """
+
+# Le lien de retour n'existe que si quelqu'un a dit ou retourner. Lancee a la main dans un
+# terminal, la page n'a pas de « liste des sessions » ou revenir ; servie par le tableau de
+# bord de la maison, elle en a une, et c'est lui qui la nomme.
+_RETOUR = os.environ.get("VOIX_UI_RETOUR", "").strip()
+if _RETOUR:
+    _ECHAPPE = _RETOUR.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+    PAGE = PAGE.replace("<!--RETOUR-->",
+                        f'<a id="retour" href="{_ECHAPPE}" '
+                        f'title="revenir a la liste des sessions">&#8592;</a>')
