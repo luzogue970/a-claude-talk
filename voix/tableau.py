@@ -209,11 +209,20 @@ class Tableau:
                 continue
         valeurs = (etat.get("config") or {}).get("valeurs") or {}
         session = etat.get("session") or {}
-        # Le dernier signe de vie : l'evenement le plus recent, d'ou qu'il vienne. C'est ce
-        # qui distingue « a fini » de « ne repond plus ».
-        dernier = self.histoire[-1].get("t") or 0.0 if self.histoire else 0.0
-        for e in etat.values():
-            dernier = max(dernier, e.get("t") or 0.0)
+        # Le dernier signe de vie — mais de VIE, pas d'entretien. La consommation des
+        # moteurs se republie toutes les vingt secondes, le quota a chaque tour : une
+        # session oubliee ouverte depuis ce matin paraissait donc active en permanence,
+        # et un superviseur qui ferme les sessions inactives ne fermait jamais rien.
+        BRUIT = {"consommation", "quota", "moteurs_stt", "moteur_actif", "pupitre",
+                 "conversations", "modeles", "efforts", "delais", "config", "log"}
+        dernier = 0.0
+        for evenement in reversed(self.histoire):
+            if evenement.get("genre") not in BRUIT:
+                dernier = evenement.get("t") or 0.0
+                break
+        for genre, e in etat.items():
+            if genre not in BRUIT:
+                dernier = max(dernier, e.get("t") or 0.0)
         return web.json_response({
             "projet": valeurs.get("projet", ""),
             "port": self.port,
@@ -348,6 +357,12 @@ PAGE = r"""<!doctype html>
      au moment précis où il devait montrer quelque chose. Une variable CSS absente ne lève
      rien : elle rend la valeur initiale, et pour une couleur de fond c'est « invisible ». */
   --accent:#4f9dde;
+  /* La hauteur de la barre de saisie, declaree UNE fois. Trois elements reservent de la
+     place au-dessus d'elle — le bas du flux, le bouton « suivre », la pile de notes — et
+     chacun portait sa propre constante. Quand la barre est passee a deux lignes, les trois
+     se sont retrouvees fausses en meme temps, et « suivre » a fini derriere la barre.
+     14 haut + 52 (le champ) + 8 (l'interligne) + 48 (les boutons) + 20 bas = 142. */
+  --barre:142px;
   /* « ça attend ta relecture » : la note contre la barre quand une dictée est retenue.
      L'ambre plutôt que le rouge — rien n'est cassé, quelque chose demande un geste. */
   --retenu:#d8a657;
@@ -684,7 +699,7 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   border:1px solid var(--bord);border-radius:999px;padding:2px 12px;font-size:11.5px;
   cursor:pointer;font-family:inherit}
 .famille .tout-rien button:hover{border-color:#4b5563;color:var(--texte)}
-main{padding:14px 16px 118px;max-width:1100px;margin:0 auto}
+main{padding:14px 16px calc(var(--barre) + 30px);max-width:1100px;margin:0 auto}
 
 /* Écrire au lieu de parler. Utile quand le micro est coupé, quand le mot est trop
    technique pour être dicté proprement, ou quand quelqu'un dort à côté. */
@@ -696,9 +711,13 @@ body{overflow-x:hidden}
   background:linear-gradient(to top,#0e1116 62%,#0e1116e0);backdrop-filter:blur(10px);
   border-top:1px solid var(--bord);
   padding:14px 16px 20px;display:flex;justify-content:center}
-/* align-items:flex-end : quand le champ grandit, les boutons restent alignes sur sa
-   derniere ligne au lieu de flotter au milieu d'une grande boite. */
-#saisie-barre form{display:flex;gap:8px;width:100%;max-width:1100px;align-items:flex-end}
+/* Deux lignes, toujours : le champ occupe SA ligne, les boutons viennent dessous. Sur une
+   seule ligne, sept controles et un textarea se disputaient la largeur — le champ finissait
+   a une poignee de pixels, les libelles se chevauchaient, et c'est la zone ou l'on passe
+   tout son temps qui reculait. Separes, le champ garde toute la largeur quelle que soit la
+   taille de l'ecran, et les boutons gardent la leur. */
+#saisie-barre form{display:flex;flex-wrap:wrap;gap:8px 10px;width:100%;max-width:1100px;
+  align-items:center}
 
 /* Un textarea, pas un input : une longue dictee doit rester ENTIEREMENT visible. Sur une
    seule ligne, le texte defilait hors du champ et on ne voyait plus ce qu'on dictait.
@@ -709,7 +728,7 @@ body{overflow-x:hidden}
    Plus haute (52 px), plus grande en texte (14,5 px), et un fond légèrement détaché du reste
    pour qu'elle se trouve d'un coup d'œil. Elle grandit toujours avec le contenu et redescend
    quand on efface : plus visible, pas plus envahissante. */
-#saisie{flex:1;min-width:0;background:#161b22;color:var(--texte);
+#saisie{flex:1 0 100%;min-width:0;background:#161b22;color:var(--texte);
   border:1px solid #303845;border-radius:24px;padding:14px 18px;font:inherit;
   font-size:14.5px;line-height:1.55;outline:none;resize:none;
   display:block;height:52px;max-height:55vh;overflow-y:hidden;
@@ -777,6 +796,15 @@ body{overflow-x:hidden}
    le même genre de geste — « tais-toi » à côté de « ne m'écoute plus ». Il pulse doucement
    pour dire qu'une lecture est en cours ; sans ça, un carré immobile ne se distingue pas
    d'un bouton décoratif. */
+/* L'emoji appareil photo rendait un pave colore, different sur chaque plateforme et jamais
+   accorde au reste de la barre — tous les autres ronds sont des traits fins. Un dessin au
+   trait, de la meme epaisseur et de la meme couleur que les ondes du micro, prend sa place :
+   il change de teinte au survol comme n'importe quel bouton, ce que l'emoji ne savait pas
+   faire. */
+#joindre{color:#8b95a3}
+#joindre:hover{color:var(--texte)}
+#joindre svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .micro-rond.coupe-son{font-size:15px;color:var(--voix);border-color:#2f4a37}
 .micro-rond.coupe-son:hover{background:#1b2a20;border-color:var(--voix)}
 .micro-rond.coupe-son[hidden]{display:none}
@@ -793,14 +821,16 @@ body{overflow-x:hidden}
   .micro-rond.parle .ondes i:nth-child(4){height:18px}
   .micro-rond.parle .ondes i:nth-child(3){height:22px}
 }
-/* Au bout de combien de silence le message part. À côté de la barre, parce que c'est un
+/* Au bout de combien de silence le message part. Sous la barre, parce que c'est un
    réglage de la dictée, pas de la session. */
+/* La marge auto coupe la seconde ligne en deux : à gauche ce qui touche à la parole (micro,
+   couper la lecture, joindre), à droite ce qui décide du départ du message. Sans elle, les
+   six boutons formaient un bloc compact où « envoyer » se confondait avec « retenir ». */
+#depart{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
 #delai{background:var(--carte);color:var(--texte);border:1px solid var(--bord);
   border-radius:999px;padding:8px 10px;font:inherit;font-size:12.5px;cursor:pointer}
 #delai:hover{border-color:#4b5563}
 
-.bulle b{color:var(--texte)}
-.bulle 
 /* Le bascule dictée : envoyer tout seul, ou garder dans la barre pour corriger. */
 #retenir{background:transparent;border:1px solid var(--bord);border-radius:999px;
   padding:8px 14px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--faible);
@@ -924,7 +954,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 #travail::before{content:"⟳ ";display:inline-block;animation:tourne 1.1s linear infinite}
 #etat.vif{animation:pulse 1.4s ease-in-out infinite}
 
-#bas{position:fixed;bottom:62px;right:16px;background:var(--carte);border:1px solid var(--bord);
+#bas{position:fixed;bottom:calc(var(--barre) + 10px);right:16px;z-index:5;background:var(--carte);border:1px solid var(--bord);
   color:var(--faible);border-radius:999px;padding:6px 14px;font-size:12px;cursor:pointer;display:none;font-family:inherit}
 
 /* ── Telephone ─────────────────────────────────────────────────────────────
@@ -987,7 +1017,9 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      Mesure : la grille de bureau (62 | 92 | 14 | 1fr) laisse ~200 px au texte
      sur 390. Sur telephone : une ligne d en-tete compacte, puis le corps sur
      toute la largeur. */
-  #flux { padding: 8px 10px calc(150px + env(safe-area-inset-bottom)); }
+  /* 8 haut + 48 (le champ) + 8 + 46 (les boutons) + 8 bas = 118, plus la barre du systeme. */
+  :root { --barre: calc(118px + env(safe-area-inset-bottom)); }
+  #flux { padding: 8px 10px calc(var(--barre) + 24px); }
   .ev { grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 8px; padding: 9px 0; }
   .ev .t { grid-column: 1; text-align: left; font-size: 10.5px; }
   .ev .badge { grid-column: 2; font-size: 10.5px; }
@@ -1000,25 +1032,24 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   .lecture button { min-height: 32px; padding: 4px 12px; }
 
   /* --- Barre de saisie ---------------------------------------------------------
-     Mesure : le textarea faisait 34 px de large, les boutons fixes 332. Il prend
-     desormais la premiere ligne avec le micro et « envoyer » ; le reglage de
-     delai et « retenir » passent sur une seconde ligne, plus discrete. */
+     Le decoupage en deux lignes vaut maintenant a toutes les tailles : il ne reste ici
+     que les mesures propres au pouce — cibles a 44 px minimum, et un champ a 16 px sans
+     quoi iOS zoome dessus a la mise au point et desaxe toute la page. */
   #saisie-barre { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
-  #saisie-barre form { flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-  #micro-bas, #couper-lecture, #joindre { order: 1; width: 48px; height: 48px; flex: 0 0 auto; }
+  #micro-bas, #couper-lecture, #joindre { width: 44px; height: 44px; }
+  #saisie-barre form { gap: 8px; }
+  #depart { gap: 6px; }
   #saisie {
-    order: 2; flex: 1 1 200px; min-width: 160px;
-    font-size: 16px;   /* en dessous, iOS zoome sur le champ et desaxe la page */
+    font-size: 16px;
     padding: 12px 14px; height: 48px; max-height: 36vh; border-radius: 22px;
   }
-  #envoyer { order: 3; min-height: 48px; min-width: 48px; padding: 0 16px; font-size: 14px; flex: 0 0 auto; }
-  #delai, #retenir { order: 10; }
-  #delai { min-height: 40px; font-size: 12.5px; padding: 4px 26px 4px 12px; }
-  #retenir { min-height: 40px; padding: 5px 14px; font-size: 13px; }
+  #envoyer { min-height: 44px; padding: 0 14px; font-size: 14px; }
+  #delai { min-height: 44px; font-size: 12.5px; padding: 4px 24px 4px 10px; }
+  #retenir { min-height: 44px; padding: 5px 12px; font-size: 13px; }
 
   #pile-barre { left: 12px; right: 12px; }
   #cogitation, #note-barre, #en-attente { font-size: 12px; max-width: 100%; }
-  #bas { bottom: calc(140px + env(safe-area-inset-bottom)); }
+  #bas { bottom: calc(var(--barre) + 8px); }
 
   /* --- Panneaux flottants -------------------------------------------------------- */
   #choix-moteur, #choix-conv {
@@ -1029,6 +1060,16 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 }
 
 @media (max-width: 420px) {
+  /* Mesure a 360 px (iPhone SE, Android d'entree de gamme) : les ronds et le groupe de
+     depart faisaient 351 px pour 336 disponibles — onze pixels de trop, et « envoyer »
+     basculait seul sur une troisieme ligne. On les reprend sur les marges internes plutot
+     que sur la taille des cibles, qui reste au-dessus de 42 px. */
+  #micro-bas, #couper-lecture, #joindre { width: 42px; height: 42px; }
+  #saisie-barre form { gap: 8px 6px; }
+  #depart { gap: 5px; }
+  #delai { padding: 4px 20px 4px 9px; }
+  #retenir { padding: 5px 10px; }
+  #envoyer { padding: 0 12px; }
   header { padding-left: 10px; padding-right: 10px; }
   header h1 { font-size: 14px; }
   #flux { padding-left: 8px; padding-right: 8px; }
@@ -1038,7 +1079,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 @media (max-width: 900px) and (orientation: landscape) {
   header { padding-top: 5px; padding-bottom: 5px; }
   header #activite, header #pupitre { display: none; }
-  #flux { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+  #flux { padding-bottom: calc(var(--barre) + 16px); }
   #saisie { max-height: 28vh; }
 }
 </style></head><body>
@@ -1109,6 +1150,12 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <div id="jointes" hidden></div>
   </div>
   <form id="composer" autocomplete="off">
+    <!-- Le champ D'ABORD, parce qu'il se dessine en premier : il occupe seul la premiere
+         ligne de la barre. Le placer apres les boutons et le remonter en CSS aurait donne
+         une tabulation qui traverse trois ronds avant d'atteindre la zone qu'on regarde. -->
+    <textarea id="saisie" rows="1" class="une-ligne"
+              placeholder="écrire au lieu de parler — touche /"
+              aria-label="message à envoyer" maxlength="4000"></textarea>
     <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
          regard est quand on dicte : le texte s'y ecrit, et la relecture s'y fait. Devoir
          remonter en haut pour couper l'ecoute avant de corriger un mot casse le geste. Les
@@ -1127,15 +1174,21 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <!-- Joindre une image. Le bouton est a cote du micro parce qu'il repond au meme
          besoin : dire quelque chose qu'on ne veut pas taper. -->
     <label id="joindre" class="micro-rond" title="joindre une photo ou une capture">
-      &#128247;<input type="file" accept="image/*" multiple hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path
+        d="M3.75 8.75h2.9l1.4-2.5h7.9l1.4 2.5h2.9a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H3.75a1 1 0
+           0 1-1-1v-8.5a1 1 0 0 1 1-1Z"/><circle cx="12" cy="14" r="3.4"/></svg>
+      <input type="file" accept="image/*" multiple hidden>
     </label>
-    <textarea id="saisie" rows="1" class="une-ligne"
-              placeholder="écrire au lieu de parler — touche /"
-              aria-label="message à envoyer" maxlength="4000"></textarea>
-    <select id="delai" title="au bout de combien de silence le message part"></select>
-    <button id="retenir" type="button"
-            title="retenir la dictée dans la barre au lieu de l'envoyer (touche r)">retenir</button>
-    <button id="envoyer" type="submit" disabled>envoyer</button>
+    <!-- Les trois controles du DEPART tiennent ensemble : quand partir (le delai), si ca
+         part tout seul (retenir), et le faire partir maintenant (envoyer). Groupes, ils
+         restent cote a cote et cales a droite meme sur un ecran etroit — separes, « envoyer »
+         se retrouvait seul sur une troisieme ligne, a gauche, loin de ce qu'il declenche. -->
+    <div id="depart">
+      <select id="delai" title="au bout de combien de silence le message part"></select>
+      <button id="retenir" type="button"
+              title="retenir la dictée dans la barre au lieu de l'envoyer (touche r)">retenir</button>
+      <button id="envoyer" type="submit" disabled>envoyer</button>
+    </div>
   </form>
 </div>
 <script>

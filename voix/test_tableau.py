@@ -454,6 +454,25 @@ async def l_etat_se_lit_sans_page():
                 d2 = _json.loads(await r.text())
         dire(d2["travail"] is False, "la fin du travail se lit aussitot — c'est le signal attendu")
         dire(d2["inactif"] >= 0, f"et l'inactivite est mesuree ({d2['inactif']} s)")
+
+        # L'entretien ne fait pas une session active. La consommation des moteurs se
+        # republie toutes les vingt secondes : si elle comptait, une session oubliee
+        # ouverte paraitrait occupee pour toujours, et rien ne la fermerait jamais.
+        await asyncio.sleep(0.2)
+        t.publier("consommation", moteurs=[{"cle": "azure", "reste": 42}])
+        t.publier("quota", fenetres=[{"cle": "session", "pct": 3.0}])
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url + "/etat.json") as r:
+                d3 = _json.loads(await r.text())
+        dire(d3["inactif"] >= d2["inactif"],
+             f"la consommation et le quota ne rajeunissent pas la session "
+             f"({d2['inactif']} s -> {d3['inactif']} s)")
+        t.publier("toi", texte="une vraie phrase", h="12:00:00")
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url + "/etat.json") as r:
+                d4 = _json.loads(await r.text())
+        dire(d4["inactif"] < 0.2,
+             f"un vrai message, lui, la remet a zero ({d4['inactif']} s)")
     finally:
         await t.arreter()
 
