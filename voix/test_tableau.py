@@ -458,6 +458,61 @@ async def l_etat_se_lit_sans_page():
         await t.arreter()
 
 
+async def une_image_arrive_par_son_chemin():
+    """Montrer vaut mieux que decrire — encore faut-il que l'image se pose quelque part.
+
+    Une maquette griffonnee ou une erreur a l'ecran se decrivent mal au clavier, et la
+    description perd ce qu'on n'a pas pense a dire. L'image est ecrite sur la machine et
+    c'est son chemin qui part dans le message : Claude Code sait lire une image depuis un
+    chemin, et le flux d'evenements reste du texte.
+    """
+    print("\n=== une image jointe arrive par son chemin ===")
+    import base64
+    import json as _json
+    import os as _os
+    import tempfile
+    from pathlib import Path as _Path
+    from tableau import Tableau
+
+    PNG = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    dossier = tempfile.mkdtemp(prefix="claude-talk-images-")
+    _os.environ["VOIX_IMAGES"] = dossier
+    t = Tableau(port=7895, ouvrir=False)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            envoi = aiohttp.FormData()
+            envoi.add_field("image", PNG, filename="photo.png", content_type="image/png")
+            async with s.post(url + "/image", data=envoi) as r:
+                dire(r.status == 200, f"l'image est acceptee ({r.status})")
+                rep = _json.loads(await r.text())
+        chemin = _Path(rep.get("chemin", "/inexistant"))
+        dire(chemin.is_file() and chemin.read_bytes() == PNG, "elle est ecrite telle quelle")
+        dire(chemin.parent == _Path(dossier),
+             "hors de l'arborescence du projet : une photo n'a rien a faire dans un depot")
+
+        async with aiohttp.ClientSession() as s:
+            envoi = aiohttp.FormData()
+            envoi.add_field("image", b"#!/bin/sh\nrm -rf /", filename="x.sh",
+                            content_type="text/x-shellscript")
+            async with s.post(url + "/image", data=envoi) as r:
+                dire(r.status == 415, f"ce qui n'est pas une image est refuse ({r.status})")
+
+        async with aiohttp.ClientSession() as s:
+            envoi = aiohttp.FormData()
+            envoi.add_field("image", PNG, filename="../../../evasion.png",
+                            content_type="image/png")
+            async with s.post(url + "/image", data=envoi) as r:
+                rep2 = _json.loads(await r.text())
+        dire(_Path(rep2["chemin"]).parent == _Path(dossier),
+             "le nom vient de nous : un chemin relatif dans le nom d'origine n'ecrit pas ailleurs")
+        dire(len(list(_Path(dossier).iterdir())) == 2, "deux images, deux fichiers distincts")
+    finally:
+        _os.environ.pop("VOIX_IMAGES", None)
+        await t.arreter()
+
+
 def un_moteur_sans_direct_est_annonce():
     """Un moteur qui ne transcrit qu'a la fin doit le DIRE.
 
@@ -713,6 +768,7 @@ async def principal():
     le_plafond_suit_le_plancher()
     await l_etat_survit_a_l_eviction()
     await l_etat_se_lit_sans_page()
+    await une_image_arrive_par_son_chemin()
     un_moteur_sans_direct_est_annonce()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()

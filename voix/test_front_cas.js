@@ -1243,5 +1243,29 @@ titre('rejeu de l etat : les listes se remplissent quel que soit l ordre des num
   __n = Math.max(__n, base + 200);
 }
 
+// ---- images jointes ---------------------------------------------------------------------
+titre('images jointes');
+dire(messageAvecImages('regarde ce bug', ['/tmp/a.jpg'])
+       === 'regarde ce bug\n\nimages jointes :\n- /tmp/a.jpg',
+     'le chemin est ajoute au message, pas l image');
+dire(messageAvecImages('', ['/tmp/a.jpg', '/tmp/b.png']).startsWith('regarde cette image.'),
+     'une photo envoyee seule reste une phrase, pas une liste de chemins');
+dire(messageAvecImages('bonjour', []) === 'bonjour', 'sans image, le message est intact');
+
+// Ce qui part reellement : une piece prete, un message, et ce que la socket recoit.
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+jointes.length = 0;
+jointes.push({ chemin: '/home/x/.cache/claude-talk/images/maquette.png', url: 'blob:fantome' });
+majJointes();
+champ.value = 'voici la maquette';
+composer.onsubmit({ preventDefault() {} });
+const envoiImage = envoyes.find(o => o.cmd === 'texte');
+dire(!!envoiImage && envoiImage.texte.includes('/maquette.png'),
+     'le message envoye porte le chemin de l image');
+dire(!!envoiImage && !envoiImage.texte.includes('blob:'),
+     'et jamais l adresse locale de la vignette, qui ne veut rien dire sur la machine');
+dire(jointes.length === 0, 'les pieces sont retirees apres l envoi');
+dire(imagesPretes === 0 && btnEnvoyer.disabled, 'et le bouton retombe au repos');
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);
