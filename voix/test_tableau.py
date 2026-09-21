@@ -101,6 +101,73 @@ async def une_commande_qui_leve_ne_tue_pas_la_socket():
         await t.arreter()
 
 
+async def une_commande_avant_l_agent_attend():
+    """Le premier message d'une session ne doit pas disparaitre.
+
+    Reproduit sur la machine : le serveur du tableau repond 3,6 s apres le lancement, la
+    session de l'agent est prete une seconde plus tard, et le gestionnaire de commandes
+    n'est branche qu'a ce moment. Un message tape entre les deux n'avait personne pour le
+    recevoir — ni echo, ni erreur, ni trace. Et la page s'ouvre precisement dans cette
+    fenetre, puisqu'on l'ouvre des que le serveur repond.
+    """
+    print("\n=== une commande arrivee avant l'agent attend, elle n'est pas jetee ===")
+    recues = []
+
+    async def commande(nom, donnees):
+        recues.append((nom, donnees.get("texte")))
+
+    t = Tableau(port=7896, ouvrir=False)            # SANS gestionnaire : l'agent demarre encore
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url + "/etat.json") as r:
+                d = json.loads(await r.text())
+            dire(d["pret"] is False, "tant que l'agent n'a pas branche ses commandes, le tableau ne se dit pas pret")
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                await ws.receive()  # _histoire
+                await ws.send_str(json.dumps({"cmd": "texte", "texte": "premier message, tape trop tot"}))
+                await asyncio.sleep(0.25)
+                dire(recues == [], "rien n'est execute avant que l'agent soit la")
+                async with s.get(url + "/etat.json") as r:
+                    d = json.loads(await r.text())
+                dire(d["en_attente"] == 1, "mais la commande est gardee, pas jetee")
+                t.on_commande = commande
+                await asyncio.sleep(0.25)
+                dire(recues == [("texte", "premier message, tape trop tot")],
+                     f"et elle est executee des que l'agent arrive : {recues}")
+                async with s.get(url + "/etat.json") as r:
+                    d = json.loads(await r.text())
+                dire(d["pret"] is True and d["en_attente"] == 0, "le tableau se dit pret, plus rien n'attend")
+                dire(not ws.closed, "la socket n'a pas bouge")
+    finally:
+        await t.arreter()
+
+
+async def un_message_en_echec_est_nomme():
+    """Quand la commande « texte » echoue, l'erreur porte le message : la page le rend."""
+    print("\n=== un message en echec est nomme dans l'erreur ===")
+
+    async def commande(nom, donnees):
+        raise RuntimeError("no activity context found, the agent is not running")
+
+    t = Tableau(port=7897, ouvrir=False, on_commande=commande)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                await ws.receive()
+                await ws.send_str(json.dumps({"cmd": "texte", "texte": "deploie en prod"}))
+                await asyncio.sleep(0.25)
+        erreurs = [e for e in t.histoire if e["genre"] == "erreur"]
+        dire(bool(erreurs), "l'echec est publie")
+        if erreurs:
+            dire(erreurs[0].get("commande") == "texte", "il nomme la commande")
+            dire(erreurs[0].get("message") == "deploie en prod",
+                 f"et porte le message, pour qu'on n'ait pas a le retaper : {erreurs[0].get('message')!r}")
+    finally:
+        await t.arreter()
+
+
 def couper_le_micro_ne_depend_plus_de_l_activite():
     print("\n=== couper le micro hors activite ===")
 
@@ -780,6 +847,8 @@ def le_rejeu_ne_garde_que_ce_qui_se_relit():
 async def principal():
     logging.disable(logging.CRITICAL)  # le traceback attendu n'a pas a polluer la sortie
     await une_commande_qui_leve_ne_tue_pas_la_socket()
+    await une_commande_avant_l_agent_attend()
+    await un_message_en_echec_est_nomme()
     couper_le_micro_ne_depend_plus_de_l_activite()
     await une_dictee_retenue_ne_sort_pas_dans_le_flux()
     await la_retenue_d_un_tour_ne_vaut_que_pour_lui()
