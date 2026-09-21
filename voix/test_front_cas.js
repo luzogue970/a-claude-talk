@@ -334,45 +334,21 @@ soumis = false;
 champ._declenche('keydown', { key: 'Enter', shiftKey: true, preventDefault: () => {} });
 dire(!soumis, 'Maj+Entree passe a la ligne sans envoyer');
 
-// ---- l explication de « retenir » -------------------------------------------------------
-titre('info-bulle de retenir');
+// ---- « retenir » -----------------------------------------------------------------------
+titre('retenir');
 socket = new WebSocket(); socket.readyState = 1;
 envoyes.length = 0; enAttente = []; retenir = false; majRetenir();
 
-dire(__html.includes('id="retenir-aide" class="bulle" hidden'),
-     'le balisage porte bien l attribut hidden : cachee au chargement');
-bulle.hidden = true;   // ce que l attribut produit dans un vrai navigateur
+dire(!/id="retenir-info"/.test(__html), 'le « i » a quitte le balisage');
+dire(!/id="retenir-aide"/.test(__html), 'son info-bulle aussi');
+dire(!/class="info"|\.info\{|\.bulle\{/.test(__html), 'et le style qui les habillait');
 
-btnInfo._declenche('mouseenter', {});
-dire(bulle.hidden === false, 'au survol : elle apparait');
-dire(btnInfo.classList.contains('ouvert'), 'et le « i » se marque ouvert');
-btnInfo._declenche('mouseleave', {});
-dire(bulle.hidden === true, 'a la sortie : elle disparait');
-
-// LE point : lire l explication ne doit PAS basculer le reglage
+// Ce qui compte reste : la bascule, et l ordre qui part au serveur.
 const avantRetenir = retenir;
-let stoppe = false;
-btnInfo._declenche('click', { stopPropagation: () => { stoppe = true; } });
-dire(retenir === avantRetenir, 'cliquer le « i » ne bascule pas « retenir »');
-dire(envoyes.length === 0, 'et n envoie aucune commande au serveur');
-dire(stoppe, 'le clic est stoppe, sinon le gestionnaire global refermerait aussitot');
-dire(bulle.hidden === false, 'au clic : la bulle reste epinglee');
-btnInfo._declenche('mouseleave', {});
-dire(bulle.hidden === false, 'epinglee, elle survit a la sortie du curseur');
-
-// et la bascule, elle, fonctionne toujours
 btnRetenir.onclick();
-dire(retenir === !avantRetenir, 'le bouton « retenir » bascule bien, lui');
+dire(retenir === !avantRetenir, 'le bouton « retenir » bascule le reglage');
 dire(envoyes.some(o => o.cmd === 'retenir'), 'et la commande part au serveur');
 btnRetenir.onclick();
-
-// le contenu doit expliquer, pas seulement nommer
-const aide = /<div id="retenir-aide"[\s\S]*?<\/div>/.exec(__html);
-const mots = aide ? aide[0].replace(/<[^>]+>/g, ' ').trim().split(/\s+/).length : 0;
-dire(mots > 40, 'la bulle explique vraiment : ' + mots + ' mots');
-dire(/coupe le micro/.test(__html), 'elle precise que les ordres immediats passent quand meme');
-dire(/rattrape un[\s\S]{0,12}seul message/.test(__html),
-     'et renvoie vers le bouton du decompte');
 
 // ---- cycle de vie de la dictee ----------------------------------------------------------
 // Deux bugs reproduits avant correction, et ce sont les cas les plus couteux du systeme :
