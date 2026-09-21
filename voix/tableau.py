@@ -13,6 +13,7 @@ WebSocket carrying a JSON event stream. No build step, no CDN, nothing leaves th
 import asyncio
 import json
 import logging
+import os
 import time
 import webbrowser
 from collections import deque
@@ -202,7 +203,7 @@ class Tableau:
         demande = self.port
         for essai in range(demande, demande + 10):
             try:
-                await web.TCPSite(self._runner, "127.0.0.1", essai).start()
+                await web.TCPSite(self._runner, os.environ.get("VOIX_UI_HOTE", "127.0.0.1"), essai).start()
                 self.port = essai
                 break
             except OSError:
@@ -2692,7 +2693,11 @@ function brancher() {
   if (socket && socket.readyState <= 1) {
     try { socket.onclose = null; socket.close(); } catch (_) {}
   }
-  const ws = new WebSocket(`ws://${location.host}/flux`);
+  // L'URL se construit a partir du chemin de la page, pas en absolu : servie derriere un
+  // proxy (« /talk/ »), un « /flux » absolu viserait le mauvais serveur. Et wss:// suit
+  // automatiquement si la page est servie en https.
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+    + location.host + (location.pathname || "").replace(/\/$/, "") + "/flux");
   socket = ws;
   // Le bouton suit l'état réel de la liaison : proposer « envoyer » sur une socket morte
   // ferait disparaître le message sans rien dire.
