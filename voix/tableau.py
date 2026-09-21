@@ -626,12 +626,19 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
    la parole en cours — mais la barre se vidait aussitôt et aucune ligne n'apparaissait avant
    plusieurs secondes : le texte semblait s'être évaporé. Le montrer en grisé dit les deux
    choses qui manquaient, qu'il existe encore et pourquoi il ne part pas tout de suite. */
-#en-attente{align-self:stretch;
+#en-attente,#en-vol{align-self:stretch;
   display:flex;gap:9px;align-items:flex-start;background:var(--carte);
   border:1px solid var(--bord);border-left:2px solid var(--voix);border-radius:10px;
   padding:9px 13px;font-size:12.5px;color:var(--faible);max-width:1100px}
-#en-attente[hidden]{display:none}
-#en-attente .dit{color:#9aa4b0;flex:1;min-width:0;
+#en-attente[hidden],#en-vol[hidden]{display:none}
+#en-vol{flex-direction:column;gap:6px;border-left-color:var(--toi)}
+#en-vol .vol{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+#en-vol .vol .quoi{flex:none;color:var(--toi)}
+#en-vol .vol.tarde .quoi{color:var(--erreur)}
+#en-vol .vol button{background:transparent;color:var(--texte);border:1px solid var(--bord);
+  border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer;min-height:32px}
+#note-barre.collante{border-color:var(--erreur);color:#ffb3ad;cursor:pointer}
+#en-attente .dit,#en-vol .dit{color:#9aa4b0;flex:1;min-width:0;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 #en-attente .quoi{color:var(--voix);white-space:nowrap;flex:none}
 #cogitation .marque{color:var(--pensee)}
@@ -645,6 +652,7 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 /* Un point de la couleur de l'etat : on le lit avant d'avoir lu le mot. */
 #etat::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .e-listening{color:var(--toi);border-color:var(--toi)}
+.e-initializing{color:var(--faible);border-color:var(--bord)}
 .e-thinking{color:var(--pensee);border-color:var(--pensee)}
 .e-speaking{color:var(--voix);border-color:var(--voix)}
 #compteurs{display:flex;gap:8px;align-items:center;
@@ -1180,6 +1188,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
       <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
     </div>
     <div id="en-attente" hidden></div>
+    <div id="en-vol" hidden></div>
     <div id="note-barre" hidden></div>
     <div id="jointes" hidden></div>
   </div>
@@ -1719,7 +1728,7 @@ function ajouter(e) {
   }
   // --- ce qui clôt ce qui tournait -------------------------------------------------
   if (e.genre === "partiel") battre("stt");
-  if (e.genre === "toi") { clearTimeout(echeances.stt); resoudre("stt", "ok"); }
+  if (e.genre === "toi") { clearTimeout(echeances.stt); resoudre("stt", "ok"); accuser(e.texte); }
   if (e.genre === "resultat" && e.id) {
     resoudre("outil:" + e.id, e.echec ? "echec" : "ok",
              e.echec ? "l'outil a renvoyé une erreur" : "");
@@ -1745,6 +1754,7 @@ function ajouter(e) {
 // L'etat du micro appartient au serveur : le bouton demande, il n'agit pas. Sinon la page
 // pourrait afficher « coupe » alors que le flux audio tourne toujours.
 let socket = null, microActif = true, reconnexionPrevue = false;
+let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il en est ?
 
 // Sur telephone, la console du navigateur est inaccessible : une socket qui
 // refuse de s ouvrir donnait « connexion... » sans jamais dire pourquoi.
@@ -2052,16 +2062,63 @@ let tempsNote = null;
 // Suit l'état de la barre pour n'envoyer le signal qu'AU CHANGEMENT : une commande par frappe
 // de touche noierait le journal et la liaison.
 let barreVide = true;
-function noteBarre(texte) {
+function noteBarre(texte, collante = false) {
   const n = document.getElementById("note-barre");
   if (!n) return;
   if (tempsNote) { clearTimeout(tempsNote); tempsNote = null; }
-  if (!texte) { n.classList.remove("montre"); n.hidden = true; return; }
+  if (!texte) { n.classList.remove("montre", "collante"); n.hidden = true; return; }
   n.textContent = texte;
   n.hidden = false;
+  // Une erreur qui disparait toute seule au bout de douze secondes n'a pas ete lue si on
+  // avait le regard ailleurs. Collante, elle reste jusqu'a ce qu'on ecrive ou qu'on la touche.
+  n.classList.toggle("collante", collante);
+  n.onclick = () => noteBarre(null);
   requestAnimationFrame(() => n.classList.add("montre"));
-  tempsNote = setTimeout(() => noteBarre(null), 12000);
+  if (!collante) tempsNote = setTimeout(() => noteBarre(null), 12000);
 }
+
+// --- ce qui est parti mais pas encore pris en compte ---------------------------------------
+// Entre le clic et la ligne « toi » qui revient du serveur, le message n'existait nulle part
+// a l'ecran : la barre etait vide, le flux n'avait rien. Sur un lien lent, ou pendant que
+// l'agent finit de demarrer, ca dure des secondes — et on ne sait pas s'il est parti. On le
+// garde donc visible jusqu'a l'echo du serveur ; s'il echoue ou ne revient pas, on le rend.
+const enVol = [];   // { texte, quand }
+const ATTENTE_ACCUSE = 20000;
+
+function majEnVol() {
+  const z = document.getElementById("en-vol");
+  if (!z) return;
+  if (!enVol.length) { z.hidden = true; z.innerHTML = ""; return; }
+  const horsLigne = !socket || socket.readyState !== WebSocket.OPEN;
+  z.innerHTML = enVol.map((m, i) => {
+    const tarde = !horsLigne && Date.now() - m.quand > ATTENTE_ACCUSE;
+    const quoi = horsLigne ? "part à la reconnexion" : tarde ? "sans confirmation" : "envoi…";
+    return `<div class="vol${tarde ? " tarde" : ""}"><span class="quoi">${tarde ? "⚠" : "⏳"} ${quoi}</span>`
+      + `<span class="dit">${ech(m.texte)}</span>`
+      + (tarde ? `<button type="button" data-vol="${i}">remettre dans le champ</button>` : "")
+      + `</div>`;
+  }).join("");
+  z.hidden = false;
+  z.querySelectorAll("[data-vol]").forEach(b => { b.onclick = () => rendreMessage(Number(b.dataset.vol)); });
+}
+
+// Rendre un message a son auteur : dans le champ, devant ce qu'il a pu commencer a ecrire.
+function rendreMessage(i, raison) {
+  const [m] = enVol.splice(i, 1);
+  if (!m) return;
+  champ.value = champ.value.trim() ? m.texte + "\n" + champ.value : m.texte;
+  barreVide = false;
+  ajusterHauteur(); majEnvoyer(); majEnVol();
+  if (raison) noteBarre(raison, true);
+  champ.focus();
+}
+
+function accuser(texte) {
+  const i = enVol.findIndex(m => m.texte === texte);
+  if (i >= 0) { enVol.splice(i, 1); majEnVol(); }
+}
+// Le temps qui passe change ce qu'on affiche (« envoi… » puis « sans confirmation »).
+setInterval(() => { if (enVol.length) majEnVol(); }, 1000);
 
 function lancerCompte(min, max, fin) {
   if (fin) {
@@ -2264,6 +2321,8 @@ majRetenir();
 // valeur posée par le script ne le déclenche pas — donc ceci ne peut venir que de toi, et ce
 // que tu écris devient la nouvelle base de la dictée suivante.
 champ.oninput = () => {
+  // Une note collante (une erreur) a ete lue des qu'on se remet a ecrire.
+  if (document.getElementById("note-barre")?.classList.contains("collante")) noteBarre(null);
   // Taper reprend la main : ce que tu écris devient le brouillon, et la dictée en cours est
   // abandonnée. Sans ça, la transcription suivante écraserait ta correction.
   brouillon = null;
@@ -2513,6 +2572,8 @@ composer.onsubmit = ev => {
   // se met en veille, l'agent redémarre. C'est exactement là qu'on ne veut pas perdre ce
   // qu'on vient d'écrire.
   histoAjouter(texte);
+  enVol.push({ texte, quand: Date.now() });
+  majEnVol();
   const parti = envoyerCmd({ cmd: "texte", texte });
   // Une lecture est en cours : le message part mais ne sera traité qu'après. On le garde
   // visible en grisé plutôt que de laisser un vide de plusieurs secondes.
@@ -2561,6 +2622,15 @@ function recevoir(e, etat = false) {
         etatsRejoues.add(e.n);
       }
     } else if (dejaVu(e)) return;
+    if (e.genre === "erreur" && !enRejeu) {
+      // Le serveur nomme le message qui a echoue quand il le connait : on le rend, avec la
+      // raison. Une erreur sans rapport (un quota de transcription, par exemple) ne rend
+      // rien, mais se lit quand meme dans la barre — le flux, on ne le regarde pas toujours.
+      const i = e.commande === "texte"
+        ? (e.message ? enVol.findIndex(m => m.texte === e.message) : (enVol.length ? 0 : -1))
+        : -1;
+      if (i >= 0) rendreMessage(i, e.texte); else noteBarre(e.texte, true);
+    }
     if (e.genre === "modeles") { remplirModeles(e.liste || [], e.actuel); return; }
     if (e.genre === "efforts") { remplirEfforts(e.liste || [], e.actuel); return; }
     if (e.genre === "delais") {
@@ -2731,6 +2801,7 @@ function recevoir(e, etat = false) {
     }
     if (e.genre === "quota") { quota = e.fenetres || []; majCompteurs(); return; }
     if (e.genre === "etat") {
+      etatRecu = true; clearTimeout(attenteAgent);
       const el = document.getElementById("etat");
       el.textContent = ETATS[e.vers] || e.vers;
       // « vif » fait respirer la pastille tant que la session n'est pas au repos : un coup
@@ -3113,9 +3184,20 @@ function brancher() {
     // avant tout échange, la pastille restait sur « connexion… » alors que la
     // liaison était ouverte — le témoin mentait. Dès l'ouverture, on affiche « prêt » ;
     // le premier état réel le remplacera.
+    // La liaison est ouverte, mais l'agent n'est peut-être pas encore là : son serveur
+    // écoute plusieurs secondes avant que la session soit prête. Dire « prêt » ici était
+    // un mensonge — on l'a cru, et le premier message partait dans le vide. L'état réel
+    // arrive en rejeu dès qu'il existe ; d'ici là, on dit ce qu'on sait.
     const et = document.getElementById("etat");
-    if (et && ["connexion…", "reconnexion…", "déconnecté"].includes(et.textContent.trim())) {
-      et.textContent = "prêt"; et.className = "e-listening";
+    if (et && !etatRecu) {
+      et.textContent = "l'agent démarre…"; et.className = "e-initializing vif";
+      clearTimeout(attenteAgent);
+      attenteAgent = setTimeout(() => {
+        if (!etatRecu) {
+          et.textContent = "l'agent ne répond pas"; et.className = "e-listening";
+          noteBarre("l'agent n'a pas donné signe de vie en 30 s — voir son journal", true);
+        }
+      }, 30000);
     }
     majEnvoyer();
     champ.placeholder = "écrire au lieu de parler — touche /";
