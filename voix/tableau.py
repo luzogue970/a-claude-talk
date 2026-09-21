@@ -44,7 +44,12 @@ class Tableau:
         # Awaited coroutine (nom, donnees). The page is a control surface, not just a log:
         # cutting the microphone from there is the fastest stop button available, which
         # matters more now that nothing asks permission.
-        self.on_commande = on_commande
+        # Les commandes recues AVANT que l'agent branche son gestionnaire. Le serveur
+        # ecoute plusieurs secondes avant que la session soit prete, et la page — donc
+        # l'utilisateur — arrive dans cette fenetre : un message tape la etait jete sans
+        # un mot. On le garde, et on le rejoue des que le gestionnaire est la.
+        self._commandes_en_attente: list[tuple[str, dict]] = []
+        self._on_commande = on_commande
         self.histoire: deque = deque(maxlen=MEMOIRE)
         # Une file bornee par client, servie par un seul ecrivain. La version precedente
         # creait une tache asyncio PAR evenement et PAR client, sans jamais les attendre :
@@ -134,6 +139,37 @@ class Tableau:
         return h
 
     # --- serveur -------------------------------------------------------------
+    @property
+    def on_commande(self):
+        return self._on_commande
+
+    @on_commande.setter
+    def on_commande(self, gestionnaire):
+        self._on_commande = gestionnaire
+        if gestionnaire and self._commandes_en_attente:
+            asyncio.create_task(self._rejouer_commandes())
+
+    async def _rejouer_commandes(self):
+        file, self._commandes_en_attente = self._commandes_en_attente, []
+        for nom, ordre in file:
+            await self._executer(nom, ordre)
+
+    async def _executer(self, nom: str, ordre: dict):
+        # Chaque commande est isolee. Sans ce garde-fou, UNE exception dans UNE commande
+        # sortait de la boucle de lecture, passait par le finally qui retire le client, et
+        # tuait la WebSocket : la page affichait « deconnecte », la commande n'avait pas eu
+        # lieu, et il fallait recliquer une fois la reconnexion faite.
+        try:
+            await self._on_commande(nom, ordre)
+        except Exception:
+            log.exception("commande « %s » en echec", nom)
+            # Un message qui echoue est NOMME : la page peut alors le rendre a son auteur
+            # au lieu de le laisser retaper. Les autres commandes disent seulement laquelle.
+            supplement = {"message": ordre.get("texte")} if nom == "texte" and ordre.get("texte") else {}
+            self.publier("erreur", commande=nom,
+                         texte=f"la commande « {nom} » a echoue — details dans les logs",
+                         **supplement)
+
     async def _page(self, _req):
         return web.Response(text=PAGE, content_type="text/html")
 
@@ -230,6 +266,10 @@ class Tableau:
             "travail": bool((etat.get("travail") or {}).get("actif")),
             "micro": bool((etat.get("micro") or {}).get("actif")),
             "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
+            # « pret » : l'agent a branche ses commandes. Avant, la page repond mais un
+            # message n'a personne pour le recevoir — c'est ce qu'un lanceur doit attendre.
+            "pret": self._on_commande is not None,
+            "en_attente": len(self._commandes_en_attente),
             "depuis": round(time.monotonic() - self._t0, 1),
             "inactif": round(max(0.0, time.monotonic() - self._t0 - dernier), 1),
             "evenements": self._n,
@@ -267,25 +307,19 @@ class Tableau:
             async for message in ws:
                 if message.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
-                if message.type is WSMsgType.TEXT and self.on_commande:
+                if message.type is WSMsgType.TEXT:
                     try:
                         ordre = json.loads(message.data)
                     except (ValueError, TypeError):
                         continue
                     nom = ordre.pop("cmd", None)
-                    if nom:
-                        # Chaque commande est isolee. Sans ce garde-fou, UNE exception dans
-                        # UNE commande sortait de cette boucle, passait par le finally qui
-                        # retire le client, et tuait la WebSocket : la page affichait
-                        # « deconnecte », la commande n'avait pas eu lieu, et il fallait
-                        # recliquer une fois la reconnexion faite. Reproduit, puis corrige.
-                        try:
-                            await self.on_commande(nom, ordre)
-                        except Exception:
-                            log.exception("commande « %s » en echec", nom)
-                            self.publier("erreur",
-                                         texte=f"la commande « {nom} » a echoue — "
-                                               f"details dans les logs")
+                    if not nom:
+                        continue
+                    if not self._on_commande:
+                        # L'agent finit de demarrer : on garde la commande pour lui.
+                        self._commandes_en_attente.append((nom, ordre))
+                        continue
+                    await self._executer(nom, ordre)
         finally:
             ecrivain.cancel()
             self.clients.pop(ws, None)
