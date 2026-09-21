@@ -17,6 +17,7 @@ import os
 import time
 import webbrowser
 from collections import deque
+from pathlib import Path
 from datetime import datetime
 
 from aiohttp import WSMsgType, web
@@ -57,6 +58,7 @@ class Tableau:
         # ignorer ce qu'elle affiche deja. Sans ca, trois reconnexions donnaient trois copies
         # de la session — panneau de configuration compris.
         self._n = 0
+        self._images = 0
         # L'ETAT, garde a part du flux. Un etat n'est pas un evenement : « quels modeles
         # existent » reste vrai tant que personne ne le change, alors qu'« un outil a demarre »
         # appartient a un instant. Les melanger avait une consequence precise et mesuree : ces
@@ -134,6 +136,64 @@ class Tableau:
     # --- serveur -------------------------------------------------------------
     async def _page(self, _req):
         return web.Response(text=PAGE, content_type="text/html")
+
+    async def _image(self, requete):
+        """Recevoir une photo, et rendre son chemin.
+
+        Une maquette griffonnee, une erreur a l'ecran, un bout de partition : le decrire
+        au clavier prend plus de temps que de le montrer, et la description perd ce qu'on
+        n'a pas pense a dire. Le fichier est ecrit sur la machine, et c'est son CHEMIN qui
+        part dans le message — Claude Code sait lire une image depuis un chemin, et rien
+        ne transite en base64 dans le flux d'evenements.
+
+        Hors de l'arborescence du projet, volontairement : une photo prise depuis un
+        telephone n'a rien a faire dans un depot, et `git status` le dirait a chaque fois.
+        """
+        TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+                 "image/gif": ".gif", "image/heic": ".heic", "image/heif": ".heif"}
+        PLAFOND = 25 * 1024 * 1024   # une photo de telephone en fait trois ou quatre
+
+        if not (requete.content_type or "").startswith("multipart/"):
+            return web.json_response({"erreur": "envoi multipart attendu"}, status=400)
+        lecteur = await requete.multipart()
+        piece = await lecteur.next()
+        while piece is not None and piece.name != "image":
+            piece = await lecteur.next()
+        if piece is None:
+            return web.json_response({"erreur": "aucune image dans l'envoi"}, status=400)
+
+        mime = (piece.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if mime not in TYPES:
+            return web.json_response(
+                {"erreur": f"type refuse : {mime or 'inconnu'}"}, status=415)
+
+        dossier = Path(os.environ.get("VOIX_IMAGES")
+                       or Path.home() / ".cache" / "claude-talk" / "images")
+        dossier.mkdir(parents=True, exist_ok=True)
+        self._images += 1
+        # Le nom vient de nous, jamais du client : un « ../ » dans le nom d'origine
+        # ecrirait ou il veut, et deux photos prises a la meme seconde se marcheraient
+        # dessus sans le compteur.
+        chemin = dossier / (time.strftime("%Y%m%d-%H%M%S") + f"-{self._images:03d}{TYPES[mime]}")
+
+        octets = 0
+        with chemin.open("wb") as sortie:
+            while True:
+                bloc = await piece.read_chunk()
+                if not bloc:
+                    break
+                octets += len(bloc)
+                if octets > PLAFOND:
+                    sortie.close()
+                    chemin.unlink(missing_ok=True)
+                    return web.json_response(
+                        {"erreur": f"image trop lourde (plus de {PLAFOND // 1024 // 1024} Mo)"},
+                        status=413)
+                sortie.write(bloc)
+        if not octets:
+            chemin.unlink(missing_ok=True)
+            return web.json_response({"erreur": "image vide"}, status=400)
+        return web.json_response({"chemin": str(chemin), "octets": octets})
 
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
@@ -227,6 +287,7 @@ class Tableau:
         app.router.add_get("/", self._page)
         app.router.add_get("/flux", self._flux)
         app.router.add_get("/etat.json", self._etat)
+        app.router.add_post("/image", self._image)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
@@ -318,6 +379,18 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 /* Le chemin du retour. La page est servie comme une destination parmi d'autres : sans lui,
    revenir a la liste des sessions demandait le bouton « precedent » du navigateur — qui
    n'existe pas quand la page tourne en plein ecran sur un telephone. */
+#joindre{cursor:pointer;font-size:17px}
+#jointes{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+#jointes[hidden]{display:none}
+#jointes .jointe{position:relative;width:52px;height:52px;border-radius:9px;overflow:hidden;
+  border:1px solid var(--bord);background:var(--carte)}
+#jointes .jointe img{width:100%;height:100%;object-fit:cover;display:block}
+#jointes .jointe.envoi{opacity:.45}
+#jointes .jointe button{position:absolute;top:1px;right:1px;width:18px;height:18px;padding:0;
+  border:0;border-radius:50%;background:#000000b0;color:#fff;font-size:11px;line-height:18px;
+  cursor:pointer}
+#jointes .rate{border-color:var(--erreur);color:var(--erreur);font-size:9.5px;padding:3px;
+  width:auto;max-width:150px;height:auto;line-height:1.3}
 #retour{display:none;align-items:center;justify-content:center;width:30px;height:30px;
   border:1px solid var(--bord);border-radius:9px;color:var(--faible);text-decoration:none;
   font-size:16px;line-height:1;flex:none}
@@ -932,7 +1005,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      delai et « retenir » passent sur une seconde ligne, plus discrete. */
   #saisie-barre { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
   #saisie-barre form { flex-wrap: wrap; gap: 8px; align-items: flex-end; }
-  #micro-bas, #couper-lecture { order: 1; width: 48px; height: 48px; flex: 0 0 auto; }
+  #micro-bas, #couper-lecture, #joindre { order: 1; width: 48px; height: 48px; flex: 0 0 auto; }
   #saisie {
     order: 2; flex: 1 1 200px; min-width: 160px;
     font-size: 16px;   /* en dessous, iOS zoome sur le champ et desaxe la page */
@@ -1033,6 +1106,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     </div>
     <div id="en-attente" hidden></div>
     <div id="note-barre" hidden></div>
+    <div id="jointes" hidden></div>
   </div>
   <form id="composer" autocomplete="off">
     <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
@@ -1050,6 +1124,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          permanence occuperait la place sans jamais servir. -->
     <button id="couper-lecture" type="button" class="micro-rond coupe-son" hidden
             title="couper la lecture en cours (ou dis « chut »)">⏹</button>
+    <!-- Joindre une image. Le bouton est a cote du micro parce qu'il repond au meme
+         besoin : dire quelque chose qu'on ne veut pas taper. -->
+    <label id="joindre" class="micro-rond" title="joindre une photo ou une capture">
+      &#128247;<input type="file" accept="image/*" multiple hidden>
+    </label>
     <textarea id="saisie" rows="1" class="une-ligne"
               placeholder="écrire au lieu de parler — touche /"
               aria-label="message à envoyer" maxlength="4000"></textarea>
@@ -1951,12 +2030,14 @@ const champ = document.getElementById("saisie");
 const btnEnvoyer = document.getElementById("envoyer");
 const composer = document.getElementById("composer");
 
+// Combien d'images sont pretes a partir. Tenu a jour par majJointes(), plus bas.
+let imagesPretes = 0;
 function majEnvoyer() {
   // Le bouton suit le CONTENU du champ, pas l'état de la liaison. Il en dépendait, et Entrée
   // non : deux chemins pour la même intention, avec deux comportements différents — le clavier
   // mettait en file, le bouton refusait. Un bouton grisé alors que la touche marche est un
   // mensonge sur ce qui est possible.
-  btnEnvoyer.disabled = champ.value.trim().length === 0;
+  btnEnvoyer.disabled = champ.value.trim().length === 0 && imagesPretes === 0;
   // L'attente se voit, sans empêcher le geste : le message sera mis en file.
   const horsLigne = !socket || socket.readyState !== WebSocket.OPEN;
   btnEnvoyer.classList.toggle("attente", horsLigne && !btnEnvoyer.disabled);
@@ -2272,10 +2353,70 @@ champ.addEventListener("keydown", ev => {
   champ.blur();
 });
 
+// --- images jointes ----------------------------------------------------------------------
+// Ce qui part n'est pas l'image mais son CHEMIN sur la machine : Claude Code sait lire une
+// image a partir d'un chemin, et le flux d'evenements reste du texte.
+const jointes = [];   // { chemin, url } — l'url ne sert qu'a la vignette locale
+const zoneJointes = document.getElementById("jointes");
+const champFichier = document.querySelector("#joindre input");
+
+function messageAvecImages(texte, chemins) {
+  if (!chemins.length) return texte;
+  // Sans phrase, le message serait une liste de chemins sans verbe : on en met une, parce
+  // qu'une photo envoyee seule veut presque toujours dire « regarde ca ».
+  return (texte || "regarde cette image.")
+    + "\n\nimages jointes :\n" + chemins.map(c => "- " + c).join("\n");
+}
+
+function majJointes() {
+  imagesPretes = jointes.filter(j => j.chemin).length;
+  zoneJointes.hidden = jointes.length === 0;
+  zoneJointes.innerHTML = jointes.map((j, i) => j.rate
+    ? `<div class="jointe rate">${ech(j.rate)}</div>`
+    : `<div class="jointe${j.chemin ? "" : " envoi"}"><img src="${j.url}" alt="">`
+      + `<button type="button" data-jointe="${i}" title="retirer">&#10005;</button></div>`).join("");
+  zoneJointes.querySelectorAll("[data-jointe]").forEach(b => {
+    b.onclick = () => { jointes.splice(Number(b.dataset.jointe), 1); majJointes(); majEnvoyer(); };
+  });
+  majEnvoyer();
+}
+
+async function joindre(fichier) {
+  const entree = { url: URL.createObjectURL(fichier), chemin: null, rate: null };
+  jointes.push(entree);
+  majJointes();
+  try {
+    const corps = new FormData();
+    corps.append("image", fichier, fichier.name || "photo.jpg");
+    // Relatif au chemin de la page : servie derriere un proxy, une adresse absolue
+    // viserait la racine du proxy — le meme piege que pour le WebSocket.
+    const r = await fetch(location.pathname.replace(/\/$/, "") + "/image",
+                          { method: "POST", body: corps });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.chemin) throw new Error(d.erreur || `envoi refuse (${r.status})`);
+    entree.chemin = d.chemin;
+  } catch (e) {
+    entree.rate = "image non envoyee — " + (e.message || e);
+  }
+  majJointes();
+}
+
+champFichier.onchange = () => {
+  for (const f of champFichier.files) joindre(f);
+  champFichier.value = "";   // sans ca, choisir deux fois la meme photo ne declenche rien
+};
+
 composer.onsubmit = ev => {
   ev.preventDefault();
-  const texte = champ.value.trim();
+  const prets = jointes.filter(j => j.chemin).map(j => j.chemin);
+  const texte = messageAvecImages(champ.value.trim(), prets);
   if (!texte) return;
+  // Une image encore en cours d'envoi partirait sans son chemin : on attend le tour suivant
+  // plutot que d'envoyer un message qui parle d'une piece absente.
+  if (jointes.some(j => !j.chemin && !j.rate)) {
+    noteBarre("une image finit de partir…");
+    return;
+  }
   // Plus de test sur l'état de la liaison, et c'était un vrai défaut : la fonction sortait
   // AVANT d'appeler envoyerCmd, qui sait pourtant mettre en file et reconnecter. Liaison
   // coupée, on tapait un message, on faisait Entrée, et il ne se passait rien — sans un mot.
@@ -2296,6 +2437,8 @@ composer.onsubmit = ev => {
     // On le DIT plutôt que de laisser croire à un envoi : le message part à la reconnexion.
     noteBarre("hors ligne — le message part dès que la liaison revient");
   }
+  jointes.length = 0;
+  majJointes();
   champ.value = "";
   barreVide = true;
   majEnvoyer();
