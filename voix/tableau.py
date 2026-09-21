@@ -1053,6 +1053,28 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   </form>
 </div>
 <script>
+// Bandeau de diagnostic : une exception au chargement laissait une page muette, sans
+// rien dans le flux pour l'expliquer. Ici elle s'affiche en bas de l'écran, avec sa ligne.
+(function(){
+  function montrer(t){
+    var b=document.getElementById("diag-js");
+    if(!b){b=document.createElement("div");b.id="diag-js";
+      b.style.cssText="position:fixed;bottom:0;left:0;right:0;z-index:99;max-height:40vh;overflow:auto;"
+        +"padding:8px 12px;font:12px/1.4 ui-monospace,monospace;color:#ffb86b;background:#1a1408;"
+        +"border-top:1px solid #ffb86b66;white-space:pre-wrap;word-break:break-all";
+      var x=document.createElement("button");x.textContent="✕";
+      x.style.cssText="float:right;background:none;border:0;color:inherit;font-size:16px;cursor:pointer";
+      x.onclick=function(){b.remove()};b.appendChild(x);
+      document.body.appendChild(b);}
+    var l=document.createElement("div");l.textContent=t;b.appendChild(l);
+  }
+  addEventListener("error",function(e){
+    montrer("⚠ JS : "+(e.message||e)+(e.filename?" @"+e.lineno+":"+e.colno:""));
+  });
+  addEventListener("unhandledrejection",function(e){
+    montrer("⚠ promesse : "+(e.reason&&e.reason.message||e.reason));
+  });
+})();
 // --- les familles de lignes -------------------------------------------------------------
 // Dix-huit boutons alignes ne disent ni ce qu'ils montrent ni pourquoi on voudrait les
 // couper : il fallait les avoir ecrits pour s'en souvenir. Regroupes par famille, avec une
@@ -1544,6 +1566,46 @@ function ajouter(e) {
 // L'etat du micro appartient au serveur : le bouton demande, il n'agit pas. Sinon la page
 // pourrait afficher « coupe » alors que le flux audio tourne toujours.
 let socket = null, microActif = true, reconnexionPrevue = false;
+
+// Sur telephone, la console du navigateur est inaccessible : une socket qui
+// refuse de s ouvrir donnait « connexion... » sans jamais dire pourquoi.
+// On affiche l erreur dans la page, c est le seul endroit ou elle sera lue.
+function __diagBoite() {
+  let b = document.getElementById("diag-ws");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "diag-ws";
+    b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99;padding:8px 12px;"
+      + "font:12px/1.4 ui-monospace,monospace;color:#f85149;background:#1a0f10;"
+      + "border-bottom:1px solid #f8514966;white-space:pre-wrap;word-break:break-all";
+    document.body.prepend(b);
+  }
+  return b;
+}
+function __diagSocket(ws) {
+  // Le talon des tests donne une socket sans addEventListener : rien a surveiller.
+  if (!ws || typeof ws.addEventListener !== "function") return;
+  const t0 = Date.now();
+  const attente = setTimeout(() => {
+    if (ws.readyState === WebSocket.CONNECTING) {
+      __diagBoite().textContent = "⚠ WebSocket bloqué en CONNECTING depuis 6 s\n" + ws.url;
+    }
+  }, 6000);
+  ws.addEventListener("open", () => {
+    clearTimeout(attente);
+    document.getElementById("diag-ws")?.remove();
+  });
+  ws.addEventListener("error", () => {
+    __diagBoite().textContent = "⚠ WebSocket : erreur\n" + ws.url + "\npage : " + location.href;
+  });
+  ws.addEventListener("close", (e) => {
+    clearTimeout(attente);
+    if (e.code === 1000 || e.code === 1001) return;
+    __diagBoite().textContent = "⚠ WebSocket fermé code=" + e.code
+      + (e.reason ? " raison=" + e.reason : "")
+      + " après " + Math.round((Date.now() - t0) / 1000) + " s\n" + ws.url;
+  });
+}
 
 // --- aucun clic ne doit disparaitre -----------------------------------------------------
 // Le bug qu'on croyait cote serveur etait ici : `if (socket.readyState === OPEN) send(...)`
@@ -2819,6 +2881,7 @@ function brancher() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
     + location.host + (location.pathname || "").replace(/\/$/, "") + "/flux");
   socket = ws;
+  __diagSocket(ws);
   // Le bouton suit l'état réel de la liaison : proposer « envoyer » sur une socket morte
   // ferait disparaître le message sans rien dire.
   ws.onopen = () => {
