@@ -2887,6 +2887,14 @@ function brancher() {
   ws.onopen = () => {
     echecs = 0;
     reconnexionPrevue = false;
+    // Le serveur ne publie l'état qu'au premier changement d'état de l'agent :
+    // avant tout échange, la pastille restait sur « connexion… » alors que la
+    // liaison était ouverte — le témoin mentait. Dès l'ouverture, on affiche « prêt » ;
+    // le premier état réel le remplacera.
+    const et = document.getElementById("etat");
+    if (et && ["connexion…", "reconnexion…", "déconnecté"].includes(et.textContent.trim())) {
+      et.textContent = "prêt"; et.className = "e-listening";
+    }
     majEnvoyer();
     champ.placeholder = "écrire au lieu de parler — touche /";
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
