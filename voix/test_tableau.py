@@ -421,6 +421,43 @@ async def l_etat_survit_a_l_eviction():
         await t.arreter()
 
 
+async def l_etat_se_lit_sans_page():
+    """« Qui travaille encore ? » doit se lire sans ouvrir la page.
+
+    Le tableau de bord de la maison montre plusieurs sessions cote a cote. Sans ce point
+    d'entree il lui faudrait ouvrir un WebSocket par session — devenir un client de plus,
+    et recevoir tout l'historique de chacune — pour lire deux booleens.
+    """
+    print("\n=== l'etat se lit sans ouvrir la page ===")
+    import json as _json
+    from tableau import Tableau
+
+    t = Tableau(port=7894, ouvrir=False)
+    url = await t.demarrer()
+    try:
+        t.publier("config", valeurs={"projet": "/home/x/palier"})
+        t.publier("session", id="abc", titre="refonte des cartes")
+        t.publier("etat", vers="thinking")
+        t.publier("travail", actif=True)
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url + "/etat.json") as r:
+                dire(r.status == 200, f"la ressource repond ({r.status})")
+                d = _json.loads(await r.text())
+        dire(d["projet"] == "/home/x/palier", f"le projet est dit : {d['projet']}")
+        dire(d["travail"] is True, "un travail en cours est signale")
+        dire(d["etat"] == "thinking", "l'etat de l'agent aussi")
+        dire(d["session"]["titre"] == "refonte des cartes", "et le titre de la conversation")
+
+        t.publier("travail", actif=False)
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url + "/etat.json") as r:
+                d2 = _json.loads(await r.text())
+        dire(d2["travail"] is False, "la fin du travail se lit aussitot — c'est le signal attendu")
+        dire(d2["inactif"] >= 0, f"et l'inactivite est mesuree ({d2['inactif']} s)")
+    finally:
+        await t.arreter()
+
+
 def un_moteur_sans_direct_est_annonce():
     """Un moteur qui ne transcrit qu'a la fin doit le DIRE.
 
@@ -675,6 +712,7 @@ async def principal():
     await la_retenue_pendant_le_travail()
     le_plafond_suit_le_plancher()
     await l_etat_survit_a_l_eviction()
+    await l_etat_se_lit_sans_page()
     un_moteur_sans_direct_est_annonce()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()

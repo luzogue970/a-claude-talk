@@ -135,6 +135,37 @@ class Tableau:
     async def _page(self, _req):
         return web.Response(text=PAGE, content_type="text/html")
 
+    async def _etat(self, _req):
+        """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
+
+        Un superviseur qui montre plusieurs sessions cote a cote devait sinon ouvrir un
+        WebSocket par session, et recevoir tout leur historique, pour lire deux booleens.
+        """
+        etat = {}
+        for genre, charge in self.etat.items():
+            try:
+                etat[genre] = json.loads(charge)
+            except ValueError:
+                continue
+        valeurs = (etat.get("config") or {}).get("valeurs") or {}
+        session = etat.get("session") or {}
+        # Le dernier signe de vie : l'evenement le plus recent, d'ou qu'il vienne. C'est ce
+        # qui distingue « a fini » de « ne repond plus ».
+        dernier = self.histoire[-1].get("t") or 0.0 if self.histoire else 0.0
+        for e in etat.values():
+            dernier = max(dernier, e.get("t") or 0.0)
+        return web.json_response({
+            "projet": valeurs.get("projet", ""),
+            "port": self.port,
+            "etat": (etat.get("etat") or {}).get("vers", ""),
+            "travail": bool((etat.get("travail") or {}).get("actif")),
+            "micro": bool((etat.get("micro") or {}).get("actif")),
+            "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
+            "depuis": round(time.monotonic() - self._t0, 1),
+            "inactif": round(max(0.0, time.monotonic() - self._t0 - dernier), 1),
+            "evenements": self._n,
+        })
+
     async def _ecrivain(self, ws, file: asyncio.Queue):
         while True:
             charge = await file.get()
@@ -195,6 +226,7 @@ class Tableau:
         app = web.Application()
         app.router.add_get("/", self._page)
         app.router.add_get("/flux", self._flux)
+        app.router.add_get("/etat.json", self._etat)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
