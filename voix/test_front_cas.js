@@ -1225,5 +1225,47 @@ dire(envoyes.some(o => o.cmd === 'couper_lecture'),
 emettre({ genre: 'lecture', actif: false });
 dire(btnCouper.hidden, 'la lecture finie, le bouton se retire');
 
+// ---- rejeu de l etat a la connexion --------------------------------------------------------
+titre('rejeu de l etat : les listes se remplissent quel que soit l ordre des numeros');
+// Le bug, reproduit : le serveur rejoue l'etat dans l'ordre de son dictionnaire, donc le quota
+// (numero eleve, republie a chaque tour) arrive AVANT les modeles (numero bas, publies au
+// demarrage). La page prenait ces derniers pour du deja-vu — listes vides, historique muet,
+// sur toute page ouverte apres les premieres minutes. Un etat n'est pas un evenement : il ne
+// passe pas par le compteur monotone.
+{
+  const base = vuJusqua + 1000;
+  selModele.innerHTML = ''; selEffort.innerHTML = '';
+  const avant = flux.children.length;
+  recevoir({ genre: 'quota', n: base + 116, fenetres: [] }, true);
+  recevoir({ genre: 'modeles', n: base + 9, liste: [{ cle: 'opus', libelle: 'Opus 5' }], actuel: 'opus' }, true);
+  recevoir({ genre: 'efforts', n: base + 12, liste: [{ cle: 'xhigh', libelle: 'tres eleve' }], actuel: 'xhigh' }, true);
+  recevoir({ genre: 'config', n: base + 8, valeurs: { projet: '/x' }, h: '12:00:00' }, true);
+  dire(selModele.innerHTML.includes('Opus 5'),
+       'les modeles rejoues apres un quota plus recent remplissent bien la liste');
+  dire(selEffort.innerHTML.includes('tres eleve'), 'les efforts aussi');
+  const apresEtat = flux.children.length;
+  dire(apresEtat === avant + 1, 'la carte de configuration est posee, une fois');
+
+  // Puis l'historique, qui contient les MEMES evenements : rien en double, le reste s'affiche.
+  recevoir({ genre: '_histoire', evenements: [
+    { genre: 'config', n: base + 8, valeurs: { projet: '/x' }, h: '12:00:00' },
+    { genre: 'modeles', n: base + 9, liste: [{ cle: 'opus', libelle: 'Opus 5' }], actuel: 'opus', h: '12:00:00' },
+    { genre: 'toi', n: base + 10, texte: 'bonjour', h: '12:00:00' },
+    { genre: 'quota', n: base + 116, fenetres: [], h: '12:00:00' },
+  ] });
+  const ajoutees = flux.children.length - apresEtat;
+  dire(ajoutees === 1, 'l historique n ajoute que ce qui n a pas ete rejoue comme etat ('
+       + ajoutees + ' ligne ajoutee, 1 attendue)');
+  dire(vuJusqua >= base + 10, 'et le compteur avance avec l historique (' + vuJusqua + ')');
+
+  // Une reconnexion rejoue le meme etat : la carte ne se dedouble pas, la liste reste pleine.
+  const n2 = flux.children.length;
+  recevoir({ genre: 'config', n: base + 8, valeurs: { projet: '/x' }, h: '12:00:00' }, true);
+  recevoir({ genre: 'modeles', n: base + 9, liste: [{ cle: 'opus', libelle: 'Opus 5' }], actuel: 'opus' }, true);
+  dire(flux.children.length === n2, 'une reconnexion ne dedouble pas la carte de configuration');
+  dire(selModele.innerHTML.includes('Opus 5'), 'et la liste des modeles est toujours la');
+  __n = Math.max(__n, base + 200);
+}
+
 console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
 process.exit(ok ? 0 : 1);

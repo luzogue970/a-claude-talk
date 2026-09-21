@@ -1135,8 +1135,14 @@ let suivre = true, actions = 0, jetons = 0, quota = [];
 // là : le serveur numérote, la page ignore ce qui est déjà passé. Ça couvre le rejeu
 // d'historique à la reconnexion ET le cas où deux sockets seraient vivantes en même temps.
 let vuJusqua = 0;
+// Les états rejoués à la connexion, par numéro : l'historique qui suit les contient aussi et
+// ne doit pas les repasser. Seuls « config » et « session » ajoutent une ligne au flux ;
+// les autres états ne font que régler des panneaux, et se rejouent sans risque.
+const etatsRejoues = new Set();
+const ETATS_EN_LIGNE = new Set(["config", "session"]);
 function dejaVu(e) {
   if (typeof e.n !== "number") return false;   // événement d'une version sans numéro
+  if (etatsRejoues.has(e.n)) return true;
   if (e.n <= vuJusqua) return true;
   vuJusqua = e.n;
   return false;
@@ -2327,7 +2333,7 @@ composer.onsubmit = ev => {
 // ws.onmessage, pour deux raisons : le routage est la partie la plus facile a casser en
 // ajoutant un genre, et un harnais qui appelle `ajouter()` directement ne le traverse pas —
 // c'est ainsi qu'un apercu montrait des selecteurs vides en croyant montrer l'application.
-function recevoir(e) {
+function recevoir(e, etat = false) {
     if (e.genre === "_histoire") {
       // L'état du micro se relit sur TOUTE l'histoire, y compris la partie déjà affichée :
       // c'est une resynchronisation, pas un affichage.
@@ -2338,7 +2344,18 @@ function recevoir(e) {
       finally { enRejeu = false; }
       return;
     }
-    if (dejaVu(e)) return;
+    if (etat) {
+      // Un état rejoué à la connexion ne passe PAS par le compteur monotone. Le serveur
+      // renvoie l'état dans l'ordre de son dictionnaire, pas dans l'ordre des numéros : le
+      // quota (n° 116) arrivait avant les modèles (n° 9), pris alors pour du déjà-vu — comme
+      // les efforts, les délais, et tout l'historique derrière. Listes vides et page muette
+      // pour toute page ouverte après les premières minutes de session.
+      if (typeof e.n === "number") {
+        if (etatsRejoues.has(e.n)) return;
+        if (ETATS_EN_LIGNE.has(e.genre) && e.n <= vuJusqua) return;   // déjà dans le flux
+        etatsRejoues.add(e.n);
+      }
+    } else if (dejaVu(e)) return;
     if (e.genre === "modeles") { remplirModeles(e.liste || [], e.actuel); return; }
     if (e.genre === "efforts") { remplirEfforts(e.liste || [], e.actuel); return; }
     if (e.genre === "delais") {
@@ -2904,7 +2921,7 @@ function brancher() {
     const d = JSON.parse(m.data);
     // L'état arrive dans une enveloppe pour être distingué du flux, mais il traverse le même
     // routage : un second chemin aurait fini par diverger.
-    if (d.genre === "_etat") { recevoir(d.evenement); return; }
+    if (d.genre === "_etat") { recevoir(d.evenement, true); return; }
     recevoir(d);
   };
   ws.onclose = () => {
