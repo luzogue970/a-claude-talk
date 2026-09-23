@@ -164,8 +164,10 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `VOIX_WORKDIR` | `$PWD` | le projet sur lequel Claude Code travaille |
-| `VOIX_WORKER_MODEL` | `claude-opus-5` | le modèle qui fait le travail |
+| `VOIX_WORKER_MODEL` | `claude-opus-5` | le modèle qui fait le travail — Opus reste le défaut ; `fable`, `sonnet` et `haiku` se choisissent en cours de session, à la voix ou dans le menu du tableau |
 | `VOIX_WORKER_EFFORT` | `xhigh` | `low` \| `medium` \| `high` \| `xhigh` \| `max` — réglable en cours de session depuis le tableau |
+| `VOIX_MAX_TOURS` | vide | plafond d'allers-retours par tour. **Vide = aucune limite**, ce que fait le CLI par défaut |
+| `VOIX_MAX_DEPENSE` | vide | plafond de dépense par tour, en dollars. Vide = aucune limite |
 | `VOIX_SPEAKER_MODEL` | `claude-haiku-4-5` | le porte-parole |
 | `VOIX_LANGUAGE` | `fr-FR` | STT et TTS |
 | `VOIX_STT` | `auto` | `auto`, ou une liste ordonnée : `speechmatics,gladia,local` |
@@ -254,6 +256,91 @@ Ces pourcentages viennent de `/api/oauth/usage`, l'endpoint que le CLI utilise p
 d'échec l'affichage disparaît sans casser la session. À noter, sur un siège Team,
 `seven_day_opus` est `null` — il n'y a pas de fenêtre Opus séparée, la fenêtre hebdomadaire
 couvre tous les modèles. Elle s'affichera si le compte se met à la remonter.
+
+### Un tour qui s'arrête dit pourquoi
+
+Le message de résultat du SDK porte la raison de la fin d'un tour, et elle était jetée : on ne
+lisait que le coût, la durée et les jetons. Conséquence exacte — un tour coupé à la limite de
+tours, arrêté par une erreur d'API, ou dont la réponse a été tronquée à la limite de jetons
+rendait **la même ligne** qu'un tour terminé normalement. C'est ce qui donnait l'impression
+d'un travail « arrêté sans raison ».
+
+Le bilan d'un tour publie maintenant `fin`, `tours`, `stop` et les erreurs du CLI. Quand la
+fin n'est pas propre, la raison est **dite à voix haute** — en dur, après le débrief, sans
+passer par le porte-parole qui l'aurait reformulée ou écartée — et **affichée en ambre** sous
+la ligne du tour, le détail technique en infobulle. Le porte-parole, lui, est prévenu qu'il ne
+doit pas présenter le travail comme achevé.
+
+Les cinq fins possibles : `success`, `error_max_turns`, `error_max_budget_usd`,
+`error_max_structured_output_retries`, `error_during_execution`. Les deux plafonds sont
+**vides par défaut**, délibérément : sans eux le CLI ne borne rien, donc en fixer un ici
+n'ajouterait qu'une coupure là où il n'y en avait pas. Ils existent pour le cas inverse — un
+plafond choisi, annoncé quand il tombe, vaut mieux qu'un arrêt opaque.
+
+Côté modèle, le prompt système demande de **rendre la parole** quand un travail est long
+plutôt que de continuer en silence : la conversation est orale, quelqu'un écoute, et un
+silence de dix minutes ne se distingue pas d'une panne. Un tour qui rend la parole se relance
+d'un mot ; un tour qui tourne sans fin finit coupé, et c'est la coupure qui perd le contexte.
+
+### La liaison : une veille du téléphone n'est pas une panne
+
+Trois défauts vivaient ensemble ici, et se voyaient surtout sur mobile.
+
+**Revenir sur l'onglet.** Le système gèle la page et tue la socket. Au retour, la page
+découvrait la coupure, la comptait comme un échec, et affichait « déconnecté » — alors que le
+réseau n'avait jamais bronché. Une coupure subie en arrière-plan ne compte plus, et le retour
+rebranche **tout de suite** au lieu d'attendre le réveil d'une minuterie elle-même gelée.
+
+**La socket zombie.** Un réseau mobile qui bascule laisse une socket *ouverte* dont plus rien
+ne sort : aucune fermeture, donc aucune reconnexion, donc une page morte qui a l'air vivante.
+Le serveur envoie donc un **pouls toutes les 25 s** — sous les 30 s à partir desquelles un
+proxy coupe une liaison qu'il croit morte, et du trafic applicatif *visible*, pas seulement un
+ping de protocole. Passé 70 s sans rien, la page rebranche même si le navigateur n'a rien dit.
+
+**« déconnecté » tout court.** Ni pourquoi, ni depuis quand, ni si quelque chose est tenté.
+L'état porte maintenant la tentative en cours et son compte à rebours ; l'infobulle porte le
+code de fermeture traduit et ce que le serveur disait de lui-même en dernier (agent prêt ou
+non, tour en cours, âge, nombre d'événements, pages branchées). Les tentatives s'espacent de
+0,8 s à 20 s — réessayer toutes les 1,2 s hors couverture ne reconnecte rien et vide la
+batterie. Et à la fin d'une reprise, le serveur dit **sur quoi on retombe** : combien de
+lignes viennent d'être rejouées, et si un tour est en cours.
+
+**Ce qui tourne à l'écran correspond à ce qui tourne vraiment.** Trois indicateurs
+pouvaient rester allumés sur une page où plus rien ne se passait, et le troisième se
+déclenchait à **chaque** reconnexion — donc souvent, sur un téléphone.
+
+Le rejeu de l'historique renvoie les lignes telles qu'elles ont été publiées : une vieille
+ligne « voix » rallumait la pastille *parole*, et rien derrière ne l'éteignait — l'état de
+l'agent est envoyé **avant** l'historique, donc il était déjà passé quand la ligne le
+rallumait. Le bandeau de cogitation, qui ne regarde que le nombre d'actions en cours, se
+mettait alors à dérouler ses mots sur une session au repos. Le mot de fin de reprise porte
+maintenant l'état de l'agent : s'il ne travaille ni ne parle, rien ne peut être en cours, et
+tout ce que le rejeu a rallumé est éteint. S'il travaille vraiment, on n'y touche pas.
+L'indicateur *parole* n'avait par ailleurs **aucun** garde-fou, contrairement à la
+transcription et à la réflexion : il en a un.
+
+Pendant une coupure, enfin, la page cesse d'affirmer. Le compteur « travaille 14 min » se
+mesurait depuis l'horloge locale : il montait aussi sur un agent mort. Il se fige et le dit,
+le bandeau se referme — il ne sert qu'à montrer que la machine est vivante, ce qu'on ne sait
+justement plus — et le bouton « couper la lecture » disparaît au lieu de clignoter sur une
+page où plus personne ne parle.
+
+Le contraire existait aussi, et depuis plus longtemps : la pastille **« travaille 3 min »**
+n'est jamais apparue, sur aucun tour. Le code la révélait avec `style.display = ""`, ce qui ne
+montre rien — ça rend la main à la feuille de style, qui porte `display:none`. Le défaut se lit
+exactement comme son contraire, d'où sa longévité. Elle s'affiche maintenant, dans le rang des
+mesures : à sa vraie taille, la zone « ce qui se passe » passait sur un troisième rang, et
+l'en-tête volait trente-cinq pixels au flux pendant chaque tour.
+
+**Une socket ouverte ne prouve rien.** C'est le défaut le plus coûteux du lot : un système
+mobile tue la connexion sans prévenir le JavaScript, `readyState` reste à `OPEN`, `send()` ne
+lève rien — et le message part dans le vide. On croyait la page branchée, il fallait quitter
+la conversation et y revenir pour que quoi que ce soit reparte. Regarder l'état de la socket
+ne pouvait pas trouver ça : il ment. Au retour sur la page, on **pose donc la question** —
+une sonde `ping`, une réponse attendue en 2,5 s — et sans réponse on rebranche. Et comme le
+mot de fin de reprise arrive **après** le rejeu, un message encore en vol à cet instant n'a
+pas seulement perdu son accusé : il n'est jamais arrivé. Il est renvoyé, une seule fois, et
+on le dit.
 
 **Le sélecteur de modèle** dans l'en-tête change le modèle de travail. Depuis la page le
 choix est **durable** ; à la voix il est **temporaire** — « pour cette tâche » veut dire cette
@@ -910,7 +997,15 @@ sans revenir aux questions incessantes : `set -x VOIX_PERMISSION acceptEdits`.
 | `statut` | résume le journal, sans modèle | « t'en es où ? », « ça avance ? », « il reste combien » |
 | `repete` | redit le dernier débrief, sans le régénérer | « répète », « pardon ? », « j'ai pas compris » |
 | `quota` | dit les fenêtres à voix haute | « quota », « j'ai consommé combien de tokens », « où en est la fenêtre » |
-| `modele` | bascule de modèle **pour ce tour seulement** | « utilise un modèle plus rapide pour cette tâche », « passe en haiku », « reviens au modèle normal » |
+| `modele` | bascule de modèle **pour ce tour seulement** | « utilise un modèle plus rapide pour cette tâche », « passe en haiku », « passe sur fable », « reviens au modèle normal » |
+
+Les quatre modèles choisissables — **Opus 5** (le défaut), **Fable 5.1**, **Sonnet 5**,
+**Haiku 4.5** — sont déclarés en un seul endroit, `MODELES` dans
+[`config.py`](voix/config.py) : la liste du menu déroulant du tableau en est la copie
+publiée, il n'y a rien à ajouter côté page. Fable fait exception à la détection vocale : son
+nom étant aussi un mot français courant, il ne se demande qu'avec le verbe de bascule collé
+(« passe sur fable », « utilise fable »), sinon « prends la fable du corbeau » changerait de
+modèle au lieu de partir chez Claude.
 
 **Ce n'est pas une liste de formulations à apprendre.** La détection ([`intentions.py`](voix/intentions.py))
 cherche la **co-occurrence d'un verbe et d'un objet** de la même intention, dans n'importe

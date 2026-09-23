@@ -233,10 +233,16 @@ setTimeout(async () => {
     const r = e.getBoundingClientRect();
     return { t: Math.round(r.top), b: Math.round(r.bottom), l: Math.round(r.left),
              w: Math.round(r.width), h: Math.round(r.height) }; };
+  // Un tour EN COURS avant de mesurer : la pastille « travaille » ne se voit que la, et
+  // c'est precisement ce qui l'a laissee invisible si longtemps — au repos, tout allait bien.
+  debutTravail = Date.now() - 185000;
+  majTravail();
   releve.entete = document.querySelector("header").offsetHeight;
   releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
                     modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct"),
                     microBas: b("#micro-bas"), champBoite: b("#saisie"),
+                    depart: b("#depart"), envoi: b("#envoyer"), forme: b("#composer"),
+                    travail: b("#travail"),
                     convs: b("#convs") };
   releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
@@ -350,12 +356,34 @@ if (bo.cogit && bo.barre) {
 if (bo.microBas && bo.champBoite) {
   dire(bo.microBas.w >= 38 && bo.microBas.h >= 38,
        `le micro du bas est atteignable (${bo.microBas.w}x${bo.microBas.h} px)`);
-  // Aligne sur la DERNIERE ligne du champ : quand le champ grandit, le bouton doit rester
-  // en bas avec lui, pas flotter au milieu d'une grande boite.
-  dire(Math.abs(bo.microBas.b - bo.champBoite.b) <= 3,
-       `il reste aligne sur le bas du champ (${bo.microBas.b} vs ${bo.champBoite.b})`);
-  dire(bo.microBas.l < bo.champBoite.l,
-       `et il precede le champ, du cote ou va la main (${bo.microBas.l} < ${bo.champBoite.l})`);
+  // Le champ est SEUL sur sa ligne, les boutons viennent dessous. C'est le point de la
+  // barre a deux lignes : partage avec eux, le champ reculait a mesure qu'on ajoutait un
+  // controle, et sur un ecran etroit les libelles finissaient par se chevaucher.
+  dire(bo.microBas.t >= bo.champBoite.b - 1,
+       `le micro est SOUS le champ, pas a cote (${bo.microBas.t} >= ${bo.champBoite.b})`);
+  dire(bo.microBas.l <= bo.champBoite.l + 1,
+       `et il ouvre la ligne, du cote ou va la main (${bo.microBas.l} vs ${bo.champBoite.l})`);
+}
+// Le champ prend TOUTE la largeur de la barre : c'est la mesure qui dit que rien ne partage
+// sa ligne. Un controle revenu a cote de lui la ferait retomber sous la largeur du formulaire.
+if (bo.champBoite && bo.forme) {
+  dire(bo.champBoite.w >= bo.forme.w - 1,
+       `le champ occupe toute la largeur de la barre (${bo.champBoite.w} sur ${bo.forme.w})`);
+}
+// « envoyer » reste cale a droite, avec le delai et « retenir » : le geste qui fait partir le
+// message ne doit pas se retrouver melange aux ronds du micro et de la photo.
+if (bo.depart && bo.forme && bo.microBas) {
+  dire(bo.depart.l + bo.depart.w >= bo.forme.l + bo.forme.w - 2,
+       `le groupe du depart est cale a droite (${bo.depart.l + bo.depart.w} vs ${bo.forme.l + bo.forme.w})`);
+  dire(bo.depart.l > bo.microBas.l + bo.microBas.w,
+       `et il ne touche pas les ronds de gauche (${bo.depart.l} > ${bo.microBas.l + bo.microBas.w})`);
+}
+// La pastille du travail en cours. Elle porte `display:none` dans la feuille de style, donc
+// la reveler demande une valeur EXPLICITE : lui rendre "" rend la main au CSS, qui cache.
+// Ecrit comme ca, le code se lit comme s'il montrait, et ne montrait rien — sur aucun tour.
+if (bo.travail) {
+  dire(bo.travail.w > 40 && bo.travail.h > 10,
+       `la pastille « travaille » se VOIT pendant un tour (${bo.travail.w}x${bo.travail.h} px)`);
 }
 if (bo.convs) {
   dire(bo.convs.w > 0 && bo.convs.w < 300,

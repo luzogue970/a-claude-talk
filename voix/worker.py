@@ -90,6 +90,45 @@ class Journal:
     cout_usd: float | None = None
     duree_s: float | None = None
     jetons: int | None = None
+    # --- comment le tour s'est termine -------------------------------------------------
+    # Le SDK le DIT, dans le message de resultat, et on le jetait : seuls le cout, la duree
+    # et les jetons etaient lus. Un tour coupe a la limite de tours, arrete par une erreur
+    # d'API ou tronque a la limite de jetons rendait donc exactement la meme ligne qu'un tour
+    # fini normalement — « il tourne longtemps puis s'arrete sans raison » est la description
+    # exacte de ce trou. Ces cinq champs sont la reponse, telle que le CLI la donne.
+    fin: str = "success"            # success | error_during_execution | error_max_turns |
+                                    # error_max_budget_usd | error_max_structured_output_retries
+    tours: int | None = None        # num_turns : combien d'allers-retours ce tour a coute
+    stop: str | None = None         # stop_reason de la derniere reponse : max_tokens, refusal…
+    erreurs: list[str] = field(default_factory=list)
+    api_statut: int | None = None   # le code HTTP quand c'est l'API qui a coupe
+
+    def pourquoi_arrete(self) -> str | None:
+        """Une phrase disant pourquoi le tour s'est arrete, ou None s'il a fini normalement.
+
+        Dite a voix haute ET affichee : c'est la seule information qui explique un travail qui
+        s'interrompt, et la deviner coute plus cher que de la lire."""
+        detail = (self.erreurs or [None])[0]
+        if self.fin == "error_max_turns":
+            combien = f" ({self.tours} tours)" if self.tours else ""
+            return (f"je me suis arrêté avant d'avoir fini : la limite de tours est "
+                    f"atteinte{combien}")
+        if self.fin == "error_max_budget_usd":
+            return "je me suis arrêté avant d'avoir fini : le plafond de dépense est atteint"
+        if self.fin == "error_max_structured_output_retries":
+            return ("je me suis arrêté avant d'avoir fini : trop d'essais pour produire une "
+                    "sortie structurée")
+        if self.fin == "error_during_execution" or self.api_statut:
+            bout = f" — {detail}" if detail else ""
+            if self.api_statut:
+                bout = f" — l'API a répondu {self.api_statut}{bout}"
+            return f"je me suis arrêté avant d'avoir fini : une erreur a coupé l'exécution{bout}"
+        if self.stop == "max_tokens":
+            return ("ma réponse a été coupée net : elle a atteint la limite de longueur, "
+                    "donc la fin manque")
+        if self.stop == "refusal":
+            return "j'ai refusé de poursuivre cette réponse"
+        return None
 
     def lignes(self) -> list[str]:
         out = []
@@ -168,6 +207,13 @@ class Worker:
             # boundary crossings through the callback, which is how an out-of-project shell
             # command gets asked out loud instead of silently denied.
             can_use_tool=None if config.PERMISSION == "bypassPermissions" else self._can_use_tool,
+            # Vides par defaut : sans eux le CLI ne borne rien, et en mettre un chiffre
+            # arbitraire introduirait la coupure qu'on cherche justement a expliquer. Quand
+            # ils sont poses, l'arret porte un nom (error_max_turns, error_max_budget_usd)
+            # que le bilan du tour dit a voix haute — un plafond choisi vaut mieux qu'un
+            # arret muet, et c'est tout l'interet de les exposer.
+            max_turns=config.MAX_TOURS,
+            max_budget_usd=config.MAX_DEPENSE,
             # Deltas feed the dashboard: thinking and the written answer appear as they are
             # produced instead of landing in one block at the end.
             include_partial_messages=True,
@@ -177,12 +223,30 @@ class Worker:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
+                # Le second paragraphe vise un symptome precis : des tours qui durent
+                # quinze minutes sans que personne ne sache sur quoi. Ici, l'attente n'est
+                # pas la meme qu'en terminal — on a P'RLE, et on attend une reponse parlee ;
+                # un silence de dix minutes ne se distingue pas d'une panne. Il ne demande
+                # pas de bacler : il demande de revenir parler quand le travail est long,
+                # plutot que de continuer indefiniment en silence. Un tour qui rend la parole
+                # se relance d'un mot ; un tour qui tourne sans fin se coupe, et c'est la
+                # coupure qui fait perdre le contexte.
                 "append": (
                     "Tes réponses finales sont lues à voix haute par une synthèse vocale. "
                     "Écris-les en prose continue : pas de markdown, pas de liste, pas de tableau, "
                     "pas de bloc de code, pas de chemin de fichier complet. Deux à quatre phrases, "
                     "sauf demande explicite. Écris le français avec ses accents. "
                     "Le détail technique reste dans tes outils et tes fichiers, pas dans la réponse parlée."
+                    "\n\n"
+                    "Cette conversation est orale : quelqu'un attend en écoutant. Va au bout de "
+                    "ce qu'on te demande, mais rends la parole dès que tu as de quoi la rendre. "
+                    "Concrètement : si la tâche demande plus d'une dizaine de minutes ou "
+                    "beaucoup d'allers-retours, fais la première partie utile, puis réponds en "
+                    "disant ce qui est fait, ce qui reste et ce que tu ferais ensuite — on te "
+                    "relancera d'un mot. N'explore pas indéfiniment pour être exhaustif : quand "
+                    "tu as répondu à la question posée, arrête-toi. Si tu tournes en rond ou "
+                    "qu'une piste ne donne rien, dis-le au lieu de continuer à chercher — un "
+                    "constat d'échec est une réponse utile, un silence de dix minutes ne l'est pas."
                 ),
             },
         )
@@ -290,13 +354,28 @@ class Worker:
                 self.journal.cout_usd = message.total_cost_usd
                 self.journal.duree_s = round((message.duration_ms or 0) / 1000, 1)
                 self.journal.jetons = _jetons(message.model_usage)
+                self.journal.fin = message.subtype or "success"
+                self.journal.tours = message.num_turns
+                self.journal.stop = message.stop_reason
+                self.journal.erreurs = [str(e) for e in (message.errors or []) if e]
+                self.journal.api_statut = message.api_error_status
                 for refus in message.permission_denials or []:
                     self.journal.refus.append(str(getattr(refus, "tool_name", refus)))
                 self.occupe = False
                 self._voir("travail", actif=False)
                 await self._rendre_le_modele()
+                # La raison part avec le bilan, pas dans une ligne separee : cherchee, elle
+                # l'est au moment ou l'on regarde pourquoi le tour s'est termine comme ca.
                 self._voir("tour", actions=len(self.journal.outils),
-                           duree=self.journal.duree_s, jetons=self.journal.jetons)
+                           duree=self.journal.duree_s, jetons=self.journal.jetons,
+                           tours=self.journal.tours, fin=self.journal.fin,
+                           stop=self.journal.stop, erreurs=self.journal.erreurs[:3],
+                           pourquoi=self.journal.pourquoi_arrete())
+                if self.journal.fin != "success":
+                    # Aussi dans le journal technique : le bilan d'un tour se relit sur la
+                    # page, mais un arret anormal se cherche dans les logs.
+                    log.warning("tour termine en %s (%s tours) : %s", self.journal.fin,
+                                self.journal.tours, "; ".join(self.journal.erreurs) or "—")
                 await self.events.put(("fin", self.journal))
 
     def _delta(self, message: StreamEvent):

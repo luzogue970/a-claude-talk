@@ -190,8 +190,21 @@ globalThis.localStorage = {
 globalThis.requestAnimationFrame = f => { f(); return 1; };
 globalThis.cancelAnimationFrame = () => {};
 globalThis.document.querySelector = () => elem("main");
-globalThis.addEventListener = () => {};
+// Les ecouteurs de fenetre etaient JETES (() => {}), donc tout ce que la page fait au retour
+// de veille, au retour du reseau ou a la restauration depuis le cache etait hors de portee
+// des tests — precisement la partie qu'on ne peut pas verifier a la main sur un telephone.
+// On les garde, et on les declenche.
+globalThis.__ecouteurs = {};
+globalThis.addEventListener = (nom, f) => { (globalThis.__ecouteurs[nom] ||= []).push(f); };
+globalThis.declencher = (nom, ev) => {
+  for (const f of globalThis.__ecouteurs[nom] || []) f(ev || {});
+};
+globalThis.navigator = { onLine: true };
+globalThis.document.visibilityState = "visible";
 globalThis.envoyes = [];
+// Chaque socket ouverte est retenue : un test de reconnexion doit pouvoir verifier
+// COMBIEN ont ete ouvertes, pas seulement que la derniere existe.
+globalThis.sockets = [];
 globalThis.WebSocket = function () {
   // CONNECTING, comme dans un navigateur : une socket neuve n'est pas immediatement
   // utilisable. Le test la promeut explicitement en OPEN quand il veut simuler la reussite
@@ -202,9 +215,11 @@ globalThis.WebSocket = function () {
     globalThis.envoyes.push(JSON.parse(d));
   };
   this.close = () => { this.readyState = 3; };
+  this.addEventListener = () => {};
+  globalThis.sockets.push(this);
 };
 globalThis.WebSocket.OPEN = 1;
-globalThis.location = { host: "127.0.0.1:7788" };
+globalThis.location = { host: "127.0.0.1:7788", protocol: "http:", pathname: "/" };
 `;
 
 const CAS = fs.readFileSync(path.join(__dirname, "test_front_cas.js"), "utf8");
