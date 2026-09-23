@@ -81,7 +81,7 @@ Ce que tu as reellement fait pendant ce tour ({nb_actions} actions) :
 Ta reponse ecrite, a rendre a l'oral :
 <reponse>
 {reponse}
-</reponse>"""
+</reponse>{arret}"""
 
 # Tokens whose presence has to be justified: identifiers, versions, precise numbers.
 # A bare small integer is excluded because a legitimate count ("trois fichiers") is
@@ -163,14 +163,27 @@ class PorteParole:
     def _prompt(self, journal) -> tuple[str, str]:
         reponse = "\n\n".join(journal.textes) or "(aucune reponse ecrite)"
         lignes = journal.lignes()
+        # Un tour coupe n'est PAS un tour fini, et la reponse ecrite ne le dit pas : elle
+        # s'arrete au milieu, c'est tout. Sans ce bloc, le debrief racontait un travail
+        # acheve avec le meme aplomb, ce qui est la pire facon de rendre compte d'un echec.
+        # La phrase exacte est ajoutee a la fin par l'agent ; ici on empeche surtout la
+        # voix d'annoncer une conclusion qui n'existe pas.
+        arret = getattr(journal, "pourquoi_arrete", lambda: None)()
+        bloc = ("\n\nATTENTION — ce tour ne s'est pas termine normalement :\n"
+                f"<arret>\n{arret}\n</arret>\n"
+                "Ne presente donc pas le travail comme acheve, et ne conclus pas a sa place. "
+                "Dis ce qui a ete fait jusque-la. La raison de l'arret est annoncee apres toi, "
+                "ne la repete pas.") if arret else ""
         prompt = INSTRUCTION.format(
             historique=self._historique_rendu(),
             demande=(journal.question or "(inconnue)")[:2000],
             nb_actions=len(journal.outils),
             journal="\n".join(f"- {l}" for l in lignes) or "- (aucune action sur les fichiers)",
             reponse=reponse[:12000],
+            arret=bloc,
         )
-        source = reponse + "\n" + "\n".join(lignes) + "\n" + (journal.question or "")
+        source = (reponse + "\n" + "\n".join(lignes) + "\n" + (journal.question or "")
+                  + "\n" + (arret or ""))
         return prompt, source
 
     async def dire_flux(self, journal):

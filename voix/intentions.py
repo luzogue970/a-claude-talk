@@ -94,9 +94,15 @@ INTENTIONS = (
     Intention(
         nom="modele",
         seules=(r"\bmod[èe]le plus (?:rapide|l[ée]ger|simple|puissant|fort|capable)\b",
-                r"\b(?:passe|bascule|mets?)[- ]?(?:en|sur|toi en)?\s*(?:haiku|sonnet|opus)\b",
-                r"\butilise (?:haiku|sonnet|opus)\b"),
+                r"\b(?:passe|bascule|mets?)[- ]?(?:en|sur|toi en)?\s*(?:haiku|sonnet|opus|fable)\b",
+                r"\butilise (?:haiku|sonnet|opus|fable)\b"),
         verbes=("utilis", "pass", "bascul", "prend", "chang", "met", "revien", "retourn"),
+        # « fable » n'est PAS dans les objets, contrairement aux trois autres noms : c'est
+        # aussi un mot francais courant, et la porte « verbe + objet » est large. Avec lui
+        # dedans, « prends la fable du corbeau » ou « mets la fable en annexe » basculaient
+        # de modele au lieu de partir chez Claude. Il ne se demande donc que par les motifs
+        # ci-dessus, qui exigent le verbe de bascule COLLE au nom — et la, « fable » ne peut
+        # plus vouloir dire autre chose.
         objets=("mod[èe]le", "haiku", "sonnet", "opus", "rapide", "l[ée]ger", "puissant"),
     ),
     Intention(
@@ -121,14 +127,22 @@ _COMPILE = {
 }
 
 
+# Fable ne se demande QUE par son nom : aucun adjectif ne lui est associe, contrairement aux
+# trois autres. C'est voulu — « fable » est aussi un mot francais courant, et le relier a
+# « recent » ou « nouveau » ferait basculer de modele sur une phrase qui parle d'autre chose.
+# Le motif reste simple parce qu'il n'est consulte QU'APRES reconnaissance de l'intention
+# « modele » : a ce stade, « fable » ne peut plus designer un recit.
+FABLE = re.compile(r"\bfables?\b", re.I)
 RAPIDE = re.compile(r"\b(rapide|vite|l[ée]ger|simple|court|haiku)\w*", re.I)
 MOYEN = re.compile(r"\b(sonnet|[ée]quilibr|moyen|interm[ée]diaire)\w*", re.I)
 FORT = re.compile(r"\b(opus|puissant|fort|capable|meilleur|normal|d[ée]faut|habituel)\w*", re.I)
 
 
 def modele_demande(texte: str) -> str | None:
-    """Which model an utterance asks for. Checked most-specific-first: "opus" wins over a
-    generic "rapide" if both somehow appear."""
+    """Which model an utterance asks for. Checked most-specific-first: a name beats an
+    adjective, so "opus" wins over a generic "rapide" if both somehow appear."""
+    if FABLE.search(texte):
+        return "fable"
     if FORT.search(texte):
         return "opus"
     if MOYEN.search(texte):

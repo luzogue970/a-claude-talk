@@ -100,10 +100,36 @@ DEEPGRAM_KEYTERM = os.environ.get("VOIX_DEEPGRAM_KEYTERM", "1") not in ("0", "no
 # --- Claude ------------------------------------------------------------------
 WORKER_MODEL = os.environ.get("VOIX_WORKER_MODEL", "claude-opus-5")
 
+
+def _plafond(nom: str, conversion):
+    """Un plafond de travail, ou None s'il n'y en a pas.
+
+    Vides par defaut, et c'est deliberе : le CLI n'impose AUCUNE limite de tours quand on ne
+    lui en donne pas, donc en fixer une ici ne ferait qu'ajouter une coupure la ou il n'y en
+    avait pas. Ils existent pour le cas inverse — quand on VEUT une borne, mieux vaut qu'elle
+    soit connue, annoncee a voix haute quand elle tombe, et reglable, qu'un arret opaque.
+    """
+    brut = (os.environ.get(nom) or "").strip()
+    if not brut:
+        return None
+    try:
+        valeur = conversion(brut)
+    except ValueError:
+        return None
+    return valeur if valeur > 0 else None
+
+
+MAX_TOURS = _plafond("VOIX_MAX_TOURS", int)
+MAX_DEPENSE = _plafond("VOIX_MAX_DEPENSE", float)
+
 # Switchable at runtime, by voice or from the page. Effort is fixed for the session (the SDK
 # exposes set_model but no set_effort), so a lighter model is the lever for a quick answer.
+# L'ordre de ce dictionnaire EST celui du menu deroulant de la page : le defaut n'est pas le
+# premier de la liste mais WORKER_MODEL, publie a part comme « actuel ». Ajouter un modele ici
+# suffit donc a le rendre choisissable a la voix comme a la souris, sans toucher au front.
 MODELES = {
     "opus": ("claude-opus-5", "Opus 5 — le plus capable"),
+    "fable": ("claude-fable-5-1", "Fable 5.1 — le plus récent"),
     "sonnet": ("claude-sonnet-5", "Sonnet 5 — équilibré"),
     "haiku": ("claude-haiku-4-5", "Haiku 4.5 — le plus rapide"),
 }

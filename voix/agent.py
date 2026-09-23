@@ -710,6 +710,17 @@ class Voix(Agent):
             morceaux.append(bout)
             self._voir("voix", texte=bout, suite=True, id=cle)
             yield bout
+        # La raison d'un arret anormal est dite EN DUR, apres le debrief : passee par le
+        # porte-parole elle aurait ete reformulee, et surtout elle pouvait sauter — c'est un
+        # modele qui reecrit, et une phrase sur deux est deja ecartee par la verification des
+        # faits. Or c'est la seule information qui explique un travail interrompu ; la perdre
+        # ramene exactement au symptome de depart, « il s'arrete sans raison ».
+        arret = getattr(journal_, "pourquoi_arrete", lambda: None)()
+        if arret:
+            phrase = (" " if morceaux else "") + arret + "."
+            morceaux.append(phrase)
+            self._voir("voix", texte=phrase, suite=True, id=cle)
+            yield phrase
         # Kept so "répète" can say it again without paying for a second rewrite.
         self._dernier_debrief = "".join(morceaux).strip() or None
         if self._dernier_debrief:

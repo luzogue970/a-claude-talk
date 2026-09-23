@@ -1302,5 +1302,258 @@ dire(!noteEchec.hidden, 'mais elle se lit dans la barre');
 emettre({ genre: 'toi', texte: 'autre message' });
 dire(enVol.length === 0, 'et le message suit son cours');
 
-console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
-process.exit(ok ? 0 : 1);
+
+// ---- la liaison : une veille du telephone n'est pas une panne ---------------------------
+titre('liaison : veille, reseau, socket zombie');
+// Le symptome de depart : on verrouille son telephone pendant que Claude travaille, on
+// revient, et la page dit « deconnecte » sans rien tenter de visible. Le reseau n'a jamais
+// bronche — c'est l'onglet qui a ete gele, et la page comptait ca comme un echec.
+const etatEl = document.getElementById('etat');
+const ouvrirSock = () => {
+  const s = sockets[sockets.length - 1];
+  s.readyState = 1; socket.readyState = 1;
+  if (socket.onopen) socket.onopen();
+  return s;
+};
+const fermerSock = (code, raison) => { socket.readyState = 3; socket.onclose({ code, reason: raison }); };
+
+sockets.length = 0;
+brancher();
+ouvrirSock();
+const sockOuvertes = sockets.length;
+dire(sockOuvertes === 1, 'une seule socket a l ouverture (' + sockOuvertes + ')');
+
+// 1. Coupure SUBIE en arriere-plan : pas un echec, et rien a tenter tout de suite.
+document.visibilityState = 'hidden';
+fermerSock(1006);
+dire(echecs === 0, 'une coupure en arriere-plan ne compte pas comme un echec (' + echecs + ')');
+dire(sockets.length === 1, 'et rien n est rebranche tant que la page est cachee');
+dire(!/deconnect|déconnect/.test(etatEl.textContent),
+     'l etat ne dit pas « deconnecte » : ' + etatEl.textContent);
+
+// 2. Le retour sur la page rebranche IMMEDIATEMENT.
+document.visibilityState = 'visible';
+declencher('visibilitychange');
+dire(sockets.length === 2, 'revenir sur la page rebranche tout de suite (' + sockets.length + ' sockets)');
+dire(/veille|arrière-plan/.test(etatEl.title || ''),
+     'et l infobulle dit pourquoi la liaison etait tombee : ' + etatEl.title);
+ouvrirSock();
+dire(echecs === 0, 'la reconnexion reussie repart de zero');
+
+// 3. Une socket VIVANTE ne se fait pas rebrancher pour rien : c est ce qui coupait la
+//    liaison alors qu elle allait bien.
+const avantVis = sockets.length;
+declencher('visibilitychange');
+dire(sockets.length === avantVis, 'revenir sur une liaison saine ne la coupe pas');
+
+// 4. La socket zombie : « ouverte » mais plus aucun signe du serveur depuis longtemps.
+//    Sans le pouls, cette page restait morte en ayant l air vivante.
+dernierPouls = Date.now() - 120000;
+declencher('visibilitychange');
+dire(sockets.length === avantVis + 1, 'une socket ouverte mais muette depuis 2 min est rebranchee');
+ouvrirSock();
+
+// 5. Le pouls du serveur : signe de vie ET information.
+socket.onmessage({ data: JSON.stringify({ genre: '_pouls', depuis: 630, clients: 2,
+                                          travail: true, pret: true, en_attente: 0,
+                                          evenements: 412 }) });
+dire(serveur && serveur.evenements === 412, 'le pouls est retenu');
+dire(/tour est en cours/.test(motDuServeur()) && /412/.test(motDuServeur()),
+     'et il se raconte : ' + motDuServeur());
+
+// 6. Le bonjour de reprise : ce qu on vient de retrouver, dit une fois.
+socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 128, travail: true,
+                                          pret: true, depuis: 630, evenements: 412 }) });
+const noteRep = document.getElementById('note-barre');
+dire(!noteRep.hidden && /128/.test(noteRep.textContent) && /en cours/.test(noteRep.textContent),
+     'la reprise dit ce qu elle a retrouve : ' + noteRep.textContent);
+
+// 7. Une vraie coupure, page visible : la, on compte, on espace, et on le DIT.
+document.visibilityState = 'visible';
+fermerSock(1006);
+dire(echecs === 1, 'une coupure page ouverte compte comme un echec');
+dire(/reconnexion/.test(etatEl.textContent), 'l etat annonce la tentative : ' + etatEl.textContent);
+dire(/coupure réseau/.test(etatEl.title || ''),
+     'et l infobulle traduit le code de fermeture : ' + etatEl.title);
+const attente1 = prochaineTentative - Date.now();
+echecs = 5; fermerSock(1006);
+const attente2 = prochaineTentative - Date.now();
+dire(attente2 > attente1, 'les tentatives s espacent (' + Math.round(attente1) + ' ms puis '
+     + Math.round(attente2) + ' ms)');
+dire(/déconnecté/.test(etatEl.textContent) && /essai/.test(etatEl.textContent),
+     'apres plusieurs echecs on dit deconnecte AVEC le numero d essai : ' + etatEl.textContent);
+
+// 8. Hors ligne : ce n est pas la meme chose qu une panne du serveur, et ca se dit autrement.
+navigator.onLine = false;
+declencher('offline');
+dire(/hors ligne/.test(etatEl.textContent), 'hors ligne se distingue de deconnecte : '
+     + etatEl.textContent);
+navigator.onLine = true;
+const avantReseau = sockets.length;
+declencher('online');
+dire(sockets.length === avantReseau + 1, 'le retour du reseau rebranche tout de suite');
+ouvrirSock();
+
+// 8b. Marteler ne doit pas etre possible : pendant qu'une tentative est en vol, cliquer
+//     encore ne doit pas la fermer pour en rouvrir une — c'est un serveur qui redemarre
+//     qu'on frappe, au pire moment.
+fermerSock(1006);
+const sockEnVol = sockets.length;
+socket.readyState = 0;
+reconnecter(); reconnecter(); reconnecter();
+dire(sockets.length === sockEnVol, 'trois clics pendant une tentative en vol n en ouvrent pas trois');
+ouvrirSock();
+
+// 8c. LE cas du telephone : la socket se dit OUVERTE mais elle est morte. Revenir sur la
+//     page ne doit pas se contenter de regarder `readyState` — il ment, et c'est pour ca
+//     qu'un message envoye juste avant la veille partait dans le vide, avec une page qui
+//     avait l'air branchee. On pose la question, et on croit la reponse.
+dernierPouls = Date.now();          // fraiche en apparence : la peremption ne verra rien
+envoyes.length = 0;
+declencher('visibilitychange');
+dire(envoyes.some(o => o.cmd === 'ping'),
+     'revenir sur une socket qui a l air saine envoie une sonde au serveur');
+const avantSonde = sockets.length;
+dire(sockets.length === avantSonde, 'et ne la coupe pas avant d avoir la reponse');
+// Le serveur repond : rien ne bouge, la liaison etait bonne.
+socket.onmessage({ data: JSON.stringify({ genre: '_pouls', pret: true, evenements: 9 }) });
+
+// 9. L'infobulle ne doit pas rester bloquee sur la derniere panne : sur une pastille verte,
+//    lire « coupure reseau » en survolant est exactement le genre d'information fausse qu'on
+//    cherche a supprimer ici.
+emettre({ genre: 'etat', vers: 'thinking' });
+dire(!/coupure/.test(etatEl.title || ''),
+     'une liaison revenue efface le motif de la derniere coupure : ' + etatEl.title);
+dire(/agent prêt|signe du serveur/.test(etatEl.title || ''),
+     'et dit ce que le serveur raconte de lui-meme');
+
+// ---- rien ne doit tourner quand rien ne tourne ------------------------------------------
+titre('indicateurs : ce qui tourne doit correspondre a ce qui se passe');
+const zoneAct = document.getElementById('activite');
+const bandeau = document.getElementById('cogitation');
+
+// 1. « parole » n avait aucun garde-fou : elle s allumait au premier morceau du debrief et
+//    n avait qu UNE sortie, l etat suivant de l agent. Coupure, agent tue, reprise : elle
+//    tournait pour toujours — et le bandeau de cogitation avec elle.
+toutClore('remise a zero');
+emettre({ genre: 'voix', texte: 'j ai refait la barre du bas.', id: 'p1' });
+dire(encours.has('voix'), 'la parole allume bien son indicateur');
+dire(typeof echeances.voix !== 'undefined', 'et elle arme un garde-fou, comme la reflexion');
+emettre({ genre: 'etat', vers: 'listening' });
+dire(!encours.has('voix'), 'l etat suivant l eteint quand il arrive');
+
+// 2. Le cas qui se produisait a CHAQUE reconnexion : le rejeu rallume un vieux « voix »,
+//    et l etat de l agent est passe AVANT lui. Sans le mot de la fin, la pastille restait.
+toutClore('remise a zero');
+recevoir({ genre: '_histoire', evenements: [
+  { genre: 'voix', texte: 'un debrief d il y a deux heures', id: 'vieux', n: 9001, h: '10:00:00' },
+  { genre: 'outil', nom: 'Bash', cible: 'pytest', id: 'o9', n: 9002, h: '10:00:01' },
+] });
+dire(encours.size > 0, 'le rejeu rallume bien les indicateurs du passe (' + restants() + ')');
+socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 2, travail: false,
+                                          etat: 'listening', pret: true }) });
+dire(encours.size === 0, 'mais la fin de reprise les eteint quand le serveur ne fait rien : '
+     + restants());
+dire(zoneAct.innerHTML === '', 'l en-tete ne liste plus rien');
+dire(bandeau.hidden, 'et le bandeau de cogitation est refermé');
+
+// 2b. Perdre la liaison pendant une lecture laissait « couper la lecture » visible et
+//     clignotant pour toujours — un bouton qui ne couperait rien si on le pressait.
+emettre({ genre: 'lecture', actif: true, id: 'p7' });
+const btnCoupe = document.getElementById('couper-lecture');
+dire(!btnCoupe.hidden, 'une lecture en cours montre le bouton qui la coupe');
+socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 1, travail: false,
+                                          etat: 'listening', pret: true }) });
+dire(btnCoupe.hidden && lectureEnCours === null,
+     'et il disparait quand la reprise dit que plus personne ne parle');
+
+// 3. L inverse doit rester vrai : si le serveur travaille VRAIMENT, on n eteint rien.
+recevoir({ genre: '_histoire', evenements: [
+  { genre: 'outil', nom: 'Bash', cible: 'npm test', id: 'o10', n: 9200, h: '10:00:02' },
+] });
+socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 1, travail: true,
+                                          etat: 'thinking', pret: true }) });
+dire(encours.has('outil:o10'), 'un outil qui tourne vraiment reste allume a la reconnexion');
+toutClore('fin du cas');
+
+// 4. Pendant une coupure, la page ne peut RIEN affirmer : le compteur du tour montait
+//    depuis l horloge locale, donc il grimpait aussi sur un agent mort.
+emettre({ genre: 'travail', actif: true });
+dire(!bandeau.hidden, 'un tour en cours ouvre le bandeau');
+const avantGel = pilTravail.textContent;
+fermerSock(1006);
+dire(liaisonPerdue, 'la coupure est enregistree');
+dire(bandeau.hidden, 'le bandeau se referme : on ne sait plus si la machine vit');
+dire(/liaison perdue/.test(pilTravail.textContent),
+     'et la pastille le dit au lieu de compter : ' + pilTravail.textContent);
+dire(/compteur est arrêté/.test(pilTravail.title),
+     'l infobulle donne le detail que la pastille n a pas la place de porter');
+dire(pilTravail.classList.contains('fige'), 'son animation est coupee');
+brancher(); ouvrirSock();
+dire(!liaisonPerdue && !pilTravail.classList.contains('fige'),
+     'la reconnexion lui rend son compteur');
+emettre({ genre: 'travail', actif: false });
+
+// ---- un tour coupe ne se lit pas comme un tour fini -------------------------------------
+titre('bilan de tour : pourquoi ca s est arrete');
+emettre({ genre: 'tour', actions: 12, duree: 930.5, jetons: 240000, tours: 42,
+          fin: 'error_max_turns', erreurs: ['Reached maximum number of turns (42)'],
+          pourquoi: "je me suis arrêté avantVis d'avoir fini : la limite de tours est atteinte (42 tours)" });
+const ligneCoupee = document.getElementById('flux').children.slice(-1)[0].innerHTML;
+dire(/42 tours modèle/.test(ligneCoupee), 'le nombre de tours modele est affiche');
+dire(/limite de tours/.test(ligneCoupee), 'et la raison de l arret aussi');
+dire(/error_max_turns/.test(ligneCoupee), 'le detail technique reste en infobulle');
+
+emettre({ genre: 'tour', actions: 3, duree: 12.0, jetons: 4200, tours: 5 });
+const ligneNette = document.getElementById('flux').children.slice(-1)[0].innerHTML;
+dire(!/⚠/.test(ligneNette), 'un tour normal ne porte aucun avertissement');
+
+// ---- ce qui ne se verifie qu'apres une echeance -----------------------------------------
+// Deux comportements ne sont vrais QUE dans le temps : une sonde sans reponse, et le renvoi
+// d'un message apres le rejeu. Les verifier en synchrone reviendrait a tester autre chose.
+setTimeout(() => {
+  titre('sonde sans reponse, et message renvoye');
+
+  // 1. Sonde restee sans reponse : la liaison est morte, on rebranche.
+  DELAI_SONDE = 1;
+  dernierPouls = Date.now();
+  const avantMuette = sockets.length;
+  sonder('verification');
+  setTimeout(() => {
+    dire(sockets.length === avantMuette + 1,
+         'une sonde restee sans reponse fait rebrancher (' + sockets.length + ' sockets)');
+    dire(/n a pas repondu|répondu/.test(etatEl.title || ''),
+         'et la page dit que la verification a echoue : ' + etatEl.title);
+    ouvrirSock();
+
+    // 2. Un message tape avant la veille, jamais arrive : le rejeu ne le rend pas, donc il
+    //    est renvoye — et une seule fois.
+    champ.value = 'lance les tests';
+    composer.onsubmit({ preventDefault() {} });
+    fermerSock(1006);
+    sockets.length = 0; envoyes.length = 0;
+    brancher(); ouvrirSock();
+    socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 3, pret: true }) });
+    const renvois = envoyes.filter(o => o.cmd === 'texte' && o.texte === 'lance les tests');
+    dire(renvois.length === 1,
+         'un message jamais arrive est renvoye apres le rejeu (' + renvois.length + ')');
+    const noteRenvoi = document.getElementById('note-barre');
+    dire(/renvoyé/.test(noteRenvoi.textContent || ''),
+         'et on le dit plutot que de le refaire en douce : ' + noteRenvoi.textContent);
+
+    // 3. Celui dont l'echo est revenu pendant le rejeu ne doit PAS repartir : ce serait le
+    //    poster deux fois, ce qui est pire que de le perdre.
+    champ.value = 'deuxieme message';
+    composer.onsubmit({ preventDefault() {} });
+    fermerSock(1006);
+    sockets.length = 0; envoyes.length = 0;
+    brancher(); ouvrirSock();
+    emettre({ genre: 'toi', texte: 'deuxieme message' });     // l'echo, retrouve dans le rejeu
+    socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 4, pret: true }) });
+    dire(!envoyes.some(o => o.cmd === 'texte' && o.texte === 'deuxieme message'),
+         'un message dont l echo revient dans le rejeu n est PAS reposte');
+
+    console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
+    process.exit(ok ? 0 : 1);
+  }, 30);
+}, 10);

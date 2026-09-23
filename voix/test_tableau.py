@@ -844,10 +844,89 @@ def le_rejeu_ne_garde_que_ce_qui_se_relit():
          f"et l'ordre est celui de la lecture : {[e['genre'] for e in evs3[:4]]}")
 
 
+
+async def la_reprise_dit_sur_quoi_on_retombe():
+    """Se rebrancher ne doit pas etre un saut dans le noir.
+
+    Le defaut mesure : une page qui revient recevait l'etat puis l'historique, et rien
+    d'autre. Impossible de distinguer « l'agent travaille depuis dix minutes » de « l'agent
+    est mort » — les deux rendaient exactement la meme chose, c'est-a-dire du silence. Et sur
+    une session ou personne ne parle, ce silence durait des minutes : aucun octet ne traversait
+    la socket, donc rien ne disait qu'elle etait encore bonne.
+    """
+    print("\n=== se rebrancher dit ce qu'on retrouve, et le serveur donne signe de vie ===")
+    t = Tableau(port=7893, ouvrir=False, on_commande=lambda *a: None)
+    # Le pouls est regle AVANT la connexion : l'ecrivain capte son echeance a chaque tour de
+    # boucle, donc le baisser apres coup laisse d'abord passer l'attente d'origine.
+    t.POULS = 0.4
+    t.publier("toi", texte="refais la barre du bas")
+    t.publier("travail", actif=True)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                vus = {}
+                for _ in range(6):
+                    m = await asyncio.wait_for(ws.receive(), timeout=2)
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    vus[d.get("genre")] = d
+                    if d.get("genre") == "_bonjour":
+                        break
+                b = vus.get("_bonjour")
+                dire(b is not None, "la reprise se termine par un bonjour, pas par du silence")
+                if b:
+                    dire(b["rejoue"] == 2, f"il dit combien de lignes sont rejouees ({b.get('rejoue')})")
+                    dire(b["travail"] is True, "et qu'un tour est en cours")
+                    dire(b["pret"] is True, "et que l'agent a branche ses commandes")
+                    dire(b["clients"] == 1, f"et combien de pages sont branchees ({b.get('clients')})")
+
+                # Le pouls : la meme information, mais repetee, et c'est ce qui tient la
+                # liaison ouverte sur une session ou rien ne se passe.
+                pouls = None
+                for _ in range(4):
+                    m = await asyncio.wait_for(ws.receive(), timeout=3)
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_pouls":
+                        pouls = d
+                        break
+                dire(pouls is not None, "le serveur donne signe de vie sans qu'il se passe rien")
+                if pouls:
+                    dire(pouls["evenements"] == t._n,
+                         f"et le pouls porte l'etat courant ({pouls.get('evenements')} evenements)")
+
+                # La sonde. Une socket tuee par un systeme mobile reste « ouverte » cote
+                # navigateur : `readyState` ment, et tout ce qu'on y ecrit part dans le vide.
+                # Seule une REPONSE prouve la liaison — d'ou cette commande, qui n'en est pas
+                # une : elle ne fait rien, elle repond.
+                appelees = []
+                t.on_commande = lambda nom, d: appelees.append(nom)
+                await ws.send_str(json.dumps({"cmd": "ping"}))
+                reponse = None
+                for _ in range(5):
+                    m = await asyncio.wait_for(ws.receive(), timeout=3)
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_pouls":
+                        reponse = d
+                        break
+                dire(reponse is not None, "une sonde obtient une reponse, donc la liaison est prouvee")
+                dire(appelees == [], "et elle ne traverse pas le gestionnaire de commandes")
+                if reponse:
+                    dire("etat" in reponse, "la reponse porte l'etat de l'agent, pas seulement un accuse")
+    finally:
+        await t.arreter()
+
+
 async def principal():
     logging.disable(logging.CRITICAL)  # le traceback attendu n'a pas a polluer la sortie
     await une_commande_qui_leve_ne_tue_pas_la_socket()
     await une_commande_avant_l_agent_attend()
+    await la_reprise_dit_sur_quoi_on_retombe()
     await un_message_en_echec_est_nomme()
     couper_le_micro_ne_depend_plus_de_l_activite()
     await une_dictee_retenue_ne_sort_pas_dans_le_flux()

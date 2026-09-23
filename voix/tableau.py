@@ -275,9 +275,48 @@ class Tableau:
             "evenements": self._n,
         })
 
+    # Toutes les 25 s. Sous les 30 s d'inactivite a partir desquelles un proxy, un reseau
+    # mobile ou un navigateur en arriere-plan coupe une liaison qu'il croit morte — et c'est
+    # exactement ce qui se passait : une session silencieuse pendant que Claude reflechit ne
+    # produit AUCUN evenement, donc rien ne traversait la socket pendant des minutes.
+    POULS = 25
+
+    def _pouls(self) -> dict:
+        """Ce que le serveur sait de lui-meme, envoye regulierement.
+
+        Deux roles pour une seule trame. Cote reseau, elle tient la liaison ouverte : du
+        trafic applicatif visible, pas seulement un ping de protocole que ni le navigateur ni
+        les intermediaires ne montrent. Cote page, elle repond a « est-ce que ca vit encore ? »
+        sans avoir a deviner : tant que le pouls arrive, la liaison est bonne, et son absence
+        se mesure en secondes affichables."""
+        etat = {}
+        for genre, charge in self.etat.items():
+            try:
+                etat[genre] = json.loads(charge)
+            except ValueError:
+                continue
+        return {
+            "genre": "_pouls",
+            # L'etat de l'agent voyage avec le pouls : c'est lui qui permet a la page de
+            # decider, en fin de reprise, si quelque chose peut ENCORE etre en cours.
+            "etat": (etat.get("etat") or {}).get("vers", ""),
+            "depuis": round(time.monotonic() - self._t0, 1),
+            "clients": len(self.clients),
+            "travail": bool((etat.get("travail") or {}).get("actif")),
+            "pret": self._on_commande is not None,
+            "en_attente": len(self._commandes_en_attente),
+            "evenements": self._n,
+        }
+
     async def _ecrivain(self, ws, file: asyncio.Queue):
         while True:
-            charge = await file.get()
+            try:
+                charge = await asyncio.wait_for(file.get(), timeout=self.POULS)
+            except asyncio.TimeoutError:
+                # Rien a dire depuis 25 s : on le dit quand meme. Le pouls passe par le meme
+                # ecrivain que les evenements, donc il ne peut pas doubler un envoi en cours
+                # ni creer une tache de plus par client.
+                charge = json.dumps(self._pouls(), ensure_ascii=False)
             try:
                 await ws.send_str(charge)
             except Exception:
@@ -304,6 +343,14 @@ class Tableau:
                     {"genre": "_histoire", "evenements": passe[i:i + 200]},
                     ensure_ascii=False, default=str,
                 ))
+            # Le mot de la fin de la reprise. La page savait qu'elle etait rebranchee, elle ne
+            # savait pas SUR QUOI : agent pret ou non, tour en cours ou non, combien de lignes
+            # viennent d'etre rejouees. Rebrancher sur une session morte et rebrancher sur une
+            # session qui travaille depuis dix minutes se ressemblaient trait pour trait.
+            await ws.send_str(json.dumps(
+                {**self._pouls(), "genre": "_bonjour", "rejoue": len(passe)},
+                ensure_ascii=False, default=str,
+            ))
             async for message in ws:
                 if message.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
@@ -314,6 +361,14 @@ class Tableau:
                         continue
                     nom = ordre.pop("cmd", None)
                     if not nom:
+                        continue
+                    if nom == "ping":
+                        # Pas une commande : une question sur la liaison elle-meme. Une page
+                        # qui revient d'une mise en veille ne peut PAS se fier a l'etat que
+                        # lui montre le navigateur — une socket tuee par le systeme reste
+                        # « ouverte » cote JavaScript, et tout ce qu'on y ecrit part dans le
+                        # vide sans la moindre erreur. Seule une reponse prouve la liaison.
+                        await file.put(json.dumps(self._pouls(), ensure_ascii=False))
                         continue
                     if not self._on_commande:
                         # L'agent finit de demarrer : on garde la commande pour lui.
@@ -655,6 +710,7 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 .e-initializing{color:var(--faible);border-color:var(--bord)}
 .e-thinking{color:var(--pensee);border-color:var(--pensee)}
 .e-speaking{color:var(--voix);border-color:var(--voix)}
+.mesures{display:flex;gap:10px;align-items:center;min-width:0}
 #compteurs{display:flex;gap:8px;align-items:center;
   color:var(--faible);font-size:12px;font-variant-numeric:tabular-nums}
 .q{border:1px solid var(--bord);border-radius:999px;padding:2px 9px;white-space:nowrap;
@@ -917,6 +973,9 @@ body{overflow-x:hidden}
 .g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#9fe6ec;font-size:13px}
 .g-permission .badge{color:var(--permission)} .g-permission .corps{color:#ffc9c4}
 .g-tour .badge{color:var(--tour)} .g-tour .corps{color:#9fe6ec}
+/* Un tour interrompu porte la couleur de l'alerte, pas celle du tour : il faut pouvoir le
+   repérer en faisant défiler, sans lire. */
+.apres.coupe{color:var(--outil);display:block;margin-top:2px}
 /* L'écart de fenêtre arrive après la ligne du tour : on le distingue pour qu'on voie qu'il
    s'agit d'une mesure rapportée, pas d'un chiffre connu au moment du bilan. */
 /* Les commandes de lecture, accrochees a LA reponse concernee : couper « la parole en
@@ -994,6 +1053,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 .act.outil{border-color:var(--outil);color:#e3b341}
 .act.voix{border-color:var(--voix);color:#7ee08d}
 #travail::before{content:"⟳ ";display:inline-block;animation:tourne 1.1s linear infinite}
+/* Un indicateur qui tourne AFFIRME qu'il se passe quelque chose. Liaison coupee, on ne sait
+   plus : il s'arrete, et perd sa couleur, plutot que de continuer a jouer l'activite. */
+#travail.fige{border-color:var(--bord);color:var(--faible)}
+#travail.fige::before{animation:none;opacity:.5}
 #etat.vif{animation:pulse 1.4s ease-in-out infinite}
 
 #bas{position:fixed;bottom:calc(var(--barre) + 10px);right:16px;z-index:5;background:var(--carte);border:1px solid var(--bord);
@@ -1163,15 +1226,22 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
             title="garder CE message dans la barre au lieu de l'envoyer">retenir</button>
     <button id="envoi-vite" type="button" title="envoyer tout de suite (Entrée)">envoyer</button>
   </span>
-  <span id="travail"></span>
   <div id="activite"></div>
   </span>
 
   <!-- Filtres et mesures partagent le second rang : les mesures seules occupaient un rang
        entier pour deux pastilles. -->
+  <!-- La durée du tour en cours est une MESURE, et elle vit donc avec les mesures. Elle a
+       d'abord été posée dans la zone « ce qui se passe », à côté des pastilles d'activité :
+       à sa taille réelle, elle poussait toute cette zone sur un troisième rang, et l'en-tête
+       volait trente-cinq pixels au flux pendant chaque tour — c'est-à-dire pendant tout le
+       temps où l'on regarde la page. Ici, le rang était à moitié vide. -->
   <div class="rang-bas">
     <div id="filtres"></div>
-    <span id="compteurs"></span>
+    <span class="mesures">
+      <span id="travail"></span>
+      <span id="compteurs"></span>
+    </span>
   </div>
 </header>
 <main id="flux"></main>
@@ -1529,9 +1599,16 @@ function corps(e) {
       const bouts = [];
       if (e.actions != null) bouts.push(`${e.actions} action${e.actions > 1 ? "s" : ""}`);
       if (e.duree != null) bouts.push(`${e.duree}s`);
+      if (e.tours != null) bouts.push(`${e.tours} tour${e.tours > 1 ? "s" : ""} modèle`);
       if (e.jetons != null) bouts.push(`${fmtJetons(e.jetons)} jetons`);
       if (e.texte) bouts.push(e.texte);
-      return bouts.join(" · ") || "terminé";
+      const ligne = bouts.join(" · ") || "terminé";
+      // Un tour coupé se lisait EXACTEMENT comme un tour fini : mêmes actions, même durée,
+      // même couleur. La raison est donc affichée en clair, et le détail technique rendu par
+      // le CLI reste en infobulle — utile pour un rapport, illisible dans le flux.
+      if (!e.pourquoi) return ligne;
+      const detail = [e.fin, ...(e.erreurs || [])].filter(Boolean).join(" · ");
+      return ligne + `<span class="apres coupe" title="${ech(detail)}">⚠ ${ech(e.pourquoi)}</span>`;
     }
     case "log":
       return `<span style="opacity:.7">${ech(e.source)}</span> ${ech(e.texte)}`;
@@ -1636,7 +1713,15 @@ function toutClore(raison) {
 // allumée sur un système inerte.
 // 12 s pour la transcription : le moteur local met 4 a 7 s, et un garde-fou de 4 s eteignait
 // le signal EN PLEINE attente — la page redevenait muette juste avant que le texte arrive.
-const GARDE = { stt: 12000, pensee: 30000 };
+//
+// « parole » n'en avait AUCUN, et c'etait le trou le plus visible : l'indicateur s'allume au
+// premier morceau du debrief et ne s'eteint qu'a l'etat suivant publie par l'agent. Si cet
+// etat ne vient jamais — liaison coupee pendant la lecture, agent tue, session reprise — la
+// pastille « parole » tourne pour toujours, et comme le bandeau de cogitation ne regarde que
+// `encours.size`, les mots defilent eux aussi sur une page ou plus rien ne se passe. Le tour
+// est deja fini quand la parole commence, donc meme la cloture de fin de tour ne l'attrape
+// pas. 60 s, rearme a chaque signe de parole : au-dela, c'est que personne ne parle plus.
+const GARDE = { stt: 12000, pensee: 30000, voix: 60000 };
 const echeances = {};
 function battre(nom) {
   clearTimeout(echeances[nom]);
@@ -1734,6 +1819,7 @@ function ajouter(e) {
              e.echec ? "l'outil a renvoyé une erreur" : "");
   }
   if (e.genre === "pensee") battre("pensee");
+  if (e.genre === "voix") battre("voix");
   // La réflexion s'arrête dès qu'elle produit quelque chose : du texte, ou un outil.
   if (e.genre === "texte" || e.genre === "outil") {
     clearTimeout(echeances.pensee); resoudre("pensee", "ok");
@@ -1828,21 +1914,15 @@ function viderFile() {
   }
 }
 
-// Rebrancher tout de suite, sans doublonner les tentatives.
+// Rebrancher tout de suite, sans doublonner les tentatives. Un seul chemin de reconnexion
+// dans toute la page : rebrancherMaintenant(), declare plus bas avec la gestion de la veille,
+// du reseau et du compte a rebours. Il y en a eu deux pendant un temps — celui-ci et le sien —
+// et ils se contredisaient exactement la ou ca comptait : celui-ci refusait de rebrancher
+// tant que la socket se disait « ouverte », ce qui est precisement l'etat d'une socket morte
+// au retour de veille. On revenait sur la page, rien ne se passait.
 function reconnecter() {
-  if (socket && socket.readyState <= 1) return;   // vivante ou en cours d'ouverture
-  if (reconnexionPrevue) return;
-  reconnexionPrevue = true;
-  brancher();
+  rebrancherMaintenant("une commande attend la liaison");
 }
-
-// Une veille du portable ou un onglet longtemps en arriere-plan tue la socket sans que la
-// page l'apprenne. On regarde donc au moment ou l'onglet redevient visible, plutot que de
-// laisser le prochain clic faire la decouverte.
-addEventListener("visibilitychange", () => {
-  if (!document.hidden) reconnecter();
-});
-addEventListener("online", reconnecter);
 const btnMicro = document.getElementById("micro");
 const microBas = document.getElementById("micro-bas");
 // La parole est-elle détectée EN CE MOMENT. Vient du serveur (le VAD), jamais d'une
@@ -1920,6 +2000,14 @@ selEffort.onchange = () => { envoyerCmd({ cmd: "effort", cle: selEffort.value })
 
 const btnStop = document.getElementById("arreter");
 const pilTravail = document.getElementById("travail");
+// Vrai tant que la liaison est coupee. Ce qui suit n'est pas un detail d'affichage : pendant
+// une coupure, la page continuait d'egrener « travaille 14 min » a la seconde et de faire
+// defiler les mots du bandeau de cogitation. Or ce bandeau ne sert qu'a UNE chose — dire que
+// la machine n'est pas morte — et c'est exactement ce qu'on ne sait plus. Le chiffre, lui,
+// etait mesure depuis l'horloge locale : il continuait de monter meme si l'agent etait mort
+// depuis dix minutes. On garde donc la pastille, parce que le tour tourne probablement
+// encore cote serveur, mais elle cesse de compter et de s'animer, et elle le dit.
+let liaisonPerdue = false;
 let debutTravail = null, minuteur = null;
 function majTravail() {
   if (debutTravail == null) {
@@ -1933,8 +2021,23 @@ function majTravail() {
     return;
   }
   const s = Math.round((Date.now() - debutTravail) / 1000);
-  pilTravail.textContent = `travaille ${s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"}`;
-  pilTravail.style.display = "";
+  const duree = s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s";
+  // Sans le mot « travaille » : l'arc qui tourne devant le chiffre le dit deja, et la
+  // pastille tient dans l'en-tete. Avec, elle faisait 140 px et poussait toute la zone
+  // « ce qui se passe » sur un troisieme rang — un rang de plus pris au flux, en permanence
+  // pendant un tour, pour repeter ce que l'animation montre. La phrase entiere reste en
+  // infobulle, ou elle ne coute rien.
+  pilTravail.textContent = liaisonPerdue ? "liaison perdue" : duree;
+  pilTravail.classList.toggle("fige", liaisonPerdue);
+  pilTravail.title = liaisonPerdue
+    ? `travail commencé il y a ${duree} — il continue peut-être côté serveur, mais la page ne `
+      + "le voit plus : le compteur est arrêté jusqu'à la reconnexion"
+    : `Claude travaille depuis ${duree}`;
+  // « inline-block », pas "" : la regle de base porte `display:none`, donc vider le style
+  // en ligne ne revele rien du tout — ca REND la main a la feuille de style, qui cache.
+  // Consequence longtemps invisible parce qu'elle se lit comme son contraire : la pastille
+  // « travaille 3 min » n'est jamais apparue, sur aucun tour.
+  pilTravail.style.display = "inline-block";
   btnStop.disabled = false;
   selEffort.disabled = true;
   selEffort.title = "tâche en cours — l'effort ne peut changer qu'entre deux tâches";
@@ -1989,7 +2092,9 @@ let rouleau = null;
 // action non résolue. Le minuteur ne vit que pendant ce temps — laisser tourner un
 // setInterval sur une page au repos, c'est ce qui avait fini par coûter 1,5 Go de mémoire.
 function majCogitation() {
-  const occupe = debutTravail != null || encours.size > 0;
+  // Liaison coupee : on ne peut rien affirmer, donc on n'affirme rien. Le bandeau ne dit que
+  // « la machine est vivante » — c'est precisement l'information qu'on a perdue.
+  const occupe = !liaisonPerdue && (debutTravail != null || encours.size > 0);
   if (occupe && rouleau == null) {
     zoneMot.textContent = motSuivant();
     zoneCogite.hidden = false;
@@ -2116,6 +2221,20 @@ function rendreMessage(i, raison) {
 function accuser(texte) {
   const i = enVol.findIndex(m => m.texte === texte);
   if (i >= 0) { enVol.splice(i, 1); majEnVol(); }
+}
+
+// Renvoyer ce qui n'est jamais arrive. Appele une seule fois par reconnexion, a la fin du
+// rejeu : avant, on ne saurait pas distinguer « perdu » de « pas encore rejoue », et on
+// posterait le message en double.
+function renvoyerEnVol() {
+  if (!enVol.length || !socket || socket.readyState !== WebSocket.OPEN) return 0;
+  let renvoyes = 0;
+  for (const m of enVol) {
+    try { socket.send(JSON.stringify({ cmd: "texte", texte: m.texte })); renvoyes++; m.quand = Date.now(); }
+    catch (_) { break; }
+  }
+  majEnVol();
+  return renvoyes;
 }
 // Le temps qui passe change ce qu'on affiche (« envoi… » puis « sans confirmation »).
 setInterval(() => { if (enVol.length) majEnVol(); }, 1000);
@@ -2709,7 +2828,9 @@ function recevoir(e, etat = false) {
       return;
     }
     if (e.genre === "pupitre") { majPupitre(e); return; }
-    if (e.genre === "parole_fin") { outillerParole(e); return; }
+    // Le texte est complet, mais la voix le lit encore : on rearme le garde-fou plutot
+    // que d'eteindre l'indicateur, sinon « parole » s'eteindrait en pleine phrase.
+    if (e.genre === "parole_fin") { battre("voix"); outillerParole(e); return; }
     if (e.genre === "lecture") {
       lectureEnCours = e.actif ? e.id : null;
       majBoutonsLecture();
@@ -2807,6 +2928,10 @@ function recevoir(e, etat = false) {
       // « vif » fait respirer la pastille tant que la session n'est pas au repos : un coup
       // d'oeil suffit alors pour savoir si le système est vivant.
       el.className = "e-" + e.vers + (e.vers === "listening" ? "" : " vif");
+      // L'infobulle suit, sinon le motif de la DERNIERE coupure resterait affiche sur une
+      // liaison redevenue saine — on lisait « coupure réseau » en survolant une pastille
+      // parfaitement verte. Liaison bonne : elle dit ce que le serveur raconte de lui-meme.
+      el.title = motDuServeur();
       if (e.vers !== "speaking") resoudre("voix", "ok");
       return;
     }
@@ -3161,7 +3286,173 @@ function majBoutonsLecture() {
 }
 
 const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };
-let echecs = 0;   // reconnexions ratées d'affilée
+
+// --- l'etat de la liaison, et ce qu'on en dit --------------------------------------------
+// Ce bloc remplace un compteur d'echecs et un delai fixe de 1,2 s. Ce que ca ratait, dans
+// l'ordre ou on s'en apercoit :
+//
+//  1. Revenir sur l'onglet du telephone. Le systeme gele la page et tue la socket ; au retour
+//     la page decouvrait la coupure, la comptait comme un ECHEC, et au troisieme affichait
+//     « deconnecte » — alors que le reseau allait tres bien et qu'il suffisait de rebrancher.
+//     Une coupure subie en arriere-plan ne compte donc plus, et le retour rebranche TOUT DE
+//     SUITE au lieu d'attendre le prochain reveil de minuterie.
+//  2. La socket zombie. Un reseau mobile qui bascule laisse une socket « ouverte » dont plus
+//     rien ne sort : aucune fermeture, donc aucune reconnexion, donc une page morte qui a
+//     l'air vivante. Le pouls du serveur donne la mesure qui manquait.
+//  3. « deconnecte » tout court. Ni pourquoi, ni depuis quand, ni si quelque chose est tente.
+//     L'etat porte maintenant la tentative en cours et le compte a rebours ; l'infobulle
+//     porte le code de fermeture et ce que le serveur disait de lui-meme en dernier.
+let echecs = 0;            // reconnexions ratees d'affilee — les vraies, pas les mises en veille
+let dernierPouls = 0;      // Date.now() du dernier signe de vie du serveur
+let serveur = null;        // le dernier _pouls recu, tel quel
+let causeCoupure = "";     // ce qu'on sait de la derniere fermeture
+let minuterieRebranche = null, minuterieCompte = null, prochaineTentative = 0;
+
+// 0,8 s puis on s'ecarte, jusqu'a 20 s. Reessayer toutes les 1,2 s pendant qu'un portable est
+// hors couverture ne reconnecte rien et vide la batterie ; l'ecart laisse aussi le temps a un
+// agent qui redemarre de rouvrir son port.
+const ATTENTES = [800, 1500, 3000, 5000, 8000, 12000, 20000];
+const attenteRebranche = () => ATTENTES[Math.min(echecs, ATTENTES.length - 1)];
+
+// Ce que le serveur a dit de lui-meme en dernier, en une ligne d'infobulle.
+function motDuServeur() {
+  if (!serveur) return "aucun signe du serveur pour l'instant";
+  const bouts = [serveur.pret ? "agent prêt" : "agent pas encore branché"];
+  if (serveur.travail) bouts.push("un tour est en cours");
+  if (serveur.en_attente) bouts.push(`${serveur.en_attente} commande(s) en attente`);
+  if (serveur.depuis != null) bouts.push(`en vie depuis ${Math.round(serveur.depuis)} s`);
+  if (serveur.evenements != null) bouts.push(`${serveur.evenements} événements`);
+  if (serveur.clients != null) bouts.push(`${serveur.clients} page(s) branchée(s)`);
+  const vu = dernierPouls ? Math.round((Date.now() - dernierPouls) / 1000) : null;
+  if (vu != null) bouts.push(`dernier signe il y a ${vu} s`);
+  return bouts.join(" · ");
+}
+
+// L'affichage de la liaison quand elle n'est PAS etablie. Appelee a chaque seconde du compte
+// a rebours : dire « reconnexion... » sans fin ne distingue pas une reprise d'une panne.
+function direLiaison() {
+  const el = document.getElementById("etat");
+  if (!el) return;
+  if (!navigator.onLine) {
+    el.textContent = "hors ligne";
+    el.className = "e-listening";
+    champ.placeholder = "hors ligne — le message partira au retour du réseau";
+    el.title = "l'appareil n'a pas de réseau. " + motDuServeur();
+    return;
+  }
+  const reste = Math.max(0, Math.ceil((prochaineTentative - Date.now()) / 1000));
+  // « deconnecte » reste reserve a l'echec repete : une coupure d'une seconde annoncee comme
+  // une panne fait chercher un bug la ou il n'y a qu'un aller-retour.
+  const perdu = echecs >= 4;
+  el.textContent = perdu
+    ? `déconnecté — essai ${echecs + 1}${reste ? ` dans ${reste} s` : "…"}`
+    : (reste > 1 ? `reconnexion dans ${reste} s…` : "reconnexion…");
+  el.className = "e-listening" + (perdu ? "" : " vif");
+  champ.placeholder = perdu
+    ? "déconnecté — l'agent tourne toujours ? le message part à la reconnexion"
+    : "reconnexion…";
+  el.title = (causeCoupure ? causeCoupure + ". " : "") + motDuServeur();
+}
+
+function arreterRebranche() {
+  if (minuterieRebranche) { clearTimeout(minuterieRebranche); minuterieRebranche = null; }
+  if (minuterieCompte) { clearInterval(minuterieCompte); minuterieCompte = null; }
+}
+
+function programmerRebranche() {
+  arreterRebranche();
+  const delai = attenteRebranche();
+  prochaineTentative = Date.now() + delai;
+  reconnexionPrevue = true;
+  direLiaison();
+  // La seconde qui s'affiche EST la seconde qui s'ecoule : un compte a rebours fige ressemble
+  // a une page plantee, ce qui est precisement le doute qu'on cherche a lever.
+  minuterieCompte = setInterval(direLiaison, 1000);
+  minuterieRebranche = setTimeout(() => {
+    arreterRebranche();
+    reconnexionPrevue = false;
+    brancher();
+  }, delai);
+}
+
+// Rebrancher SANS attendre, et sans compter ca comme un echec : on revient sur la page, le
+// reseau revient, l'appareil se reveille. Dans ces trois cas l'attente n'apporte rien —
+// c'est meme exactement le moment ou l'utilisateur regarde l'ecran.
+// `force` court-circuite le garde-fou « la socket est ouverte, donc tout va bien » : c'est
+// precisement cette croyance qui laissait une page morte se croire vivante.
+function rebrancherMaintenant(pourquoi, force) {
+  // Liaison saine : rien a faire. Tentative deja en vol (CONNECTING) : la laisser aboutir —
+  // sans ce second cas, trois clics pendant une coupure ouvraient et refermaient trois
+  // sockets d'affilee en remettant le compte a rebours a zero a chaque fois, ce qui martele
+  // un serveur qui est justement en train de redemarrer.
+  if (socket && socket.readyState === 0 && !force) return;
+  if (socket && socket.readyState === 1 && !perimee() && !force) return;
+  causeCoupure = pourquoi;
+  echecs = 0;
+  arreterRebranche();
+  // Pas de compte a rebours : la tentative part maintenant. Sans cette remise a zero,
+  // l'echeance d'un report precedent serait encore affichee, et on lirait « reconnexion
+  // dans 12 s » sur une tentative deja en cours.
+  prochaineTentative = 0;
+  reconnexionPrevue = false;
+  direLiaison();
+  brancher();
+}
+
+// Une socket « ouverte » dont plus rien ne sort. Le serveur envoie un pouls toutes les 25 s :
+// passe 70 s sans rien, la liaison est morte meme si le navigateur ne l'a pas encore admis.
+function perimee() {
+  return dernierPouls > 0 && Date.now() - dernierPouls > 70000;
+}
+
+// Poser la question au serveur au lieu de croire le navigateur.
+//
+// Le defaut, exactement : on envoie un message, on verrouille son telephone, on revient. La
+// socket a ete tuee par le systeme, mais `readyState` vaut toujours OPEN — iOS ne previent
+// pas. La page se croit donc branchee, `send()` ne leve rien, le message part dans le vide,
+// et il faut quitter la conversation et y revenir pour que quoi que ce soit reparte. Regarder
+// `readyState` ne pouvait pas trouver ca : il ment. Une reponse, elle, ne ment pas.
+let sonde = null;
+// 2,5 s : un aller-retour local en prend trois centiemes, et meme un reseau mobile mediocre
+// reste tres en dessous. Au-dela, ce n'est pas de la lenteur, c'est une socket morte.
+let DELAI_SONDE = 2500;
+function sonder(pourquoi) {
+  // Deja fermee, ou muette depuis plus longtemps que le pouls du serveur ne l'autorise : pas
+  // la peine de demander, on sait. Rebrancher tout de suite vaut mieux que 2,5 s d'attente
+  // supplementaire au moment precis ou quelqu'un revient regarder son ecran.
+  if (!socket || socket.readyState !== 1 || perimee()) {
+    rebrancherMaintenant(pourquoi, true);
+    return;
+  }
+  const avant = dernierPouls;
+  try { socket.send(JSON.stringify({ cmd: "ping" })); }
+  catch (_) { rebrancherMaintenant(pourquoi, true); return; }
+  clearTimeout(sonde);
+  sonde = setTimeout(() => {
+    if (dernierPouls === avant) {
+      rebrancherMaintenant(pourquoi + " — le serveur n'a pas répondu à la vérification", true);
+    }
+  }, DELAI_SONDE);
+}
+
+if (typeof addEventListener === "function") {
+  // Le retour sur la page. C'est LE cas du telephone : l'onglet a ete gele, la socket coupee
+  // en silence, et sans ce gestionnaire la page attendait le prochain reveil de minuterie —
+  // qui, gelee elle aussi, pouvait ne jamais arriver. On ne se contente pas de regarder si
+  // elle est fermee : on VERIFIE qu'elle repond encore.
+  addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    sonder("retour sur la page après une mise en veille");
+  });
+  // Restauration depuis le cache arriere/avant : la page revient telle quelle, socket morte
+  // comprise, et aucun evenement de fermeture n'a ete delivre.
+  addEventListener("pageshow", e => {
+    if (e && e.persisted) rebrancherMaintenant("page restaurée depuis le cache du navigateur");
+  });
+  addEventListener("online", () => rebrancherMaintenant("le réseau est revenu"));
+  addEventListener("offline", () => { causeCoupure = "réseau perdu"; direLiaison(); });
+}
+
 function brancher() {
   // Fermer l'ancienne avant d'ouvrir : deux sockets vivantes recevaient les mêmes
   // événements, et la page les affichait deux fois.
@@ -3179,7 +3470,16 @@ function brancher() {
   // ferait disparaître le message sans rien dire.
   ws.onopen = () => {
     echecs = 0;
+    causeCoupure = "";
+    dernierPouls = Date.now();
+    arreterRebranche();
     reconnexionPrevue = false;
+    // La verite du travail en cours revient avec l'etat rejoue, juste apres. En attendant on
+    // leve le gel : si l'agent ne travaille plus, l'etat rejoue eteindra la pastille ; s'il
+    // travaille, le compteur repart d'un chiffre juste.
+    liaisonPerdue = false;
+    if (debutTravail != null && !minuteur) minuteur = setInterval(majTravail, 1000);
+    majTravail();
     // Le serveur ne publie l'état qu'au premier changement d'état de l'agent :
     // avant tout échange, la pastille restait sur « connexion… » alors que la
     // liaison était ouverte — le témoin mentait. Dès l'ouverture, on affiche « prêt » ;
@@ -3189,6 +3489,7 @@ function brancher() {
     // un mensonge — on l'a cru, et le premier message partait dans le vide. L'état réel
     // arrive en rejeu dès qu'il existe ; d'ici là, on dit ce qu'on sait.
     const et = document.getElementById("etat");
+    if (et) et.title = motDuServeur();
     if (et && !etatRecu) {
       et.textContent = "l'agent démarre…"; et.className = "e-initializing vif";
       clearTimeout(attenteAgent);
@@ -3206,32 +3507,90 @@ function brancher() {
   };
   ws.onmessage = m => {
     const d = JSON.parse(m.data);
+    // Tout ce qui arrive est un signe de vie, pouls ou pas : c'est cette date qui distingue
+    // une liaison silencieuse parce que rien ne se passe d'une liaison silencieuse parce
+    // qu'elle est morte.
+    dernierPouls = Date.now();
+    if (d.genre === "_pouls") { serveur = d; return; }
+    if (d.genre === "_bonjour") {
+      serveur = d;
+      // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
+      // « ça tourne alors que rien ne tourne ». L'historique renvoyé contient les lignes
+      // telles qu'elles ont été publiées : un vieux « voix » y rallume la pastille parole,
+      // et rien derrière ne l'éteint — l'état de l'agent, lui, est envoyé AVANT l'historique,
+      // donc il est déjà passé quand la ligne le rallume. Résultat : une session au repos
+      // affichait « parole » et faisait défiler les mots du bandeau, après CHAQUE
+      // reconnexion — donc souvent, sur un téléphone.
+      //
+      // Ici on sait ce que le serveur sait : s'il ne travaille pas et ne parle pas, rien ne
+      // peut être en cours, quoi qu'ait rallumé le rejeu. S'il travaille ou parle vraiment,
+      // on ne touche à rien : l'indicateur dit alors la vérité.
+      if (!d.travail && d.etat !== "speaking" && d.etat !== "thinking") {
+        toutClore("rien n'était en cours à la reconnexion");
+        // Le bouton « couper la lecture » pulse tant qu'une lecture est declaree en cours, et
+        // sa seule extinction est l'evenement de fin. Perdre la liaison PENDANT une lecture
+        // le laissait donc allume, a clignoter, sur une page ou plus personne ne parle — avec
+        // un bouton qui ne couperait rien si on le pressait.
+        if (lectureEnCours) { lectureEnCours = null; majBoutonsLecture(); }
+        if (enAttenteLecture.length) { enAttenteLecture = []; majEnAttente(); }
+      }
+      // Le bonjour arrive APRES tout le rejeu. Donc a cet instant precis, un message encore
+      // « en vol » n'a pas seulement perdu son accuse : il n'est jamais arrive — s'il etait
+      // passe, son echo serait dans l'historique qu'on vient de rejouer, et l'aurait retire.
+      // C'est le seul moment ou on peut le renvoyer sans risquer de le poster deux fois, et
+      // sans lui, le message tape juste avant une mise en veille etait simplement perdu.
+      const perdus = renvoyerEnVol();
+      if (perdus) noteBarre(`rebranché — ${perdus} message${perdus > 1 ? "s" : ""} renvoyé${perdus > 1 ? "s" : ""}`, true);
+      // Ce qu'on vient de retrouver, dit une fois. Le silence d'apres-reconnexion laissait
+      // croire que la page repartait de zero alors qu'elle rejouait cent lignes.
+      else if (d.rejoue) {
+        noteBarre(d.travail
+          ? `rebranché — ${d.rejoue} lignes retrouvées, un tour est en cours`
+          : `rebranché — ${d.rejoue} lignes retrouvées`);
+      }
+      return;
+    }
     // L'état arrive dans une enveloppe pour être distingué du flux, mais il traverse le même
     // routage : un second chemin aurait fini par diverger.
     if (d.genre === "_etat") { recevoir(d.evenement, true); return; }
     recevoir(d);
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     // Une socket périmée qui se referme après qu'une nouvelle est en place ne doit ni
     // relancer un branchement, ni faire clignoter l'état.
     if (socket !== ws) return;
     majEnvoyer();
     arreterCompte();
     toutClore("connexion perdue");
-    // Une coupure d'une seconde ne doit pas s'annoncer comme une panne. La page se
-    // rebranche toute seule en 1,2 s, et afficher « déconnecté » pendant ce temps donnait
-    // l'impression d'un bug là où il n'y avait qu'un aller-retour. « Déconnecté » est
-    // réservé au cas où la reconnexion échoue vraiment, plusieurs fois de suite.
-    echecs++;
-    const perdu = echecs >= 3;
-    const el = document.getElementById("etat");
-    el.textContent = perdu ? "déconnecté" : "reconnexion…";
-    el.className = "e-listening" + (perdu ? "" : " vif");
-    champ.placeholder = perdu
-      ? "déconnecté — l'agent ne tourne plus ?"
-      : "reconnexion…";
-    reconnexionPrevue = true;
-    setTimeout(() => { reconnexionPrevue = false; brancher(); }, 1200);
+    // Le compteur du tour s'arrete ici : il mesurait depuis l'horloge locale, donc il
+    // continuait de monter meme sur un agent mort. Le minuteur aussi — une page au repos
+    // n'a rien a faire tourner.
+    liaisonPerdue = true;
+    if (minuteur) { clearInterval(minuteur); minuteur = null; }
+    majTravail();
+    // La page était-elle en arrière-plan ? Alors ce n'est pas une panne, c'est le système qui
+    // a rangé l'onglet. Le compter comme un échec faisait afficher « déconnecté » au retour,
+    // avec un délai de reprise de plus en plus long, pour un réseau parfaitement sain.
+    const enVeille = document.visibilityState === "hidden";
+    const code = ev && ev.code ? ev.code : 0;
+    causeCoupure = enVeille
+      ? "liaison fermée pendant que la page était en arrière-plan"
+      : ((ev && ev.reason) || ({
+          1001: "le serveur ou l'onglet s'est retiré",
+          1005: "fermée sans motif",
+          1006: "coupure réseau — aucune fermeture propre",
+          1011: "erreur interne du serveur",
+          1012: "le serveur redémarre",
+        }[code] || `fermée (code ${code || "?"})`));
+    if (!enVeille) echecs++;
+    if (enVeille) {
+      // Inutile de rebrancher maintenant : les minuteries d'un onglet caché sont bridées, et
+      // le retour sur la page le fera immédiatement. On garde juste l'état juste.
+      reconnexionPrevue = true;
+      direLiaison();
+      return;
+    }
+    programmerRebranche();
   };
 }
 // Sur téléphone, l'en-tête complet prend un quart de l'écran. Dès qu'on lit la conversation,
