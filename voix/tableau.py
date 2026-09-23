@@ -13,6 +13,7 @@ WebSocket carrying a JSON event stream. No build step, no CDN, nothing leaves th
 import asyncio
 import json
 import logging
+import pathlib
 import os
 import time
 import webbrowser
@@ -270,6 +271,10 @@ class Tableau:
             # message n'a personne pour le recevoir — c'est ce qu'un lanceur doit attendre.
             "pret": self._on_commande is not None,
             "en_attente": len(self._commandes_en_attente),
+            # Combien de pages regardent. Un superviseur qui ferme les sessions oisives
+            # ne peut pas distinguer, sans cela, une session oubliee d'une session qu'on
+            # est en train de LIRE : les deux ne publient aucun evenement.
+            "clients": len(self.clients),
             "depuis": round(time.monotonic() - self._t0, 1),
             "inactif": round(max(0.0, time.monotonic() - self._t0 - dernier), 1),
             "evenements": self._n,
@@ -389,10 +394,17 @@ class Tableau:
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
-        # Un agent laisse tourne garde le port : on le dit et on prend le suivant, plutot
+        # Un agent laisse tourne garde le port : on le dit et on prend un autre, plutot
         # que de faire echouer toute la session sur un « address already in use ».
+        #
+        # Le repli saute CENT ports, et ce n'est pas un detail : les projets recoivent des
+        # ports consecutifs a partir de 7800. Prendre « le suivant » revenait a prendre celui
+        # du projet d'a cote — /talk/echec/ affichait alors la conversation de claude-talk,
+        # travaillant dans le dossier de claude-talk, sous le nom d'echec, et le superviseur
+        # y croyait. Cent plus loin, il n'y a personne.
         demande = self.port
-        for essai in range(demande, demande + 10):
+        essais = [demande] + [demande + 100 + n for n in range(10)]
+        for essai in essais:
             try:
                 await web.TCPSite(self._runner, os.environ.get("VOIX_UI_HOTE", "127.0.0.1"), essai).start()
                 self.port = essai
@@ -401,8 +413,16 @@ class Tableau:
                 continue
         else:
             raise RuntimeError(
-                f"aucun port libre entre {demande} et {demande + 9} — un agent est-il resté "
+                f"aucun port libre parmi {essais} — un agent est-il resté "
                 f"lancé ? `pkill -f voix/agent.py`")
+        # Le port REELLEMENT retenu, ecrit par celui qui le connait. Le lanceur ecrivait
+        # celui qu'il avait demande : au moindre repli, le superviseur proxyfiait a cote.
+        fichier_port = os.environ.get("VOIX_UI_PORTFILE")
+        if fichier_port:
+            try:
+                pathlib.Path(fichier_port).write_text(f"{self.port}\n", encoding="utf-8")
+            except OSError as erreur:
+                print(f"  port non ecrit dans {fichier_port} : {erreur}")
         if self.port != demande:
             log_defaut = f"port {demande} occupé, tableau de bord sur {self.port}"
             print(f"  ATTENTION : {log_defaut}")
