@@ -15,6 +15,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 os.environ.setdefault("VOIX_WORKER_MODEL", "claude-haiku-4-5")
 os.environ.setdefault("VOIX_WORKER_EFFORT", "low")
 os.environ.setdefault("VOIX_WORKDIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Conversation NEUVE, obligatoirement. Le worker reprend par defaut la derniere
+# conversation du dossier de travail, et ce dossier est le depot lui-meme : au second
+# lancement, Claude retrouvait ses propres reponses de la veille dans le contexte et
+# repondait de memoire sans rouvrir un seul outil -- jusqu'a affirmer que le fichier
+# existait deja et qu'il l'avait cree, alors que le test venait de l'effacer. La suite
+# passait donc au premier lancement dans un dossier vierge et echouait a tous les
+# suivants, ce qui se lit exactement comme une regression du code.
+os.environ.setdefault("VOIX_NOUVELLE", "1")
 
 from livekit.agents import AgentSession  # noqa: E402
 
