@@ -269,8 +269,59 @@ async def le_contexte_du_job_est_rejoue():
          "et Deepgram a bien repondu (un la de 440 Hz : rien a transcrire, et c'est normal)")
 
 
+async def la_route_parler():
+    """L'autre sens : le PC synthetise, le telephone ecoute.
+
+    Ce qui est verifie sans reseau : le refus propre quand il n'y a rien a dire, et surtout
+    l'echappement XML. Le SSML est du XML : une reponse qui contient « a < b && c » casse le
+    document et rend la page muette — silencieusement, ce qui est le pire cas. Avec une cle,
+    on parle a Azure pour de vrai et on verifie le MP3 et le cache."""
+    print("\n=== /parler : la voix du PC, servie au telephone ===")
+    import config
+    t = tab.Tableau(port=7898, ouvrir=False)
+    url = (await t.demarrer()).rstrip("/")
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url + "/parler", json={"texte": "   "}) as r:
+                dire(r.status == 400, f"rien a dire : refuse proprement ({r.status})")
+            async with s.post(url + "/parler", data=b"pas du json") as r:
+                dire(r.status == 400, f"corps illisible : refuse proprement ({r.status})")
+
+            if not config.AZURE_KEY:
+                async with s.post(url + "/parler", json={"texte": "bonjour"}) as r:
+                    dire(r.status == 503, f"sans cle Azure : 503, la page se rabattra ({r.status})")
+                print("  (pas de cle Azure ici : la synthese elle-meme n'est pas verifiee)")
+                return
+
+            # Le texte qui casse le SSML. S'il passe, l'echappement tient.
+            piege = 'si a < b && c > d, alors "go" & <fin>'
+            async with s.post(url + "/parler", json={"texte": piege}) as r:
+                corps = await r.read()
+                dire(r.status == 200 and r.headers.get("Content-Type", "").startswith("audio/"),
+                     f"un texte plein de chevrons et d'esperluettes passe ({r.status})")
+                dire(len(corps) > 1000, f"et rend un vrai MP3 ({len(corps)} octets)")
+
+            # Le cache : relire ne doit pas refacturer.
+            phrase = "La barre du bas tient desormais sur une ligne."
+            async with s.post(url + "/parler", json={"texte": phrase}) as r:
+                premier = await r.read()
+                dire(r.headers.get("X-Cache") == "non", "la premiere synthese va chez Azure")
+            async with s.post(url + "/parler", json={"texte": phrase}) as r:
+                second = await r.read()
+                dire(r.headers.get("X-Cache") == "oui", "la seconde sort du cache")
+                dire(premier == second, "et rend exactement le meme enregistrement")
+            dire(r.headers.get("X-Voix") == "azure", "la reponse dit quelle voix a parle")
+    finally:
+        fin = getattr(t, "arreter", None) or getattr(t, "stop", None)
+        if fin:
+            await fin()
+        elif getattr(t, "_runner", None):
+            await t._runner.cleanup()
+
+
 async def main():
     await le_decodeur_normalise()
+    await la_route_parler()
     await la_route_audio()
     await le_contexte_du_job_est_rejoue()
     un_tour_venu_du_telephone()

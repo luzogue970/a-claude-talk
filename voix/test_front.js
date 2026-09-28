@@ -276,10 +276,39 @@ globalThis.FormData = function () { this.champs = []; this.append = (n, v, f) =>
 // fetch : la page envoie, le test decide de la reponse. La liste requetes garde chaque appel.
 globalThis.requetes = [];
 globalThis.reponseAudio = { ok: true, status: 200, corps: { texte: "ok" } };
+// La synthese Azure, servie par /parler. Le drapeau azureMarche a false simule l absence de
+// cle ou un service injoignable : la page doit se rabattre sur la voix du navigateur.
+globalThis.azureMarche = true;
 globalThis.fetch = (url, opts) => {
   globalThis.requetes.push({ url, opts });
+  // endsWith et pas une expression reguliere : ce stub vit dans un template literal, ou
+  // chaque antislash est mange une fois de plus — /\/parler$/ y devenait un commentaire.
+  if (String(url).endsWith("/parler")) {
+    if (!globalThis.azureMarche) {
+      return Promise.resolve({ ok: false, status: 503,
+                               json: () => Promise.resolve({ erreur: "pas de clé Azure" }) });
+    }
+    return Promise.resolve({ ok: true, status: 200,
+                             blob: () => Promise.resolve({ size: 9792, type: "audio/mpeg" }) });
+  }
   const r = globalThis.reponseAudio;
   return Promise.resolve({ ok: r.ok, status: r.status, json: () => Promise.resolve(r.corps) });
+};
+globalThis.URL = { createObjectURL: () => "blob:faux", revokeObjectURL: () => {} };
+// L element audio. Il retient ce qu on lui donne a jouer — c est la seule chose a verifier :
+// que le son vient bien d Azure et pas de la synthese du navigateur.
+globalThis.joues = [];
+globalThis.Audio = function (src) {
+  const self = this;
+  this.src = src;
+  this.ended = false;
+  this.pause = () => {};
+  this.play = () => {
+    globalThis.joues.push(src);
+    // Joue puis se termine, comme un vrai element une fois le MP3 fini.
+    setTimeout(() => { self.ended = true; if (self.onended) self.onended(); }, 0);
+    return Promise.resolve();
+  };
 };
 // localStorage : ce qui survit a la page. Un simple dictionnaire suffit.
 globalThis.__stock = {};

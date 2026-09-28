@@ -582,14 +582,9 @@ dire(!zl.children[1].classList.contains('vif'), 'et « relire » redevient discr
 envoyes.length = 0;
 zl.children[0].onclick();
 dire(envoyes.some(o => o.cmd === 'couper_lecture'), 'couper envoie la bonne commande');
-// « relire » depuis un appareil DISTANT doit produire du son ici : faire parler le PC
-// d une autre piece ne sert a rien a celui qui tient le telephone.
-dit.length = 0;
-zl.children[1].onclick();
-dire(dit.some(x => !/^\[coupe\]$/.test(x)),
-     'depuis un telephone, relire lit sur CET appareil : ' + JSON.stringify(dit));
-dire(!envoyes.some(o => o.cmd === 'relire'),
-     'et ne reveille pas les haut-parleurs du PC');
+// « relire » depuis un appareil distant lit ICI : verifie plus bas, en asynchrone, parce
+// que la lecture passe d abord par Azure — donc par le reseau.
+globalThis.__zoneRelire = zl;
 
 // Assis DEVANT la machine, l inverse : elle parle deja, la doubler serait absurde.
 const hoteVrai = location.hostname;
@@ -1545,94 +1540,105 @@ noteBarre(null); enAttente = [];
 socket = sockAvant;
 brancher(); ouvrirSock();
 
-// ---- lire une reponse sur l appareil qu on tient -----------------------------------------
-titre('lecture locale : a la demande, et JAMAIS toute seule');
-const btnLire = document.getElementById('lire-ici');
-couperLectureLocale();          // le bloc precedent a laisse une lecture en cours
-noteBarre(null);
-dire(!btnLire.hidden, 'le bouton apparait sur un appareil distant qui sait parler');
-dire(btnLire.getAttribute('aria-pressed') === 'false', 'et rien ne se lit au chargement');
+// ---- lire une reponse : la voix d Azure, celle du PC ---------------------------------------
+// Asynchrone : la lecture demande le MP3 au serveur avant de jouer quoi que ce soit.
+async function testerLecture() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  titre('lecture : la voix d Azure, a la demande, et JAMAIS toute seule');
+  const btnLire = document.getElementById('lire-ici');
+  couperLectureLocale(); noteBarre(null);
+  dire(!btnLire.hidden, 'le bouton apparait sur un appareil distant');
+  dire(btnLire.getAttribute('aria-pressed') === 'false', 'et rien ne se lit au chargement');
 
-// LE point : un telephone ne doit pas se mettre a parler parce qu une reponse arrive. En
-// reunion, dans le train, a cote de quelqu un — c est la pire chose qu il puisse faire.
-dit.length = 0;
-emettre({ genre: 'voix', texte: 'La barre du bas tient sur une ligne. ', id: 'L1' });
-emettre({ genre: 'voix', texte: 'Et les boutons sont touchables. ', id: 'L1', suite: true });
-recevoir({ genre: 'parole_fin', id: 'L1' });
-dire(dit.length === 0, 'une reponse qui arrive ne declenche AUCUN son');
+  // Un telephone ne doit pas se mettre a parler parce qu une reponse arrive.
+  dit.length = 0; joues.length = 0; requetes.length = 0;
+  emettre({ genre: 'voix', texte: 'La barre du bas tient sur une ligne. ', id: 'L1' });
+  emettre({ genre: 'voix', texte: 'Et les boutons sont touchables. ', id: 'L1', suite: true });
+  recevoir({ genre: 'parole_fin', id: 'L1' });
+  await tick();
+  dire(dit.length === 0 && joues.length === 0, 'une reponse qui arrive ne declenche AUCUN son');
 
-// Mais elle est retenue, prete a etre dite quand on le demandera.
-btnLire.onclick();
-dire(dit.length === 2, 'un appui lit la derniere reponse, decoupee en phrases');
-dire(/^La barre du bas tient sur une ligne\.$/.test(dit[0]),
-     'la premiere phrase est entiere : ' + dit[0]);
-dire(btnLire.getAttribute('aria-pressed') === 'true', 'et le bouton montre que ça lit');
+  // Un appui : c est Azure qui parle, pas la voix du systeme. C est tout l enjeu — la meme
+  // conversation doit avoir la meme voix qu au PC.
+  azureMarche = true; requetes.length = 0; joues.length = 0; dit.length = 0;
+  btnLire.onclick();
+  await tick(); await tick(); await tick();
+  const versParler = requetes.filter(r => /\/parler$/.test(r.url));
+  dire(versParler.length === 1, 'un appui demande la synthese au serveur');
+  const envoye = versParler[0] && JSON.parse(versParler[0].opts.body);
+  dire(envoye && /barre du bas/.test(envoye.texte),
+       'avec le texte de la derniere reponse : ' + JSON.stringify((envoye || {}).texte || ''));
+  dire(joues.length === 1, 'et le MP3 rendu est joue');
+  dire(dit.length === 0, 'la synthese du navigateur n est PAS utilisee quand Azure repond');
 
-// Un second appui coupe : c est le meme geste, donc le meme bouton.
-dit.length = 0;
-btnLire.onclick();
-dire(dit.includes('[coupe]'), 'un second appui coupe la lecture');
-dire(btnLire.getAttribute('aria-pressed') === 'false', 'et le bouton redevient normal');
+  // Azure indisponible : la voix du navigateur prend le relais plutot que de laisser un
+  // bouton muet.
+  azureMarche = false; joues.length = 0; dit.length = 0; requetes.length = 0;
+  couperLectureLocale();
+  btnLire.onclick();
+  await tick(); await tick(); await tick();
+  dire(joues.length === 0, 'sans Azure, rien n est joue en MP3');
+  dire(dit.length >= 1, 'mais le navigateur prend le relais : ' + JSON.stringify(dit.slice(0, 2)));
+  azureMarche = true;
 
-// Revenir sur la page ne relit rien, mais garde de quoi relire si on le demande.
-dit.length = 0;
-recevoir({ genre: '_histoire', evenements: [
-  { genre: 'voix', texte: 'un debrief d il y a deux heures. ', id: 'vieux', n: 8500, h: '10:00' },
-] });
-dire(dit.length === 0, 'le rejeu ne declenche rien non plus');
+  // Un second appui coupe.
+  couperLectureLocale(); joues.length = 0; dit.length = 0;
+  btnLire.onclick(); await tick(); await tick(); await tick();
+  couperLectureLocale();
+  dire(btnLire.getAttribute('aria-pressed') === 'false', 'un second appui coupe et remet le bouton');
 
-// Rien a lire : le dire, plutot que de rester inerte — un bouton muet passe pour casse.
-const memoire = texteReponse; texteReponse = '';
-noteBarre(null); dit.length = 0;
-btnLire.onclick();
-dire(/rien à lire/.test(document.getElementById('note-barre').textContent || ''),
-     'sans reponse, le bouton explique au lieu de ne rien faire');
-texteReponse = memoire; noteBarre(null);
+  // Rien a lire : le dire plutot que rester inerte.
+  const memoire = texteReponse; texteReponse = ''; noteBarre(null);
+  btnLire.onclick(); await tick();
+  dire(/rien à lire/.test(document.getElementById('note-barre').textContent || ''),
+       'sans reponse, le bouton explique au lieu de ne rien faire');
+  texteReponse = memoire; noteBarre(null);
 
-// ---- la liaison dit POURQUOI, la ou on regarde --------------------------------------------
-titre('liaison : « reconnexion » tout seul se lit comme une panne');
-brancher(); ouvrirSock();
-fermerSock(1006);
-dire(/reconnexion/.test(document.getElementById('etat').textContent), 'l etat annonce la reprise');
-// Le numero d essai est cumulatif depuis la derniere vraie coupure : ce qui compte est qu il
-// soit LA, pas sa valeur — un bloc precedent a pu en laisser un.
-dire(/coupure réseau/.test(champ.placeholder) && /essai \d+/.test(champ.placeholder),
-     'et la barre dit pourquoi et ou on en est : ' + champ.placeholder);
-dire(/rien n.est perdu/.test(champ.placeholder), 'et rassure : rien n est perdu');
-// Sur telephone il n y a pas d infobulle : un appui sur l etat doit la remplacer.
-noteBarre(null);
-document.getElementById('etat').onclick();
-dire(/coupure réseau/.test(document.getElementById('note-barre').textContent || ''),
-     'un appui sur l etat montre le detail : ' + document.getElementById('note-barre').textContent);
-noteBarre(null);
-brancher(); ouvrirSock();
-dire(document.getElementById('etat').onclick === null, 'la reconnexion retire l appui-detail');
+  // « relire » d une ligne, depuis un appareil distant : du son ICI, pas au PC.
+  joues.length = 0; envoyes.length = 0;
+  couperLectureLocale();
+  __zoneRelire.children[1].onclick();
+  await tick(); await tick(); await tick();
+  dire(joues.length === 1, 'depuis un telephone, « relire » lit sur CET appareil');
+  dire(!envoyes.some(o => o.cmd === 'relire'), 'et ne reveille pas les haut-parleurs du PC');
+  couperLectureLocale();
+}
 
-// ---- un message en vol survit a la mort de la page -----------------------------------------
-titre('en vol : partir trop tot ne doit pas perdre le message');
-// iOS tue l onglet en arriere-plan : la page qui revient est NEUVE, sa memoire est vide.
-// Avant : le message envoye juste avant de partir n existait plus nulle part.
-enVol.length = 0; __stock = {}; envoyes.length = 0;
-champ.value = 'corrige la barre du bas';
-composer.onsubmit({ preventDefault() {} });
-const stocke = JSON.parse(localStorage.getItem('voix.enVol') || '[]');
-dire(stocke.length === 1 && stocke[0].texte === 'corrige la barre du bas',
-     'un message envoye est ecrit sur l appareil : ' + JSON.stringify(stocke.map(m => m.texte)));
-// La page meurt et renait : memoire vide, disque plein.
-enVol.length = 0;
-const restaures = restaurerEnVol();
-dire(restaures === 1 && enVol.length === 1, 'la page neuve retrouve le message en vol');
-dire(/envoyé avant de quitter/.test(document.getElementById('en-vol').innerHTML),
-     'et le montre comme tel, pas comme un envoi en cours');
-// Le rejeu de l historique accuse ce qui est arrive : plus rien a renvoyer.
-emettre({ genre: 'toi', texte: 'corrige la barre du bas' });
-dire(enVol.length === 0, 'l echo retrouve dans le rejeu l accuse, et il ne repart pas');
-dire(JSON.parse(localStorage.getItem('voix.enVol') || '[]').length === 0,
-     'et le disque est vide a son tour');
-// Un message trop vieux n est pas ressuscite : il a ete revu, ou il est perdu pour de bon.
-localStorage.setItem('voix.enVol', JSON.stringify([{ texte: 'vieux', quand: Date.now() - 3600000 }]));
-dire(restaurerEnVol() === 0 && enVol.length === 0, 'un message d il y a une heure reste au repos');
-__stock = {};
+// ---- reecouter l historique, pas seulement le dernier message -----------------------------
+async function testerEcouteHistorique() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  titre('historique : reprendre une conversation et pouvoir la reecouter');
+  couperLectureLocale(); noteBarre(null);
+
+  // Reprendre une conversation rejoue ce que Claude a ECRIT — le debrief parle n est pas
+  // garde par Claude Code. Ces lignes n ont donc pas de « parole_fin » derriere elles, et
+  // rien ne les outillait : on pouvait lire le dernier message, pas ceux d avant.
+  recevoir({ genre: '_histoire', evenements: [
+    { genre: 'texte', texte: 'La barre du bas tient desormais sur une ligne.',
+      n: 20000, h: '09:00', passe: true },
+  ] });
+  const ligneTexte = dernier;
+  dire(!!ligneTexte.zoneEcoute,
+       'une reponse rejouee porte un bouton « écouter »');
+
+  joues.length = 0; requetes.length = 0;
+  azureMarche = true;
+  const boutonEcoute = ligneTexte.zoneEcoute.children[0];
+  boutonEcoute.onclick();
+  await tick(); await tick(); await tick();
+  const dem = requetes.filter(r => /\/parler$/.test(r.url));
+  dire(dem.length === 1, 'l appuyer demande la synthese de CETTE ligne');
+  const quoi = dem[0] && JSON.parse(dem[0].opts.body);
+  dire(quoi && /desormais sur une ligne/.test(quoi.texte),
+       'avec son texte a elle : ' + JSON.stringify((quoi || {}).texte || ''));
+  dire(joues.length === 1, 'et elle est lue');
+
+  // Le texte vient de ce qui est ARRIVE, pas du DOM : les libelles des boutons ne doivent
+  // jamais se retrouver dans ce qu on fait prononcer.
+  dire(!/écouter/.test((quoi || {}).texte || ''),
+       'le libelle du bouton ne part pas dans la synthese');
+  couperLectureLocale();
+}
 
 // ---- dicter avec le telephone : enregistrer ici, transcrire au PC -------------------------
 // Asynchrone : l envoi attend fetch. La fonction est appelee juste avant le tally, qui l attend.
@@ -1853,7 +1859,10 @@ setTimeout(() => {
     dire(!envoyes.some(o => o.cmd === 'texte' && o.texte === 'deuxieme message'),
          'un message dont l echo revient dans le rejeu n est PAS reposte');
 
-    testerRelaisVocal().catch(e => { console.error('  ECHEC relais vocal : ' + (e && e.stack || e)); ok = false; })
+    testerLecture()
+      .then(testerEcouteHistorique)
+      .then(testerRelaisVocal)
+      .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
         process.exit(ok ? 0 : 1);

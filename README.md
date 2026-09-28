@@ -374,6 +374,30 @@ y prennent leur session HTTP, et une requête arrivant par la route web n'en hé
 forcément. Vérifié contre Deepgram dans le pire cas — serveur démarré depuis un contexte
 vide — le piège est réel hors contexte et disparaît dedans.
 
+**La voix du téléphone est celle du PC.** La synthèse intégrée au navigateur était gratuite
+et déjà là, mais ce n'était pas la même voix : sur le PC Claude parle avec une voix neurale
+française, sur le téléphone il prenait celle du système, et l'écart s'entend immédiatement —
+c'est la même conversation, ce devrait être la même voix. Le serveur expose donc `/parler`,
+qui synthétise avec **Azure** et rend du MP3, que tout navigateur joue nativement et qui pèse
+dix fois moins qu'un WAV sur un réseau mobile. L'API REST plutôt que le plugin LiveKit :
+celui-ci prend sa session HTTP dans le contexte du job — il refuse net en dehors — et rend des
+trames PCM qu'il faudrait emballer. La synthèse du navigateur reste en **repli** : pas de clé,
+Azure injoignable, quota épuisé — une voix passable vaut mieux qu'un bouton qui ne fait rien.
+
+Deux détails qui comptent. Le SSML est du XML, donc une réponse contenant `a < b && c` casse
+le document et rend la page muette, silencieusement : le texte est échappé. Et les
+enregistrements sont **mis en cache** en mémoire, bornés à quarante : relire une réponse est
+un geste qu'on refait, et chaque relecture coûte du crédit Azure.
+
+**Réécouter l'historique, pas seulement le dernier message.** Reprendre une conversation
+rejoue ce que Claude a **écrit** — le débrief parlé n'est pas gardé par Claude Code, seul son
+texte l'est. Ces lignes n'ont donc pas de `parole_fin` derrière elles, et rien ne les
+outillait : on pouvait écouter le dernier message, pas ceux d'avant, ce qui est précisément
+l'inverse du besoin quand on revient sur une conversation qu'on n'a pas fini de lire. Chaque
+ligne produite par Claude porte maintenant un bouton **« écouter »**. Le texte lu est celui
+qui est *arrivé*, tenu à part du DOM : le relire à l'écran obligerait à retrancher les
+libellés des boutons, et un libellé qui change casserait la lecture en silence.
+
 **« Reconnexion » tout seul se lit comme une panne.** En haut à gauche, sans autre mot, ça
 ressemble à « quelque chose s'est cassé côté serveur et j'ai perdu l'état ». Neuf fois sur dix
 c'est le téléphone qui a mis la page en veille, l'agent n'a rien vu, et rien n'est perdu. La

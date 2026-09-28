@@ -13,6 +13,7 @@ WebSocket carrying a JSON event stream. No build step, no CDN, nothing leaves th
 import asyncio
 import json
 import logging
+import hashlib
 import pathlib
 import os
 import re
@@ -20,11 +21,18 @@ import shutil
 import tempfile
 import time
 import webbrowser
-from collections import deque
+from collections import OrderedDict, deque
+from xml.sax.saxutils import escape as xml_escape
 from pathlib import Path
 from datetime import datetime
 
+import aiohttp
 from aiohttp import WSMsgType, web
+
+# La voix d'Azure se lit dans la configuration, comme partout ailleurs. Aucun cycle : config
+# ne connait pas ce module, et c'est lui qui tient la cle, la region et le nom de la voix —
+# les recopier ici les ferait diverger au premier reglage.
+import config
 
 log = logging.getLogger("voix.tableau")
 
@@ -94,6 +102,9 @@ class Tableau:
         # de la session — panneau de configuration compris.
         self._n = 0
         self._images = 0
+        # Les enregistrements deja synthetises, du plus vieux au plus recent. Relire une
+        # reponse est un geste qu'on refait, et chaque relecture coute du credit Azure.
+        self._voix_cache: "OrderedDict[str, bytes]" = OrderedDict()
         # L'ETAT, garde a part du flux. Un etat n'est pas un evenement : « quels modeles
         # existent » reste vrai tant que personne ne le change, alors qu'« un outil a demarre »
         # appartient a un instant. Les melanger avait une consequence precise et mesuree : ces
@@ -332,6 +343,80 @@ class Tableau:
             return web.json_response(resultat, status=422 if resultat.get("erreur") else 200)
         return web.json_response({"texte": str(resultat or ""), "secondes": round(secondes, 1)})
 
+    async def _parler(self, requete):
+        """Synthetiser un texte avec la voix d'Azure, et le rendre en MP3.
+
+        Pourquoi pas la synthese du navigateur, qui etait gratuite et deja la : parce qu'elle
+        n'est pas la meme voix. Sur le PC, Claude parle avec une voix neurale francaise ;
+        sur le telephone il prenait celle du systeme, et l'ecart s'entend immediatement —
+        c'est la meme conversation, ce devrait etre la meme voix.
+        Elle reste en repli quand Azure ne repond pas : une voix passable vaut mieux qu'un
+        bouton qui ne fait rien.
+
+        L'API REST plutot que le plugin LiveKit, pour deux raisons. Le plugin prend sa session
+        HTTP dans le contexte du job — verifie, il refuse net en dehors — et il rend des trames
+        PCM qu'il faudrait emballer. L'API REST rend du MP3, que tout navigateur joue nativement
+        et qui pese dix fois moins sur un reseau mobile.
+        """
+        MAX = 6000        # une reponse parlee fait quelques centaines de caracteres
+        if not config.AZURE_KEY:
+            return web.json_response(
+                {"erreur": "pas de clé Azure : la voix du navigateur prend le relais"}, status=503)
+        try:
+            donnees = await requete.json()
+        except Exception:
+            return web.json_response({"erreur": "JSON attendu"}, status=400)
+        texte = str((donnees or {}).get("texte") or "").strip()
+        if not texte:
+            return web.json_response({"erreur": "rien à dire"}, status=400)
+        if len(texte) > MAX:
+            texte = texte[:MAX]
+
+        # Relire deux fois la meme reponse ne doit pas la facturer deux fois. Le cache est
+        # borne et tenu en memoire : ces enregistrements ne survivent pas a la session, et
+        # les ecrire sur le disque ferait tenir une conversation entiere en clair dans un
+        # cache qu'on oublierait de vider.
+        cle = hashlib.sha256(f"{config.AZURE_VOICE}\n{texte}".encode("utf-8")).hexdigest()
+        if (deja := self._voix_cache.get(cle)) is not None:
+            self._voix_cache.move_to_end(cle)
+            return web.Response(body=deja, content_type="audio/mpeg",
+                                headers={"X-Voix": "azure", "X-Cache": "oui"})
+
+        url = f"https://{config.AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+        # `escape` et pas une simple concatenation : une reponse contient des esperluettes et
+        # des chevrons — « a < b && c » suffit a casser le SSML, donc a rendre la page muette.
+        ssml = (f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+                f'xml:lang="{xml_escape(config.LANGUAGE)}">'
+                f'<voice name="{xml_escape(config.AZURE_VOICE)}">{xml_escape(texte)}</voice>'
+                f'</speak>')
+        entetes = {"Ocp-Apim-Subscription-Key": config.AZURE_KEY,
+                   "Content-Type": "application/ssml+xml",
+                   # 24 kHz mono : la difference avec du 48 ne s'entend pas sur un telephone,
+                   # et pese le double sur un reseau mobile.
+                   "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                   "User-Agent": "claude-talk"}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=ssml.encode("utf-8"), headers=entetes,
+                                        timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    corps = await r.read()
+                    if r.status != 200:
+                        detail = corps[:200].decode("utf-8", "replace")
+                        log.warning("Azure a refuse la synthese (%s) : %s", r.status, detail)
+                        return web.json_response(
+                            {"erreur": f"Azure a refusé la synthèse ({r.status})"}, status=502)
+        except asyncio.TimeoutError:
+            return web.json_response({"erreur": "Azure n'a pas répondu à temps"}, status=504)
+        except Exception as exc:
+            log.warning("synthese Azure indisponible : %s", exc)
+            return web.json_response({"erreur": "Azure injoignable"}, status=502)
+
+        self._voix_cache[cle] = corps
+        while len(self._voix_cache) > 40:
+            self._voix_cache.popitem(last=False)
+        return web.Response(body=corps, content_type="audio/mpeg",
+                            headers={"X-Voix": "azure", "X-Cache": "non"})
+
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
 
@@ -497,6 +582,7 @@ class Tableau:
         app.router.add_get("/etat.json", self._etat)
         app.router.add_post("/image", self._image)
         app.router.add_post("/audio", self._audio)
+        app.router.add_post("/parler", self._parler)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
@@ -2098,6 +2184,15 @@ function ajouter(e) {
 
   // Les tours rejoues ne captent pas la mesure de fenetre : elle appartient a un tour vif.
   if (e.genre === "voix" && e.id && dernier) lignesVoix.set(e.id, dernier);
+  // Ce que Claude a produit, et qu'on doit pouvoir reecouter : ce qu'il a DIT (« voix ») et,
+  // pour une conversation reprise, ce qu'il a ECRIT (« texte ») — c'est tout ce que Claude
+  // Code garde d'un tour passe.
+  if ((e.genre === "voix" || e.genre === "texte") && dernier) {
+    dernier.texteBrut = (dernier.texteBrut || "") + (e.texte || "");
+    // Sur une ligne « voix » en direct, « relire » arrive avec parole_fin et fait deja le
+    // travail ; on n'ajoute « écouter » que la ou rien ne viendra.
+    if (e.genre === "texte" || e.passe || enRejeu) outillerEcoute(dernier, e);
+  }
   if (e.genre === "tour" && !e.passe) ligneTour = dernier;
   if (e.genre === "effort" && e.cle) selEffort.value = e.cle;
   if (e.genre === "outil" && !e.passe) actions++;
@@ -3585,6 +3680,47 @@ function majPupitre(e) {
 // dernière n'est pas relire celle-ci.
 const lignesVoix = new Map();   // id de réponse -> sa ligne dans le flux
 
+// Le texte d'une ligne, tel qu'il est arrive — pas tel qu'il est affiche. Le relire dans le
+// DOM obligerait a retrancher les boutons « couper », « relire » et « écouter » que
+// l'outillage y ajoute : on dependrait de la mise en forme pour recuperer du texte qu'on
+// avait deja en main, et un libelle qui change casserait la lecture en silence.
+function texteDeLigne(ligne) {
+  if (!ligne) return "";
+  if (typeof ligne.texteBrut === "string") return ligne.texteBrut.trim();
+  const corps = ligne.querySelector?.(".corps");
+  return ((corps && corps.textContent) || "")
+    .replace(/\s*(couper|relire|écouter)\s*/g, " ").trim();
+}
+
+// Écouter CETTE réponse, sur cet appareil. Le bouton vit sur chaque ligne que Claude a
+// produite, y compris celles rejouees en reprenant une conversation : c'est justement la
+// qu'on veut pouvoir reecouter, puisqu'on revient sur quelque chose qu'on n'a pas fini de
+// lire. Les lignes du rejeu n'ont pas de « parole_fin » derriere elles — le debrief parle
+// n'est pas garde par Claude Code, seul son texte l'est — donc rien ne les outillait.
+function outillerEcoute(ligne, e) {
+  if (!ligne || ligne.dejaEcoute || !lireDeCeCote()) return;
+  const corps = ligne.querySelector?.(".corps");
+  if (!corps) return;
+  ligne.dejaEcoute = true;
+  const zone = document.createElement("span");
+  zone.className = "lecture";
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = "écouter";
+  b.title = "lire cette réponse sur cet appareil";
+  b.onclick = () => {
+    const t = texteDeLigne(ligne);
+    if (!t) { noteBarre("rien à lire dans cette ligne"); return; }
+    couperLectureLocale();
+    lectureLocale = true;
+    majBoutonLecture();
+    lireTexte(t).then(bon => { if (!bon) couperLectureLocale(); });
+  };
+  zone.appendChild(b);
+  corps.appendChild(zone);
+  ligne.zoneEcoute = zone;
+}
+
 function outillerParole(e) {
   const ligne = lignesVoix.get(e.id);
   if (!ligne || ligne.dejaOutille) return;
@@ -3608,8 +3744,14 @@ function outillerParole(e) {
     // Quand cet appareil lit lui-meme, « relire » ne doit pas reveiller les haut-parleurs du
     // PC — souvent dans une autre piece, et parfois devant quelqu'un d'autre.
     if (lireDeCeCote()) {
-      const t = (corps.textContent || "").replace(/\s*(couper|relire)\s*$/g, "").trim();
-      if (t) { couperLectureLocale(); lectureLocale = true; majBoutonLecture(); lireTexte(t); return; }
+      const t = texteDeLigne(ligne);
+      if (t) {
+        couperLectureLocale();
+        lectureLocale = true;
+        majBoutonLecture();
+        lireTexte(t).then(bon => { if (!bon) couperLectureLocale(); });
+        return;
+      }
     }
     envoyerCmd({ cmd: "relire", id: e.id });
   };
@@ -3683,6 +3825,47 @@ function decouperPhrases(texte) {
   return sorties.filter(Boolean);
 }
 
+// La voix d'Azure, celle du PC, servie par le serveur en MP3. `speechSynthesis` reste en
+// repli : pas de cle, Azure injoignable, quota epuise — une voix passable vaut mieux qu'un
+// bouton qui ne fait rien. Ce qui change s'entend immediatement, et c'est le point : c'est la
+// meme conversation, ce doit etre la meme voix.
+let lecteurAudio = null;
+
+function arreterAudio() {
+  if (lecteurAudio) { try { lecteurAudio.pause(); } catch (_) {} lecteurAudio = null; }
+}
+
+// Rend true si Azure a parle, false s'il faut se rabattre sur la voix du navigateur.
+async function lireParAzure(texte) {
+  let url = null;
+  try {
+    const r = await fetch(location.pathname.replace(/\/$/, "") + "/parler",
+                          { method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ texte }) });
+    if (!r.ok) return false;
+    const blob = await r.blob();
+    if (!blob || !blob.size) return false;
+    url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    lecteurAudio = a;
+    await new Promise((fini, rate) => {
+      a.onended = fini;
+      a.onerror = () => rate(new Error("lecture impossible"));
+      // play() rend une promesse que WebKit rejette si le geste de l'utilisateur est trop
+      // loin. Comme on descend d'un clic, elle passe — mais un echec ici doit basculer sur
+      // le repli plutot que de laisser un silence.
+      const essai = a.play();
+      if (essai && essai.catch) essai.catch(rate);
+    });
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+    if (lecteurAudio && lecteurAudio.ended) lecteurAudio = null;
+  }
+}
+
 function direIci(texte, derniere) {
   if (!peutLireIci || !texte) return;
   const u = new SpeechSynthesisUtterance(texte);
@@ -3699,12 +3882,16 @@ function direIci(texte, derniere) {
 
 // Appele pour chaque morceau de reponse qui arrive. Pas pendant un rejeu : revenir sur la
 // page relirait alors toute la conversation depuis le debut, d'un coup, par-dessus elle-meme.
-// Un texte entier, decoupe en phrases et enfile d'un coup. Plus de tampon a tenir entre
-// deux evenements : on ne lit plus au fil de l'eau, on lit ce qui est deja ecrit.
-function lireTexte(texte) {
+// Un texte entier. Azure d'abord — c'est la voix du PC, donc celle qu'on attend — et la
+// synthese du navigateur si elle ne repond pas. Le decoupage en phrases ne sert qu'au repli :
+// Azure prend le texte entier, et le decoupe mieux que nous puisqu'il l'a lu.
+async function lireTexte(texte) {
+  if (!texte) return false;
+  if (await lireParAzure(texte)) { lectureLocale = false; majBoutonLecture(); return true; }
   const phrases = decouperPhrases(texte);
+  if (!phrases.length) return false;
   phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
-  return phrases.length > 0;
+  return true;
 }
 
 // Le texte de la derniere reponse, tenu au fil de l'eau plutot que relu dans la page. Le
@@ -3733,6 +3920,7 @@ function majBoutonLecture() {
 
 function couperLectureLocale() {
   lectureLocale = false;
+  arreterAudio();
   try { speechSynthesis.cancel(); } catch (_) {}
   majBoutonLecture();
 }
@@ -3748,7 +3936,7 @@ function basculerLectureIci() {
   choisirVoix();
   lectureLocale = true;
   majBoutonLecture();
-  if (!lireTexte(texte)) couperLectureLocale();
+  lireTexte(texte).then(bon => { if (!bon) couperLectureLocale(); });
 }
 
 if (lireDeCeCote()) {
