@@ -165,7 +165,7 @@ transcrite comme si tu avais parlé), il reste deux leviers, dans cet ordre : mo
 |---|---|---|
 | `VOIX_WORKDIR` | `$PWD` | le projet sur lequel Claude Code travaille |
 | `VOIX_WORKER_MODEL` | `claude-opus-5` | le modèle qui fait le travail — Opus reste le défaut ; `fable`, `sonnet` et `haiku` se choisissent en cours de session, à la voix ou dans le menu du tableau |
-| `VOIX_WORKER_EFFORT` | `xhigh` | `low` \| `medium` \| `high` \| `xhigh` \| `max` — réglable en cours de session depuis le tableau |
+| `VOIX_WORKER_EFFORT` | `xhigh` | `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultracode` — réglable en cours de session depuis le tableau |
 | `VOIX_MAX_TOURS` | vide | plafond d'allers-retours par tour. **Vide = aucune limite**, ce que fait le CLI par défaut |
 | `VOIX_MAX_DEPENSE` | vide | plafond de dépense par tour, en dollars. Vide = aucune limite |
 | `VOIX_SPEAKER_MODEL` | `claude-haiku-4-5` | le porte-parole |
@@ -341,6 +341,55 @@ une sonde `ping`, une réponse attendue en 2,5 s — et sans réponse on rebranc
 mot de fin de reprise arrive **après** le rejeu, un message encore en vol à cet instant n'a
 pas seulement perdu son accusé : il n'est jamais arrivé. Il est renvoyé, une seule fois, et
 on le dit.
+
+**Parler depuis le téléphone : il enregistre, le PC transcrit.** Le bouton micro de la barre
+du bas, sur un appareil qui n'est pas le PC, enregistre — appuie, parle, appuie — puis envoie
+le fichier à `/audio`. Le PC le décode avec ffmpeg (Opus dans WebM pour Chrome, AAC dans MP4
+pour Safari, tout ressort en 16 kHz mono) et le passe **dans la même chaîne que son propre
+micro** : Azure, Deepgram, le vocabulaire biaisé du projet. Le texte entre ensuite dans la
+conversation **comme une phrase entendue**, pas comme du texte tapé : décompte avant envoi,
+« retenir », retenue d'office pendant que Claude travaille — tout le système de retenue
+s'applique. La réponse HTTP ne porte le texte que pour information ; c'est le flux
+d'événements qui remplit la barre, par le chemin de la dictée, sinon deux sources écriraient
+le même texte deux fois.
+
+C'est la seconde version de cette fonction. La première s'appuyait sur la reconnaissance
+vocale du navigateur : sur Android ça marche, sur iPhone ça s'allume, ne demande aucune
+autorisation, n'entend rien et ne dit rien — tout ce qui a été tenté a échoué en silence.
+Un fichier audio ne peut pas mentir. Deux pièges à connaître : Azure **ne sait pas**
+transcrire un fichier (il lève `NotImplementedError`), et le passer par le repli automatique
+le marquerait en panne pour le micro du PC aussi — les moteurs sont donc essayés à la main,
+sans toucher l'état de la chaîne. Et l'AAC d'iOS écrit son index en **fin** de fichier :
+ffmpeg lit un fichier sur disque, jamais un tube. Enfin, sans HTTPS Safari refuse le micro,
+en silence ; la page le dit avant d'essayer. Sur un tailnet, `tailscale serve` fournit le
+certificat.
+
+Deux conditions matérielles, dites clairement quand elles manquent. Il faut **une clé
+Deepgram ou Gladia** : ce sont les seuls moteurs de la chaîne qui lisent un fichier (Azure,
+Speechmatics et Soniox ne font que du direct, et le local n'est pas installé partout) — sans
+eux, le vocal répond « aucun moteur ne sait transcrire un fichier » plutôt que « rien
+compris », qui ferait chercher un problème de micro là où il manque une clé. Et la
+transcription tourne **dans le contexte du job LiveKit**, capturé au démarrage : les moteurs
+y prennent leur session HTTP, et une requête arrivant par la route web n'en hérite pas
+forcément. Vérifié contre Deepgram dans le pire cas — serveur démarré depuis un contexte
+vide — le piège est réel hors contexte et disparaît dedans.
+
+**« Reconnexion » tout seul se lit comme une panne.** En haut à gauche, sans autre mot, ça
+ressemble à « quelque chose s'est cassé côté serveur et j'ai perdu l'état ». Neuf fois sur dix
+c'est le téléphone qui a mis la page en veille, l'agent n'a rien vu, et rien n'est perdu. La
+barre de saisie — vide à ce moment-là, et sous les yeux — porte maintenant la cause, le numéro
+d'essai et ce qui va se passer : « reconnexion dans 3 s — coupure réseau · essai 2 — rien
+n'est perdu, ce que tu écris partira dès le retour ». Sur téléphone, où l'infobulle n'existe
+pas, un appui sur l'état affiche le même détail.
+
+**Partir trop tôt ne perd plus le message.** iOS tue un onglet en arrière-plan sans prévenir :
+la page qui revient est neuve, et une liste de messages en vol tenue en mémoire n'existe
+plus. C'était exactement « j'ai envoyé, je suis parti, et au retour il fallait tout renvoyer
+comme si de rien n'était ». Les messages en vol sont écrits sur l'appareil à chaque
+changement ; la page neuve les retrouve, les montre comme « envoyé avant de quitter la
+page », laisse le rejeu de l'historique accuser ceux qui sont arrivés, et renvoie le reste une
+seule fois à la fin de la reprise — en le disant. Passé un quart d'heure, on ne ressuscite
+rien : le message a été revu, ou il est perdu pour de bon.
 
 **Le sélecteur de modèle** dans l'en-tête change le modèle de travail. Depuis la page le
 choix est **durable** ; à la voix il est **temporaire** — « pour cette tâche » veut dire cette
@@ -679,6 +728,59 @@ pour les tours suivants : fenêtre longue par défaut pour réfléchir à voix h
 immédiate quand on n'en a pas besoin. Le prix à connaître : **chaque phrase attend 4 s, y
 compris « stop »** — la parole de Claude s'interrompt toujours instantanément (le barge-in est
 un mécanisme séparé), mais l'arrêt du travail met 4 s.
+
+### Lancer en ultracode
+
+`VOIX_WORKER_EFFORT=ultracode`, ou le sélecteur d'effort en cours de session. **Jamais par
+défaut** : un tour ultracode lance des agents en parallèle et peut coûter dix fois un tour
+normal — ça se demande.
+
+Ce n'est pas un sixième niveau d'effort, et le SDK n'en connaît pas : son `effort` est un
+`Literal` de cinq valeurs. Le CLI le définit lui-même comme « xhigh + dynamic workflow
+orchestration », donc deux choses, dont une seule est un effort. La table des efforts portait
+déjà une colonne « ce qu'on envoie au SDK », jusque-là en doublon de la clé sur les cinq
+niveaux ; elle sert enfin à quelque chose, et `ultracode` y vaut `xhigh`. Le niveau courant
+reste `ultracode` de notre côté — le stocker comme `xhigh` ferait afficher « très élevé » à la
+page sur une session qui orchestre des agents.
+
+Le ranger parmi les niveaux d'effort n'est pas un raccourci : c'est ce que fait le CLI, dont le
+sélecteur d'effort ajoute `ultracode` au bout de la liste. Le gain est concret — le menu de la
+page, la voix et la variable d'environnement y accèdent sans une ligne écrite pour ça, puisque
+tous les trois lisent la même table.
+
+La seconde moitié demandait une vérification. Dans une session Claude Code, le mot-clé
+`ultracode` tapé dans un message ouvre l'outil `Workflow` pour ce tour, via un system-reminder
+que le CLI injecte. **Il ne l'injecte pas en mode SDK** : vérifié, le mot-clé placé dans le
+message n'y déclenche rien. L'outil `Workflow`, lui, est bien présent dans la session. Ce qui
+manquait n'était donc pas la capacité mais l'autorisation, et c'est un bloc ajouté au prompt
+système qui la donne. Il ne desserre que la profondeur du travail : la consigne orale tient
+toujours, quel que soit le nombre d'agents lancés la réponse dite reste de deux à quatre
+phrases.
+
+### Claude peut poser une question
+
+Il le faisait déjà — l'outil `AskUserQuestion` est dans la session. Il n'obtenait simplement
+jamais de réponse : le tour rendait « The user did not answer the questions », et Claude
+enchaînait en expliquant poliment que la session était non-interactive. Devant quelqu'un qui
+l'écoutait.
+
+Deux choses manquaient. D'abord le chemin : `can_use_tool` était posé à `None` en
+`bypassPermissions`, au motif que les permissions n'y passent pas. C'est exact pour les
+permissions — et faux pour `AskUserQuestion`, qui déclare `requiresUserInteraction` et y passe
+**quand même**, n'ayant personne d'autre à qui demander. Le rappel est donc toujours fourni.
+
+Ensuite le format de la réponse. Elle repart dans `updated_input["response"]`, en **texte
+libre** : c'est le champ que le CLI lit pour fabriquer « The user responded: … ». Les trois
+autres formes essayées contre le vrai binaire rendent « did not answer » ou cassent la
+validation du schéma. Le texte libre est aussi ce qu'il faut à l'oral — on répond « la
+deuxième, mais garde l'ancien » bien plus souvent qu'on ne récite un intitulé. Les options
+proposées sont malgré tout dites et affichées : savoir entre quoi et quoi Claude hésite change
+la réponse qu'on donne.
+
+Côté conversation, une question en attente **capte la phrase entière**, avant les permissions
+et avant les ordres locaux — « arrête » peut être une réponse. Et comme pour une permission,
+elle part sans attendre le silence de fin de tour : Claude attend, la page le montre, faire
+mijoter la réponse cinq secondes de plus n'améliore rien.
 
 ### Choisir le modèle et l'effort
 

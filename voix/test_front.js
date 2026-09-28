@@ -20,7 +20,9 @@ const source = fs.readFileSync(path.join(__dirname, "tableau.py"), "utf8");
 const bloc = /<script>([\s\S]*?)<\/script>/.exec(source);
 if (!bloc) { console.error("  script introuvable dans tableau.py"); process.exit(1); }
 // brancher() ouvre une WebSocket : hors sujet ici, et ça laisserait le process en vie.
-const page = bloc[1].replace(/^brancher\(\);$/m, "");
+// Le marqueur de version est substitue PAR LE SERVEUR au moment de servir la page. Le test
+// doit donc le substituer aussi, sinon il verifie une page que personne ne recoit jamais.
+const page = bloc[1].replace(/^brancher\(\);$/m, "").replace(/__VERSION_PAGE__/g, "1000");
 
 const STUB = `
 const __cache = {};
@@ -90,6 +92,12 @@ function elem(nom) {
       return (this._cacheBalises[attr] = sortie);
     },
     contains(n) { return n === this || this.children.some(c => c.contains && c.contains(n)); },
+    // Les attributs poses par le code, par opposition a ceux lus dans le HTML plus haut.
+    // L attribut aria-pressed porte l etat d un bouton a bascule : sans stockage, le test
+    // ne pouvait pas distinguer « allume » de « eteint ».
+    setAttribute(n, v) { (this._attrs ||= {})[n] = String(v); },
+    getAttribute(n) { return (this._attrs || {})[n] ?? null; },
+    removeAttribute(n) { if (this._attrs) delete this._attrs[n]; },
     // Une LISTE par type : le DOM reel garde tous les ecouteurs, et n'en garder qu'un
     // masquait le fait que le champ en a deux sur keydown (Echap et Entree).
     addEventListener(t, f) { ((this._ev = this._ev || {})[t] ||= []).push(f); },
@@ -168,8 +176,25 @@ globalThis.document = {
     || (__ids.has(id) ? (__cache[id] = elem("#" + id)) : null),
   createElement: t => elem("<" + t + ">"),
   createTextNode: t => ({ nom: "#texte", textContent: t, children: [] }),
-  body: { scrollHeight: 0 },
+  // Un vrai element : la boite de diagnostic s y accroche, et le test doit pouvoir
+  // constater qu elle n y est PAS la plupart du temps — c est tout l enjeu.
+  body: elem("<body>"),
 };
+// Ce qu on cree et qu on accroche au corps devient trouvable par son id, et redevient
+// introuvable quand on le retire. Sans ça, un element cree dynamiquement etait invisible au
+// test : on ne pouvait affirmer ni sa presence ni son absence.
+(() => {
+  const corps = globalThis.document.body;
+  const posee = corps.appendChild.bind(corps);
+  corps.appendChild = (n) => {
+    if (n && n.id) { __ids.add(n.id); __cache[n.id] = n; }
+    const r = posee(n);
+    if (n) n.remove = () => { __ids.delete(n.id); delete __cache[n.id];
+                              corps.children = corps.children.filter(c => c !== n); };
+    return r;
+  };
+  corps.prepend = corps.appendChild;
+})();
 globalThis.window = { innerHeight: 800, scrollY: 0, scrollTo() {} };
 // La page utilise requestAnimationFrame pour ne declencher une transition CSS qu'apres que
 // l'element est dans le flux. Le talon l'execute TOUT DE SUITE : ce qui est asynchrone dans
@@ -199,12 +224,83 @@ globalThis.addEventListener = (nom, f) => { (globalThis.__ecouteurs[nom] ||= [])
 globalThis.declencher = (nom, ev) => {
   for (const f of globalThis.__ecouteurs[nom] || []) f(ev || {});
 };
-globalThis.navigator = { onLine: true };
+// Le micro, tel que le navigateur le donne. Le compteur retient les fois ou l autorisation
+// a REELLEMENT ete reclamee : c est tout l enjeu, la question n etait jamais posee.
+globalThis.microDemandes = 0;
+globalThis.microAccorde = true;
+globalThis.navigator = {
+  onLine: true,
+  mediaDevices: {
+    getUserMedia: () => {
+      globalThis.microDemandes++;
+      if (!globalThis.microAccorde) {
+        const e = new Error("refus"); e.name = "NotAllowedError";
+        return Promise.reject(e);
+      }
+      return Promise.resolve({ getTracks: () => [{ stop() {} }] });
+    },
+  },
+};
 globalThis.document.visibilityState = "visible";
 globalThis.envoyes = [];
 // Chaque socket ouverte est retenue : un test de reconnexion doit pouvoir verifier
 // COMBIEN ont ete ouvertes, pas seulement que la derniere existe.
 globalThis.sockets = [];
+
+// La synthese du navigateur. Stub volontairement bete : il ENREGISTRE ce qu'on lui demande
+// de dire, parce que c'est la seule chose qu'on veuille verifier — qu'une phrase coupee en
+// deux par le flux ne parte pas en deux morceaux incomprehensibles.
+// Enregistrer ICI, transcrire LA-BAS. Les talons retiennent ce qui compte : le micro a-t-il
+// ete reclame, l enregistreur a-t-il demarre et rendu un fichier, ce fichier est-il parti
+// vers /audio — et ce que la page fait de la reponse.
+globalThis.isSecureContext = true;
+globalThis.enregistreurs = [];
+globalThis.MediaRecorder = function (flux, opts) {
+  const self = this;
+  this.mimeType = (opts && opts.mimeType) || "audio/webm";
+  this.etat = "inactive";
+  this.start = () => { self.etat = "recording"; };
+  this.stop = () => {
+    self.etat = "inactive";
+    if (self.ondataavailable) self.ondataavailable({ data: { size: 1234, type: self.mimeType } });
+    if (self.onstop) self.onstop();
+  };
+  globalThis.enregistreurs.push(this);
+};
+globalThis.MediaRecorder.isTypeSupported = (t) => /webm/.test(t);
+globalThis.Blob = function (parts, opts) {
+  this.size = (parts || []).reduce((n, p) => n + ((p && p.size) || 0), 0);
+  this.type = (opts && opts.type) || "";
+};
+globalThis.FormData = function () { this.champs = []; this.append = (n, v, f) => this.champs.push({ n, v, f }); };
+// fetch : la page envoie, le test decide de la reponse. La liste requetes garde chaque appel.
+globalThis.requetes = [];
+globalThis.reponseAudio = { ok: true, status: 200, corps: { texte: "ok" } };
+globalThis.fetch = (url, opts) => {
+  globalThis.requetes.push({ url, opts });
+  const r = globalThis.reponseAudio;
+  return Promise.resolve({ ok: r.ok, status: r.status, json: () => Promise.resolve(r.corps) });
+};
+// localStorage : ce qui survit a la page. Un simple dictionnaire suffit.
+globalThis.__stock = {};
+globalThis.localStorage = {
+  getItem: (k) => (k in globalThis.__stock ? globalThis.__stock[k] : null),
+  setItem: (k, v) => { globalThis.__stock[k] = String(v); },
+  removeItem: (k) => { delete globalThis.__stock[k]; },
+  clear: () => { globalThis.__stock = {}; },
+  key: (i) => Object.keys(globalThis.__stock)[i] ?? null,
+  get length() { return Object.keys(globalThis.__stock).length; },
+};
+
+globalThis.dit = [];
+globalThis.SpeechSynthesisUtterance = function (t) { this.text = t; };
+globalThis.speechSynthesis = {
+  getVoices: () => [{ lang: "fr-FR", name: "Amelie", localService: true },
+                    { lang: "en-US", name: "Samantha", localService: true }],
+  addEventListener: () => {},
+  speak(u) { if ((u.text || "").trim()) globalThis.dit.push(u.text.trim()); },
+  cancel() { globalThis.dit.push("[coupe]"); },
+};
 globalThis.WebSocket = function () {
   // CONNECTING, comme dans un navigateur : une socket neuve n'est pas immediatement
   // utilisable. Le test la promeut explicitement en OPEN quand il veut simuler la reussite
@@ -219,7 +315,10 @@ globalThis.WebSocket = function () {
   globalThis.sockets.push(this);
 };
 globalThis.WebSocket.OPEN = 1;
-globalThis.location = { host: "127.0.0.1:7788", protocol: "http:", pathname: "/" };
+// hostname, et pas seulement host : le code s'en sert pour savoir si l'on est ASSIS devant
+// la machine qui parle. Les cas forcent « socle » quand ils veulent l'autre situation.
+globalThis.location = { host: "socle:7788", hostname: "socle",
+                        protocol: "https:", pathname: "/" };
 `;
 
 const CAS = fs.readFileSync(path.join(__dirname, "test_front_cas.js"), "utf8");

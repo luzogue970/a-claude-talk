@@ -144,8 +144,17 @@ def cle_du_modele(nom: str) -> str:
             return cle
     return nom
 # Les cinq niveaux d'effort du SDK, verifies dans le type de ClaudeAgentOptions :
-# Literal['low', 'medium', 'high', 'xhigh', 'max']. Il n'y en a pas d'autre — « ultracode »
-# est une notion des sessions Claude Code, pas un niveau d'effort du SDK.
+# Literal['low', 'medium', 'high', 'xhigh', 'max']. Il n'y en a pas d'autre.
+#
+# « ultracode » est le sixieme d'ici, et il n'est PAS un niveau d'effort : c'est un mode, que
+# le CLI definit lui-meme comme « xhigh + dynamic workflow orchestration ». D'ou la premiere
+# colonne — elle porte ce qu'on envoie au SDK, et pour ultracode c'est xhigh. Elle existait
+# deja, en doublon de la cle sur les cinq autres ; elle sert enfin a quelque chose.
+#
+# Le ranger parmi les niveaux d'effort n'est pas un raccourci : c'est ce que fait le CLI, dont
+# le selecteur d'effort ajoute « ultracode » au bout de la liste. Le gain est concret — la voix,
+# le menu de la page et VOIX_WORKER_EFFORT au lancement y accedent sans qu'une seule ligne soit
+# ecrite pour ca, puisque tous les trois lisent ce dictionnaire.
 #
 # Piege a connaitre : le client n'expose PAS de set_effort (il n'a que set_model et
 # set_permission_mode). Changer de niveau impose donc de reconstruire le client en reprenant
@@ -156,8 +165,26 @@ EFFORTS = {
     "high": ("high", "élevé"),
     "xhigh": ("xhigh", "très élevé — défaut"),
     "max": ("max", "maximum — le plus fouillé, le plus lent"),
+    "ultracode": ("xhigh", "ultracode — xhigh et plusieurs agents en parallèle"),
 }
+# Jamais par defaut, et ce n'est pas de la prudence de principe : un tour ultracode lance des
+# agents en parallele et peut couter dix fois un tour normal. Ça se demande.
+ULTRACODE = "ultracode"
 WORKER_EFFORT = os.environ.get("VOIX_WORKER_EFFORT", "xhigh")
+
+
+def effort_sdk(niveau: str) -> str:
+    """Ce qu'on envoie au SDK pour ce niveau — « ultracode » n'existe pas de son cote.
+
+    Le detour par cette fonction plutot que par la cle directement evite le piege inverse :
+    stocker « xhigh » comme niveau courant ferait disparaitre l'information qu'on est en
+    ultracode, et la page comme la voix afficheraient « très élevé » sur une session qui
+    orchestre des agents."""
+    return EFFORTS.get(niveau, (niveau, ""))[0]
+
+
+def est_ultracode(niveau: str) -> bool:
+    return niveau == ULTRACODE
 SPEAKER_MODEL = os.environ.get("VOIX_SPEAKER_MODEL", "claude-haiku-4-5")
 WORKDIR = os.environ.get("VOIX_WORKDIR", os.getcwd())
 

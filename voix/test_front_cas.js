@@ -582,10 +582,25 @@ dire(!zl.children[1].classList.contains('vif'), 'et « relire » redevient discr
 envoyes.length = 0;
 zl.children[0].onclick();
 dire(envoyes.some(o => o.cmd === 'couper_lecture'), 'couper envoie la bonne commande');
+// « relire » depuis un appareil DISTANT doit produire du son ici : faire parler le PC
+// d une autre piece ne sert a rien a celui qui tient le telephone.
+dit.length = 0;
+zl.children[1].onclick();
+dire(dit.some(x => !/^\[coupe\]$/.test(x)),
+     'depuis un telephone, relire lit sur CET appareil : ' + JSON.stringify(dit));
+dire(!envoyes.some(o => o.cmd === 'relire'),
+     'et ne reveille pas les haut-parleurs du PC');
+
+// Assis DEVANT la machine, l inverse : elle parle deja, la doubler serait absurde.
+const hoteVrai = location.hostname;
+location.hostname = '127.0.0.1';
+envoyes.length = 0; dit.length = 0;
 zl.children[1].onclick();
 const rl = envoyes.find(o => o.cmd === 'relire');
 dire(rl && rl.id === 'p1',
-     'relire vise CETTE reponse, pas la derniere : ' + JSON.stringify(rl));
+     'en local, relire vise CETTE reponse cote serveur : ' + JSON.stringify(rl));
+location.hostname = hoteVrai;
+lectureEnCours = null; majBoutonsLecture();
 
 lignesVoix.clear();
 let leve2 = false;
@@ -1427,6 +1442,291 @@ dire(!/coupure/.test(etatEl.title || ''),
 dire(/agent prêt|signe du serveur/.test(etatEl.title || ''),
      'et dit ce que le serveur raconte de lui-meme');
 
+// ---- une page qui se sait perimee ---------------------------------------------------------
+titre('version : developper l application depuis l application');
+const btnMaj = document.getElementById('maj-page');
+brancher(); ouvrirSock();      // il faut une socket branchee pour recevoir un pouls
+dire(btnMaj.hidden, 'rien a proposer tant que les versions concordent');
+
+// Le piege : le serveur gardait la page en memoire au demarrage. Modifier le code, recharger
+// l onglet, ne rien voir changer — et chercher un bug dans un correctif absent.
+socket.onmessage({ data: JSON.stringify({ genre: '_pouls', version: 999, pret: true }) });
+dire(!btnMaj.hidden, 'une version plus recente cote serveur fait apparaitre le bouton');
+dire(typeof btnMaj.onclick === 'function', 'et il sait recharger');
+
+socket.onmessage({ data: JSON.stringify({ genre: '_pouls', version: MA_VERSION, pret: true }) });
+dire(btnMaj.hidden, 'la meme version le fait disparaitre');
+
+// Un serveur muet sur sa version ne doit rien declencher : mieux vaut ne rien proposer que
+// proposer un rechargement sans raison.
+socket.onmessage({ data: JSON.stringify({ genre: '_pouls', pret: true }) });
+dire(btnMaj.hidden, 'et une version absente ne propose rien');
+
+// ---- reprendre une conversation, c est ne PAS en ouvrir une neuve -------------------------
+titre('nom de la conversation : reprise, pas nouveaute');
+recevoir({ genre: 'conversations', n: 8600, h: '10:00', dossier: '/p/claude-talk',
+  courante: 'sess-abc',
+  liste: [{ session_id: 'sess-abc', titre: 'la barre du bas', projet: 'claude-talk',
+            tours: 42, ici: true },
+          { session_id: 'sess-xyz', titre: 'autre sujet', projet: 'claude-talk',
+            tours: 3, ici: true }] });
+dire(/la barre du bas/.test(document.getElementById('ou').textContent),
+     'le titre porte la conversation reprise : ' + document.getElementById('ou').textContent);
+
+// Le defaut : la liste part AVANT que le SDK ait rendu son identifiant, donc « courante »
+// arrivait vide et la page concluait « nouvelle conversation » sur une reprise reussie.
+recevoir({ genre: 'conversations', n: 8601, h: '10:00', dossier: '/p/claude-talk',
+  courante: null,
+  liste: [{ session_id: 'sess-abc', titre: 'la barre du bas', projet: 'claude-talk',
+            tours: 42, ici: true }] });
+dire(/nouvelle conversation/.test(document.getElementById('ou').textContent),
+     'sans courante, on ne peut effectivement rien affirmer');
+
+// L identifiant confirme arrive ensuite, et recale le nom.
+emettre({ genre: 'session', id: 'sess-abc', repris: true, tours: 42 });
+dire(/la barre du bas/.test(document.getElementById('ou').textContent),
+     'l evenement session recale le nom : ' + document.getElementById('ou').textContent);
+
+// Et s il DEMENT la reprise — Claude Code ouvre une neuve sans rien dire — le nom suit.
+emettre({ genre: 'session', id: 'sess-neuve', repris: false, tours: 0 });
+dire(/nouvelle conversation/.test(document.getElementById('ou').textContent),
+     'une reprise qui echoue ne ment pas non plus sur le nom');
+
+// ---- une reconnexion n est pas une erreur -------------------------------------------------
+titre('diagnostic : rouge seulement quand c est vraiment casse');
+const diagLa = () => !!document.getElementById('diag-ws');
+
+brancher(); ouvrirSock();
+dire(!diagLa(), 'liaison etablie : aucune boite');
+
+// Le cas de tous les jours : le telephone part en veille, la socket tombe, ça rebranche.
+// C est ici que le bandeau rouge s affichait — par-dessus l en-tete, pour dire que tout
+// allait bien. Un avertissement qui masque la conversation pour annoncer une reprise.
+fermerSock(1006);
+dire(!diagLa(), 'une coupure ordinaire n affiche AUCUNE boite');
+dire(/reconnexion/.test(document.getElementById('etat').textContent),
+     'l etat dit calmement ce qui se passe : ' + document.getElementById('etat').textContent);
+
+// Quelques echecs d affilee, mais recents : toujours rien. On ne crie pas au bout de 3 s.
+echecs = 5;
+coupeDepuis = Date.now() - 5000;
+direLiaison();
+dire(!diagLa(), 'cinq echecs mais cinq secondes : encore rien');
+
+// La coupure s installe. LA, il y a quelque chose a dire, et quelque chose a diagnostiquer.
+coupeDepuis = Date.now() - 60000;
+direLiaison();
+dire(diagLa(), 'au bout d une minute d echecs, la boite parait');
+const boiteDiag = document.getElementById('diag-ws');
+dire(/échoue depuis/.test(boiteDiag.textContent), 'et elle dit depuis quand : ' + boiteDiag.textContent.split('\n')[0]);
+dire(/bottom/.test(boiteDiag.style.cssText), 'posee en BAS, pas par-dessus l en-tete');
+dire(!/#f85149/.test(boiteDiag.style.cssText), 'et pas en rouge : l agent tourne peut-etre encore');
+
+// Et elle repart des que la liaison revient.
+brancher(); ouvrirSock();
+dire(!diagLa(), 'la reconnexion la fait disparaitre');
+dire(coupeDepuis === 0, 'et remet l horloge de coupure a zero');
+echecs = 0;
+
+// ---- une commande qui ne part pas doit le dire -------------------------------------------
+titre('liaison morte : un appui ne doit pas disparaitre en silence');
+const sockAvant = socket;
+socket = new WebSocket();          // jamais ouverte : readyState reste a 0
+noteBarre(null);
+enAttente = [];
+const partie = envoyerCmd({ cmd: 'micro', actif: false });
+dire(partie === false, 'la commande ne part pas');
+dire(enAttente.some(o => o.cmd === 'micro'), 'mais elle est gardee pour la reconnexion');
+dire(/liaison perdue/.test(document.getElementById('note-barre').textContent || ''),
+     'et on le DIT : ' + document.getElementById('note-barre').textContent);
+// Le defaut repare : le bouton micro ne bouge pas tant que le serveur n a pas confirme, et
+// le serveur n est plus la. Sans un mot, la page a l air d ignorer les appuis.
+noteBarre(null); enAttente = [];
+socket = sockAvant;
+brancher(); ouvrirSock();
+
+// ---- lire une reponse sur l appareil qu on tient -----------------------------------------
+titre('lecture locale : a la demande, et JAMAIS toute seule');
+const btnLire = document.getElementById('lire-ici');
+couperLectureLocale();          // le bloc precedent a laisse une lecture en cours
+noteBarre(null);
+dire(!btnLire.hidden, 'le bouton apparait sur un appareil distant qui sait parler');
+dire(btnLire.getAttribute('aria-pressed') === 'false', 'et rien ne se lit au chargement');
+
+// LE point : un telephone ne doit pas se mettre a parler parce qu une reponse arrive. En
+// reunion, dans le train, a cote de quelqu un — c est la pire chose qu il puisse faire.
+dit.length = 0;
+emettre({ genre: 'voix', texte: 'La barre du bas tient sur une ligne. ', id: 'L1' });
+emettre({ genre: 'voix', texte: 'Et les boutons sont touchables. ', id: 'L1', suite: true });
+recevoir({ genre: 'parole_fin', id: 'L1' });
+dire(dit.length === 0, 'une reponse qui arrive ne declenche AUCUN son');
+
+// Mais elle est retenue, prete a etre dite quand on le demandera.
+btnLire.onclick();
+dire(dit.length === 2, 'un appui lit la derniere reponse, decoupee en phrases');
+dire(/^La barre du bas tient sur une ligne\.$/.test(dit[0]),
+     'la premiere phrase est entiere : ' + dit[0]);
+dire(btnLire.getAttribute('aria-pressed') === 'true', 'et le bouton montre que ça lit');
+
+// Un second appui coupe : c est le meme geste, donc le meme bouton.
+dit.length = 0;
+btnLire.onclick();
+dire(dit.includes('[coupe]'), 'un second appui coupe la lecture');
+dire(btnLire.getAttribute('aria-pressed') === 'false', 'et le bouton redevient normal');
+
+// Revenir sur la page ne relit rien, mais garde de quoi relire si on le demande.
+dit.length = 0;
+recevoir({ genre: '_histoire', evenements: [
+  { genre: 'voix', texte: 'un debrief d il y a deux heures. ', id: 'vieux', n: 8500, h: '10:00' },
+] });
+dire(dit.length === 0, 'le rejeu ne declenche rien non plus');
+
+// Rien a lire : le dire, plutot que de rester inerte — un bouton muet passe pour casse.
+const memoire = texteReponse; texteReponse = '';
+noteBarre(null); dit.length = 0;
+btnLire.onclick();
+dire(/rien à lire/.test(document.getElementById('note-barre').textContent || ''),
+     'sans reponse, le bouton explique au lieu de ne rien faire');
+texteReponse = memoire; noteBarre(null);
+
+// ---- la liaison dit POURQUOI, la ou on regarde --------------------------------------------
+titre('liaison : « reconnexion » tout seul se lit comme une panne');
+brancher(); ouvrirSock();
+fermerSock(1006);
+dire(/reconnexion/.test(document.getElementById('etat').textContent), 'l etat annonce la reprise');
+// Le numero d essai est cumulatif depuis la derniere vraie coupure : ce qui compte est qu il
+// soit LA, pas sa valeur — un bloc precedent a pu en laisser un.
+dire(/coupure réseau/.test(champ.placeholder) && /essai \d+/.test(champ.placeholder),
+     'et la barre dit pourquoi et ou on en est : ' + champ.placeholder);
+dire(/rien n.est perdu/.test(champ.placeholder), 'et rassure : rien n est perdu');
+// Sur telephone il n y a pas d infobulle : un appui sur l etat doit la remplacer.
+noteBarre(null);
+document.getElementById('etat').onclick();
+dire(/coupure réseau/.test(document.getElementById('note-barre').textContent || ''),
+     'un appui sur l etat montre le detail : ' + document.getElementById('note-barre').textContent);
+noteBarre(null);
+brancher(); ouvrirSock();
+dire(document.getElementById('etat').onclick === null, 'la reconnexion retire l appui-detail');
+
+// ---- un message en vol survit a la mort de la page -----------------------------------------
+titre('en vol : partir trop tot ne doit pas perdre le message');
+// iOS tue l onglet en arriere-plan : la page qui revient est NEUVE, sa memoire est vide.
+// Avant : le message envoye juste avant de partir n existait plus nulle part.
+enVol.length = 0; __stock = {}; envoyes.length = 0;
+champ.value = 'corrige la barre du bas';
+composer.onsubmit({ preventDefault() {} });
+const stocke = JSON.parse(localStorage.getItem('voix.enVol') || '[]');
+dire(stocke.length === 1 && stocke[0].texte === 'corrige la barre du bas',
+     'un message envoye est ecrit sur l appareil : ' + JSON.stringify(stocke.map(m => m.texte)));
+// La page meurt et renait : memoire vide, disque plein.
+enVol.length = 0;
+const restaures = restaurerEnVol();
+dire(restaures === 1 && enVol.length === 1, 'la page neuve retrouve le message en vol');
+dire(/envoyé avant de quitter/.test(document.getElementById('en-vol').innerHTML),
+     'et le montre comme tel, pas comme un envoi en cours');
+// Le rejeu de l historique accuse ce qui est arrive : plus rien a renvoyer.
+emettre({ genre: 'toi', texte: 'corrige la barre du bas' });
+dire(enVol.length === 0, 'l echo retrouve dans le rejeu l accuse, et il ne repart pas');
+dire(JSON.parse(localStorage.getItem('voix.enVol') || '[]').length === 0,
+     'et le disque est vide a son tour');
+// Un message trop vieux n est pas ressuscite : il a ete revu, ou il est perdu pour de bon.
+localStorage.setItem('voix.enVol', JSON.stringify([{ texte: 'vieux', quand: Date.now() - 3600000 }]));
+dire(restaurerEnVol() === 0 && enVol.length === 0, 'un message d il y a une heure reste au repos');
+__stock = {};
+
+// ---- dicter avec le telephone : enregistrer ici, transcrire au PC -------------------------
+// Asynchrone : l envoi attend fetch. La fonction est appelee juste avant le tally, qui l attend.
+async function testerRelaisVocal() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  titre('vocal : le telephone enregistre, le PC transcrit');
+  const btnDicter = document.getElementById('dicter-ici');
+  dire(!btnDicter.hidden, 'le bouton apparait quand l appareil sait enregistrer');
+  dire(btnDicter.getAttribute('aria-pressed') === 'false', 'et il n enregistre pas de lui-meme');
+
+  // Appuyer : le micro est RECLAME — c est ce qui fait apparaitre la demande d autorisation,
+  // et c est ce que la version precedente ne faisait jamais.
+  microDemandes = 0; microAccorde = true; enregistreurs.length = 0; requetes.length = 0;
+  noteBarre(null); champ.value = '';
+  btnDicter.onclick(); await tick();
+  dire(microDemandes === 1, 'un appui reclame le micro pour de vrai');
+  dire(enregistreurs.length === 1 && enregistreurs[0].etat === 'recording', 'et l enregistrement demarre');
+  dire(btnDicter.getAttribute('aria-pressed') === 'true', 'le bouton le montre');
+  dire(/j.écoute/.test(document.getElementById('note-barre').textContent || ''),
+       'et la barre dit quoi faire : ' + document.getElementById('note-barre').textContent);
+
+  // Appuyer encore : l enregistrement s arrete et PART vers le PC.
+  btnDicter.onclick(); await tick(); await tick();
+  dire(enregistreurs[0].etat === 'inactive', 'un second appui arrete l enregistrement');
+  dire(requetes.length === 1 && /\/audio$/.test(requetes[0].url),
+       'et le fichier part vers /audio : ' + (requetes[0] && requetes[0].url));
+  const corps = requetes[0] && requetes[0].opts.body;
+  dire(corps && corps.champs.some(ch => ch.n === 'audio' && /vocal\.webm$/.test(ch.f)),
+       'dans le champ « audio », nomme d apres son format');
+  dire(btnDicter.getAttribute('aria-pressed') === 'false', 'le bouton redevient normal');
+
+  // Le TEXTE n arrive pas par la reponse HTTP mais par le flux, comme une dictee du PC :
+  // c est ce chemin qui remplit la barre et arme le decompte — donc la retenue marche.
+  dire(champ.value === '', 'la reponse HTTP n ecrit rien dans la barre');
+  emettre({ genre: 'ecoute', actif: false, parle: true, source: 'téléphone' });
+  emettre({ genre: 'partiel', texte: 'corrige la barre du bas', final: true, source: 'téléphone' });
+  dire(champ.value === 'corrige la barre du bas',
+       'le texte transcrit arrive par le flux, dans la barre : ' + JSON.stringify(champ.value));
+  emettre({ genre: 'ecoute', actif: true, delai: 5, fin: Date.now() + 5000, min: 5, max: 12 });
+  dire(!document.getElementById('compte').hidden, 'et le decompte avant envoi s arme, comme au PC');
+  arreterCompte(); fermerDictee(null); champ.value = '';
+
+  // Le PC n a rien compris : on le dit, et le bouton ne reste pas bloque.
+  reponseAudio = { ok: false, status: 422, corps: { erreur: 'rien compris dans l enregistrement' } };
+  requetes.length = 0; noteBarre(null);
+  btnDicter.onclick(); await tick();
+  btnDicter.onclick(); await tick(); await tick();
+  dire(/rien compris/.test(document.getElementById('note-barre').textContent || ''),
+       'un echec de transcription se lit dans la barre : ' + document.getElementById('note-barre').textContent);
+  dire(!btnDicter.classList.contains('envoi'), 'et le bouton n est pas reste en « envoi »');
+  reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
+
+  // Micro refuse : la raison, tout de suite — pas un bouton allume sur du vide.
+  microAccorde = false; noteBarre(null); enregistreurs.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(/micro refusé/.test(document.getElementById('note-barre').textContent || ''),
+       'un refus d autorisation est dit : ' + document.getElementById('note-barre').textContent);
+  dire(enregistreurs.length === 0 && btnDicter.getAttribute('aria-pressed') === 'false',
+       'et rien ne demarre');
+  microAccorde = true;
+
+  // Sans https, Safari refuse le micro en silence : on le dit AVANT d essayer.
+  isSecureContext = false; noteBarre(null); microDemandes = 0;
+  btnDicter.onclick(); await tick();
+  dire(microDemandes === 0 && /https/.test(document.getElementById('note-barre').textContent || ''),
+       'en http, on explique au lieu de tenter : ' + document.getElementById('note-barre').textContent);
+  isSecureContext = true; noteBarre(null);
+}
+
+// ---- une question de Claude attend, puis cesse d attendre --------------------------------
+titre('question : la machine attend l utilisateur, et le montre');
+toutClore('remise a zero');
+emettre({ genre: 'question', id: 'q1', texte: 'Je remplace ou je cree un nouveau fichier ?',
+          questions: [{ question: 'Je remplace ou je cree ?', entete: 'Fichier',
+                        options: ['Remplacer', 'Nouveau fichier'] }] });
+dire(encours.has('question:q1'),
+     'une question sans reponse est la seule chose qui attend VRAIMENT quelqu un');
+dire(/Remplacer/.test(dernier.innerHTML),
+     'les options sont affichees meme si la reponse sera libre');
+emettre({ genre: 'question', id: 'q1', texte: 'Je remplace ou je cree un nouveau fichier ?',
+          questions: [{ question: 'Je remplace ou je cree ?', entete: 'Fichier',
+                        options: ['Remplacer', 'Nouveau fichier'] }],
+          reponse: 'un nouveau, et garde l ancien a cote' });
+dire(!encours.has('question:q1'), 'la reponse eteint l attente de SA question : ' + restants());
+dire(/un nouveau, et garde l ancien/.test(dernier.innerHTML),
+     'et la reponse libre est celle qui s affiche, pas un intitule');
+
+// Le cas qui compte : sans reponse, ca ne doit pas tourner eternellement. La cloture de fin
+// de tour et la reprise l eteignent, comme tout le reste.
+emettre({ genre: 'question', id: 'q2', texte: 'Autre chose ?', questions: [] });
+dire(encours.has('question:q2'), 'une seconde question attend a son tour');
+toutClore('fin de tour');
+dire(!encours.has('question:q2'), 'et la cloture de fin de tour ne la laisse pas tourner');
+
 // ---- rien ne doit tourner quand rien ne tourne ------------------------------------------
 titre('indicateurs : ce qui tourne doit correspondre a ce qui se passe');
 const zoneAct = document.getElementById('activite');
@@ -1553,7 +1853,10 @@ setTimeout(() => {
     dire(!envoyes.some(o => o.cmd === 'texte' && o.texte === 'deuxieme message'),
          'un message dont l echo revient dans le rejeu n est PAS reposte');
 
-    console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
-    process.exit(ok ? 0 : 1);
+    testerRelaisVocal().catch(e => { console.error('  ECHEC relais vocal : ' + (e && e.stack || e)); ok = false; })
+      .then(() => {
+        console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
+        process.exit(ok ? 0 : 1);
+      });
   }, 30);
 }, 10);

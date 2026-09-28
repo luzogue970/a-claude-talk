@@ -19,6 +19,7 @@ Run it:  python voix/agent.py console --input-device "..." --output-device "..."
 """
 
 import asyncio
+import contextvars
 import logging
 import os
 import re
@@ -37,6 +38,7 @@ from livekit.agents import (
     cli,
     llm,
 )
+from livekit import rtc
 from livekit.agents import stt as stt_api
 from livekit.agents.inference import TurnDetector
 from livekit.plugins import azure, silero
@@ -127,6 +129,9 @@ class Voix(Agent):
         faux worker doit pouvoir le poser sans qu'on le lui reecrive.
         """
         self.permission_en_cours: asyncio.Future | None = None
+        # Une question de Claude, en attente d'une phrase. Distincte de la
+        # permission : celle-ci se repond par oui ou non, celle-la par ce qu'on veut.
+        self.question_en_cours: asyncio.Future | None = None
         self._debut_tour: float | None = None
         self._dernier_debrief: str | None = None
         # « Retenir » : la dictée se dépose dans la barre de saisie au lieu de partir chez
@@ -199,6 +204,10 @@ class Voix(Agent):
         # tableau, lu et effacé par llm_node — pour qu'UNE seule ligne « toi » soit publiée
         # par tour, quel que soit le canal.
         self._tape_en_attente = False
+        # L'enonce en cours vient du micro d'un AUTRE appareil : il n'y a pas de tour audio
+        # LiveKit derriere, donc rien a commettre — le texte part par generate_reply. Vrai
+        # tant que `_dit` porte du texte venu du telephone, faux des qu'il est consomme.
+        self._tour_vocal = False
 
     def _voir(self, genre: str, **donnees):
         if self.tableau:
@@ -313,7 +322,11 @@ class Voix(Agent):
 
         attend_permission = (self.permission_en_cours is not None
                              and not self.permission_en_cours.done())
-        if attend_permission or self._ordre_bref(texte):
+        # Meme raison pour une question posee par Claude : il attend, la page le montre, et
+        # faire mijoter la reponse cinq secondes de plus n'ameliore rien.
+        attend_question = (self.question_en_cours is not None
+                           and not self.question_en_cours.done())
+        if attend_permission or attend_question or self._ordre_bref(texte):
             self._envoyer_maintenant("immédiat")
             return
 
@@ -326,6 +339,7 @@ class Voix(Agent):
                        auto=(raison == "occupe"))
             self._dit = ""
             self._dictee_ouverte = False
+            self._tour_vocal = False
             self._retenu_en_attente = True
             return
 
@@ -352,6 +366,7 @@ class Voix(Agent):
                        auto=(raison == "occupe"))
             self._dit = ""
             self._dictee_ouverte = False
+            self._tour_vocal = False
             self._retenu_en_attente = True
             self.fermer_fenetre()
             return
@@ -359,8 +374,22 @@ class Voix(Agent):
 
     def _envoyer_maintenant(self, pourquoi: str) -> None:
         self.fermer_fenetre(publier=False)
+        texte, vocal = self._dit.strip(), self._tour_vocal
         self._dit = ""
         self._dictee_ouverte = False
+        self._tour_vocal = False
+        if vocal:
+            # Venu du telephone : il n'existe aucun tour audio a commettre, le texte est TOUT
+            # ce qu'on a. Il part par le meme chemin que le clavier — llm_node, permissions,
+            # ordres locaux, debrief — et le tour audio LiveKit eventuel est jete : si le
+            # micro du PC a parle entre-temps, sa transcription est deja dans `texte`.
+            self._oublier_tour()
+            if texte:
+                self.sess.generate_reply(user_input=texte, input_modality="text")
+            else:
+                self._voir("log", niveau="INFO", source="tour", texte="rien à envoyer pour l'instant")
+            self._voir("ecoute", actif=False)
+            return
         try:
             self.sess.commit_user_turn()
         except Exception as exc:
@@ -447,6 +476,16 @@ class Voix(Agent):
         # ce qui donnait trois lignes pour un seul message.
         def vu():
             self._voir("toi", texte=texte, tape=tape)
+
+        # Une question en attente capte la phrase entiere, telle quelle : contrairement a
+        # une permission, il n'y a rien a interpreter — « plutot la deuxieme, mais garde
+        # l'ancien fichier » est une reponse parfaitement valable, et la decouper en oui/non
+        # la detruirait. Place AVANT les permissions parce qu'on ne peut pas avoir les deux
+        # en vol, et avant les ordres locaux parce que « arrete » peut etre une reponse.
+        if self.question_en_cours and not self.question_en_cours.done():
+            vu()
+            self.question_en_cours.set_result(texte)
+            return
 
         # A pending permission owns the next utterance: it is an answer, not a new task.
         if self.permission_en_cours and not self.permission_en_cours.done():
@@ -741,6 +780,54 @@ class Voix(Agent):
                                   jetons=getattr(journal_, "jetons", None),
                                   duree=getattr(journal_, "duree_s", None))
 
+    async def poser_question(self, questions: list) -> str | None:
+        """Claude a une question. On la dit, on attend la reponse, on la lui rend.
+
+        C'est le pendant manquant de `demander_permission` : le worker savait demander
+        l'autorisation de faire quelque chose, mais pas demander ce qu'on voulait. L'outil
+        rendait donc « the user did not answer » et Claude expliquait poliment que la session
+        etait non-interactive — devant quelqu'un qui l'ecoutait.
+
+        La reponse est rendue en texte libre. Les options proposees sont dites, mais rien
+        n'oblige a en choisir une : le CLI accepte une phrase, et a l'oral c'est le mode
+        naturel — on repond « la deuxieme, mais garde l'ancien » bien plus souvent qu'on ne
+        recite un intitule."""
+        boucle = asyncio.get_running_loop()
+        self.question_en_cours = boucle.create_future()
+
+        morceaux, pour_la_page = [], []
+        for q in questions:
+            libelle_q = str(q.get("question") or "").strip()
+            options = [str(o.get("label") or "").strip()
+                       for o in (q.get("options") or []) if o.get("label")]
+            if not libelle_q:
+                continue
+            morceaux.append(libelle_q + (" " + " ou ".join(options) + " ?" if options else ""))
+            pour_la_page.append({"question": libelle_q, "options": options,
+                                 "entete": str(q.get("header") or "").strip()})
+        if not morceaux:
+            self.question_en_cours = None
+            return None
+
+        dite = " ".join(morceaux)
+        # Le meme identifiant sur les deux publications : c'est ce qui permet a la reponse
+        # d'eteindre l'attente de SA question au lieu d'empiler une seconde ligne qui tourne.
+        marque = f"q{id(self.question_en_cours):x}"
+        self._voir("question", id=marque, texte=dite, questions=pour_la_page)
+        await self.sess.say(self._parler(dite), allow_interruptions=True)
+        try:
+            # Large : une question peut arriver pendant qu'on regarde ailleurs, et le cout
+            # d'attendre est nul alors que celui d'abandonner est un tour perdu. Au-dela,
+            # l'outil dit lui-meme qu'il n'a pas eu de reponse et Claude reprend la main.
+            reponse = await asyncio.wait_for(self.question_en_cours, timeout=300)
+        except asyncio.TimeoutError:
+            reponse = None
+        finally:
+            self.question_en_cours = None
+        self._voir("question", id=marque, texte=dite, questions=pour_la_page,
+                   reponse=reponse or "(pas de réponse)")
+        return reponse
+
     async def demander_permission(self, action: str, libelle: str) -> bool:
         """Awaited by the worker's can_use_tool, so the session really waits for an answer."""
         boucle = asyncio.get_running_loop()
@@ -865,7 +952,11 @@ async def entrypoint(ctx: JobContext):
     async def on_permission(action: str, libelle: str) -> bool:
         return await agent.demander_permission(action, libelle) if agent else False
 
-    worker = Worker(on_permission=on_permission, tableau=tableau, conversation=conv)
+    async def on_question(questions: list) -> str | None:
+        return await agent.poser_question(questions) if agent else None
+
+    worker = Worker(on_permission=on_permission, on_question=on_question,
+                    tableau=tableau, conversation=conv)
     await worker.start()
     agent = Voix(worker, porte_parole, tableau, quota, conv)
 
@@ -953,6 +1044,14 @@ async def entrypoint(ctx: JobContext):
 
     vad = silero.VAD.load()
     moteur_stt = _stt(vad)
+    # Le contexte du job LiveKit, capture ICI, la ou il est certain d'exister. Les moteurs de
+    # reconnaissance prennent leur session HTTP dans une variable de contexte que le job
+    # pose avant d'appeler ce point d'entree ; une requete arrivant par la route web tourne
+    # dans une tache creee par aiohttp, et rien ne garantit qu'elle en herite. Verifie : hors
+    # de ce contexte, Deepgram et Gladia refusent net (« outside of a job context »). On
+    # rejoue donc ce contexte autour de chaque transcription de fichier. Si la tache en
+    # heritait deja, c'est sans effet ; sinon, c'est ce qui la fait marcher.
+    contexte_job = contextvars.copy_context()
 
     # Une bascule de moteur doit s'annoncer. Sans ça, la session où le quota Azure s'est
     # épuisé n'a laissé qu'un mur d'erreurs identiques et aucune ligne disant ce qui prenait
@@ -1316,7 +1415,80 @@ async def entrypoint(ctx: JobContext):
             # celle des « actions un peu bizarres ».
             agent._dictee_ouverte = False
             agent._dit = ""
+            agent._tour_vocal = False
             session.generate_reply(user_input=propos, input_modality="text")
+        elif nom == "vocal":
+            # Un enregistrement venu du micro d'un autre appareil, deja decode en PCM par le
+            # serveur. Deux temps : le transcrire ici, puis le faire entrer dans la conversation
+            # comme une PAROLE — pas comme du texte tape. La difference est tout le systeme de
+            # retenue : decompte avant envoi, « retenir », retenue d'office pendant que Claude
+            # travaille. Un texte tape part tout de suite ; une phrase dite se relit d'abord.
+            pcm = donnees.get("pcm") or b""
+            taux = int(donnees.get("taux") or 16000)
+            if not pcm:
+                return {"erreur": "audio vide"}
+            trame = rtc.AudioFrame(data=pcm, sample_rate=taux, num_channels=1,
+                                   samples_per_channel=len(pcm) // 2)
+            # Moteur par moteur, A LA MAIN, et surtout pas via le repli automatique : Azure ne
+            # sait pas transcrire un fichier (il leve NotImplementedError), et le repli
+            # prendrait cet echec pour une panne — il marquerait Azure indisponible pour le
+            # micro du PC aussi, qui n'a rien demande. Ici un moteur qui refuse est simplement
+            # passe, et l'etat de la chaine n'est pas touche.
+            moteurs = (moteur_stt._stt_instances
+                       if isinstance(moteur_stt, stt_api.FallbackAdapter) else [moteur_stt])
+            texte, qui, capables = "", "", 0
+            tableau.publier("transcrit", actif=True, direct=False, source="téléphone")
+            try:
+                for m in moteurs:
+                    etiquette = getattr(m, "label", "") or type(m).__name__
+                    try:
+                        # Dans le contexte du job, quelle que soit la tache d'ou l'on vient.
+                        ev = await asyncio.wait_for(
+                            asyncio.create_task(m.recognize(trame), context=contexte_job),
+                            timeout=45)
+                        capables += 1
+                    except NotImplementedError:
+                        continue
+                    except Exception:
+                        log.warning("vocal : %s a échoué", etiquette, exc_info=True)
+                        continue
+                    alternatives = getattr(ev, "alternatives", None) or []
+                    texte = (alternatives[0].text if alternatives else "").strip()
+                    qui = etiquette
+                    if texte:
+                        break
+            finally:
+                tableau.publier("transcrit", actif=False)
+            secondes = round(float(donnees.get("secondes") or 0), 1)
+            if not capables and not texte:
+                # Aucun moteur de la chaine ne sait lire un fichier : Azure, Speechmatics et
+                # Soniox ne font que du direct. Le dire precisement, sinon « rien compris »
+                # ferait chercher un probleme de micro la ou il manque une cle.
+                tableau.publier("log", niveau="WARNING", source="vocal",
+                                texte="aucun moteur ne sait transcrire un fichier — il faut "
+                                      "une clé Deepgram ou Gladia pour les vocaux du téléphone")
+                return {"erreur": "aucun moteur ne sait transcrire un fichier : ajoute une clé "
+                                  "Deepgram ou Gladia", "secondes": secondes}
+            if not texte:
+                tableau.publier("log", niveau="WARNING", source="vocal",
+                                texte=f"rien compris dans un enregistrement de {secondes} s"
+                                      + (f" ({qui})" if qui else ""))
+                return {"erreur": "rien compris dans l'enregistrement", "moteur": qui,
+                        "secondes": secondes}
+            # Le meme enchainement que le VAD quand quelqu'un parle dans le micro du PC —
+            # voir le gestionnaire user_state_changed : la fenetre en cours se referme sans
+            # envoyer, l'enonce s'ouvre, la page ouvre sa dictee. Puis la transcription
+            # arrive, finale d'un coup, et ouvrir_fenetre decide comme d'habitude.
+            if config.TOUR_MANUEL:
+                agent.fermer_fenetre(publier=False)
+            agent._dictee_ouverte = True
+            agent._tour_vocal = True
+            agent._derniere_parole = time.monotonic()
+            tableau.publier("ecoute", actif=False, parle=True, source="téléphone")
+            tableau.publier("partiel", texte=texte, final=True, source="téléphone", moteur=qui)
+            agent.noter_transcription(texte, final=True)
+            agent.ouvrir_fenetre()
+            return {"texte": texte, "moteur": qui, "secondes": secondes}
         elif nom == "effort":
             cle = str(donnees.get("cle") or "")
             libelle = await worker.changer_effort(cle)
@@ -1458,8 +1630,16 @@ async def entrypoint(ctx: JobContext):
                     "sous": c.get("sous"),
                     "apercu": journal.dernier_echange(c.get("fichier") or ""),
                 })
+            # `session_id` n'existe qu'une fois le SDK revenu avec un premier message, et
+            # cette liste est publiee au demarrage — donc AVANT. La page recevait donc
+            # « courante : aucune », ne trouvait la conversation dans aucune entree, et
+            # concluait « nouvelle conversation » alors qu'on venait d'en reprendre une.
+            # A defaut du confirme, on donne le DEMANDE : c'est la meilleure reponse qu'on
+            # ait a cet instant, et si la reprise echoue l'evenement « session » corrigera.
             tableau.publier("conversations", liste=liste,
-                            courante=worker.session_id, dossier=config.WORKDIR)
+                            courante=worker.session_id
+                                     or (worker.reprise or {}).get("session_id"),
+                            dossier=config.WORKDIR)
         except Exception:
             log.debug("liste des conversations indisponible", exc_info=True)
 

@@ -15,6 +15,9 @@ import json
 import logging
 import pathlib
 import os
+import re
+import shutil
+import tempfile
 import time
 import webbrowser
 from collections import deque
@@ -36,6 +39,32 @@ ETATS = frozenset({
     "consommation", "conversations",
     "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
 })
+
+
+async def _decoder_pcm(chemin: pathlib.Path) -> bytes | None:
+    """Ce que le telephone envoie, converti en ce que la chaine de reconnaissance mange.
+
+    Un seul format en sortie — 16 kHz, mono, entiers signes 16 bits — quel que soit ce qui
+    entre : Opus dans du WebM (Chrome, Firefox), AAC dans du MP4 (Safari, iOS), et le reste.
+    ffmpeg fait ça pour tous ; le reimplementer par format serait s'inventer du travail."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.warning("ffmpeg introuvable : les vocaux du telephone ne peuvent pas etre decodes")
+        return None
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg, "-v", "error", "-nostdin", "-i", str(chemin),
+        "-f", "s16le", "-ac", "1", "-ar", "16000", "-",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        sortie, erreurs = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        log.warning("ffmpeg n'a pas fini en 30 s")
+        return None
+    if proc.returncode != 0 or not sortie:
+        log.warning("ffmpeg a refuse l'audio : %s", (erreurs or b"").decode("utf-8", "replace")[:300])
+        return None
+    return sortie
 
 
 class Tableau:
@@ -172,7 +201,7 @@ class Tableau:
                          **supplement)
 
     async def _page(self, _req):
-        return web.Response(text=PAGE, content_type="text/html")
+        return web.Response(text=_page_html(), content_type="text/html")
 
     async def _image(self, requete):
         """Recevoir une photo, et rendre son chemin.
@@ -231,6 +260,77 @@ class Tableau:
             chemin.unlink(missing_ok=True)
             return web.json_response({"erreur": "image vide"}, status=400)
         return web.json_response({"chemin": str(chemin), "octets": octets})
+
+    async def _audio(self, requete):
+        """Recevoir un enregistrement du micro d'un AUTRE appareil, et le faire transcrire.
+
+        C'est ce qui fait du telephone une vraie voix, et pas seulement un ecran. Le son est
+        capte la-bas, transcrit ICI — par la meme chaine que le micro du PC, avec le meme
+        vocabulaire biaise — et le texte entre ensuite dans la conversation exactement comme
+        une phrase entendue : decompte, retenue, envoi, tout pareil.
+
+        Pourquoi pas la reconnaissance du navigateur : sur iPhone elle ne marche pas. Elle
+        s'allume, ne demande rien, n'entend rien, et ne dit rien. Tout ce qui a ete tente
+        de ce cote a echoue en silence, ce qui est pire qu'une erreur. Un fichier audio, lui,
+        ne ment pas.
+
+        Le fichier passe par le disque et non par un tube : l'AAC d'iOS ecrit son index a la
+        FIN du fichier, et un decodeur qui lit un tube ne peut pas y revenir.
+        """
+        TYPES = {"audio/webm", "video/webm", "audio/mp4", "audio/x-m4a", "audio/aac",
+                 "audio/ogg", "audio/wav", "audio/x-wav", "audio/wave", "audio/mpeg",
+                 "audio/3gpp", "application/octet-stream"}
+        PLAFOND = 12 * 1024 * 1024   # une minute et demie de voix compressee en fait moins d'un
+
+        if not self._on_commande:
+            return web.json_response({"erreur": "l'agent n'est pas encore branché"}, status=503)
+        if not (requete.content_type or "").startswith("multipart/"):
+            return web.json_response({"erreur": "envoi multipart attendu"}, status=400)
+        lecteur = await requete.multipart()
+        piece = await lecteur.next()
+        while piece is not None and piece.name != "audio":
+            piece = await lecteur.next()
+        if piece is None:
+            return web.json_response({"erreur": "aucun audio dans l'envoi"}, status=400)
+        mime = (piece.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if mime and mime not in TYPES:
+            return web.json_response({"erreur": f"type refuse : {mime}"}, status=415)
+
+        octets = 0
+        with tempfile.NamedTemporaryFile(prefix="voix-vocal-", suffix=".bin", delete=False) as tmp:
+            chemin = pathlib.Path(tmp.name)
+            while True:
+                bloc = await piece.read_chunk()
+                if not bloc:
+                    break
+                octets += len(bloc)
+                if octets > PLAFOND:
+                    tmp.close()
+                    chemin.unlink(missing_ok=True)
+                    return web.json_response({"erreur": "enregistrement trop lourd"}, status=413)
+                tmp.write(bloc)
+        try:
+            if not octets:
+                return web.json_response({"erreur": "enregistrement vide"}, status=400)
+            pcm = await _decoder_pcm(chemin)
+        finally:
+            chemin.unlink(missing_ok=True)
+        if pcm is None:
+            return web.json_response(
+                {"erreur": "audio illisible — ffmpeg absent, ou format inconnu"}, status=415)
+        secondes = len(pcm) / 2 / 16000
+        if secondes < 0.3:
+            return web.json_response({"erreur": "enregistrement trop court"}, status=400)
+        try:
+            resultat = await self._on_commande(
+                "vocal", {"pcm": pcm, "taux": 16000, "secondes": secondes, "mime": mime})
+        except Exception:
+            log.exception("transcription d'un vocal")
+            return web.json_response(
+                {"erreur": "la transcription a échoué — détails dans les logs"}, status=500)
+        if isinstance(resultat, dict):
+            return web.json_response(resultat, status=422 if resultat.get("erreur") else 200)
+        return web.json_response({"texte": str(resultat or ""), "secondes": round(secondes, 1)})
 
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
@@ -302,6 +402,11 @@ class Tableau:
                 continue
         return {
             "genre": "_pouls",
+            # La version de la page servie. Tant qu'on developpe l'application DEPUIS
+            # l'application, c'est l'information la plus utile du lot : sans elle on regarde
+            # une page figee au demarrage en croyant tester la derniere version, et on conclut
+            # que le correctif ne marche pas alors qu'il n'est simplement pas la.
+            "version": _version_page(),
             # L'etat de l'agent voyage avec le pouls : c'est lui qui permet a la page de
             # decider, en fin de reprise, si quelque chose peut ENCORE etre en cours.
             "etat": (etat.get("etat") or {}).get("vers", ""),
@@ -391,6 +496,7 @@ class Tableau:
         app.router.add_get("/flux", self._flux)
         app.router.add_get("/etat.json", self._etat)
         app.router.add_post("/image", self._image)
+        app.router.add_post("/audio", self._audio)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
@@ -656,6 +762,10 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #choix-moteur .pied{border-top:1px solid var(--bord);margin-top:8px;padding-top:8px;
   line-height:1.5}
 #choix-moteur .pied b{color:var(--texte)}
+/* Le nom de la conversation dans le titre : cache sur grand ecran, ou la pastille des
+   conversations le porte deja a quelques centimetres. L'afficher deux fois ne dirait rien de
+   plus et prendrait la place ou tiennent le modele et l'effort. */
+#ou{display:none}
 h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:flex;gap:8px;align-items:center}
 
@@ -923,6 +1033,27 @@ body{overflow-x:hidden}
 #joindre:hover{color:var(--texte)}
 #joindre svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.5;
   stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+#dicter-ici svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+#dicter-ici{color:#8b95a3}
+/* Rouge : il enregistre, et c'est la seule chose de la page qui merite du rouge — un micro
+   ouvert qu'on a oublie coute quelque chose. Ambre : le PC transcrit, on attend. */
+#dicter-ici[aria-pressed="true"]{color:#ff7b72;border-color:#ff7b72;background:#2a1517;
+  animation:lit 1.2s ease-in-out infinite}
+#dicter-ici.envoi{color:var(--outil);border-color:var(--outil);background:#1c1710;animation:none}
+#dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
+#dicter-ici[hidden]{display:none}
+@media (prefers-reduced-motion: reduce){
+  #dicter-ici[aria-pressed="true"], #dicter-ici.envoi svg{animation:none} }
+#lire-ici svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+#lire-ici{color:#8b95a3}
+/* Eteint, les ondes n'existent pas : le bouton montre un haut-parleur muet, pas un
+   haut-parleur grise. La difference se lit d'un coup d'oeil, sans comparer a rien. */
+#lire-ici[aria-pressed="false"] .onde1,
+#lire-ici[aria-pressed="false"] .onde2{display:none}
+#lire-ici[aria-pressed="true"]{color:var(--voix);border-color:#2f4a37;background:#161e18}
+#lire-ici[hidden]{display:none}
 .micro-rond.coupe-son{font-size:15px;color:var(--voix);border-color:#2f4a37}
 .micro-rond.coupe-son:hover{background:#1b2a20;border-color:var(--voix)}
 .micro-rond.coupe-son[hidden]{display:none}
@@ -992,6 +1123,12 @@ body{overflow-x:hidden}
 .g-resultat .badge{color:#7d8590} .g-resultat .corps{color:var(--faible);font-size:13px}
 .g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#9fe6ec;font-size:13px}
 .g-permission .badge{color:var(--permission)} .g-permission .corps{color:#ffc9c4}
+/* Une question attend quelqu'un : elle emprunte la couleur des permissions, qui est deja
+   celle de « rien n'avance tant que tu n'as pas repondu ». */
+.g-question .badge{color:var(--permission)} .g-question .corps{color:#ffd9a8}
+.opts{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:6px;vertical-align:middle}
+.opt{border:1px solid var(--bord);border-radius:999px;padding:1px 9px;font-size:12px;
+  color:var(--faible);white-space:nowrap}
 .g-tour .badge{color:var(--tour)} .g-tour .corps{color:#9fe6ec}
 /* Un tour interrompu porte la couleur de l'alerte, pas celle du tour : il faut pouvoir le
    repérer en faisant défiler, sans lire. */
@@ -1078,6 +1215,12 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 #travail.fige{border-color:var(--bord);color:var(--faible)}
 #travail.fige::before{animation:none;opacity:.5}
 #etat.vif{animation:pulse 1.4s ease-in-out infinite}
+/* Ni rouge ni alarmant : ce n'est pas un probleme, c'est une proposition. Assez visible
+   pour qu'on le remarque en developpant, assez discret pour qu'on l'ignore sans effort. */
+#maj-page{border:1px solid var(--outil);background:#1c1710;color:#e3b341;border-radius:999px;
+  padding:3px 11px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+#maj-page:hover{background:#241d12}
+#maj-page[hidden]{display:none}
 
 #bas{position:fixed;bottom:calc(var(--barre) + 10px);right:16px;z-index:5;background:var(--carte);border:1px solid var(--bord);
   color:var(--faible);border-radius:999px;padding:6px 14px;font-size:12px;cursor:pointer;display:none;font-family:inherit}
@@ -1096,8 +1239,13 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      compteurs) ne se repliaient pas. Chacun devient une rangee qui defile. */
   header { padding: calc(8px + env(safe-area-inset-top)) 12px 8px; gap: 6px 8px;
     background: #0e1116; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  header h1 { font-size: 15px; gap: 6px; }
+  header h1 { font-size: 15px; gap: 6px; min-width: 0; }
   header h1 .marque { width: 19px; height: 19px; }
+  /* La marque dessinee suffit a dire quelle application c'est. Le mot, lui, occupait la
+     place du seul texte qui change d'un onglet a l'autre. */
+  header h1 .marque-nom { display: none; }
+  #ou { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-weight: 600; }
   #retour { width: 40px; height: 40px; font-size: 18px; }
   #etat { order: 1; font-size: 12px; }
   .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
@@ -1161,19 +1309,35 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      que les mesures propres au pouce — cibles a 44 px minimum, et un champ a 16 px sans
      quoi iOS zoome dessus a la mise au point et desaxe toute la page. */
   #saisie-barre { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
-  #micro-bas, #couper-lecture, #joindre { width: 44px; height: 44px; }
+  /* 40 et non 44 : trois ronds, un selecteur et deux boutons doivent tenir sur UNE rangee.
+     A 44 ils debordaient de quelques pixels, et le debordement coute une rangee entiere —
+     donc un tiers de la hauteur de la barre, pris sur la conversation. 40 px reste au-dessus
+     de la cible tactile confortable. */
+  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 40px; height: 40px; }
+  /* Quand CET appareil sait ecouter, le micro du PC n'a rien a faire ici : on n'est pas
+     dans la piece ou il se trouve. Il reste pilotable depuis l'en-tete, ou il a toujours
+     ete. Sans ce retrait, la rangee de boutons passait a deux lignes — et une barre de
+     saisie qui occupe trois lignes sur un telephone ne laisse plus voir la conversation. */
+  #composer.dictee-locale #micro-bas { display: none; }
   #saisie-barre form { gap: 8px; }
-  #depart { gap: 6px; }
+  #depart { gap: 5px; }
   #saisie {
     font-size: 16px;
     padding: 12px 14px; height: 48px; max-height: 36vh; border-radius: 22px;
   }
-  #envoyer { min-height: 44px; padding: 0 14px; font-size: 14px; }
-  #delai { min-height: 44px; font-size: 12.5px; padding: 4px 24px 4px 10px; }
-  #retenir { min-height: 44px; padding: 5px 12px; font-size: 13px; }
+  #envoyer { min-height: 40px; padding: 0 12px; font-size: 13.5px; }
+  #delai { min-height: 40px; font-size: 12px; padding: 4px 19px 4px 7px;
+    background-position: right 5px center; }
+  #retenir { min-height: 40px; padding: 5px 9px; font-size: 12.5px; }
+  #composer { gap: 8px 7px; }
 
   #pile-barre { left: 12px; right: 12px; }
   #cogitation, #note-barre, #en-attente { font-size: 12px; max-width: 100%; }
+  /* 10,5 px et 1 px de marge interne : lisible a la souris, invisible et intouchable au
+     doigt. C'est pour ça qu'ils semblaient absents — ils etaient la, trop petits pour
+     qu'on les voie. La cible tactile recommandee ne descend pas sous 32 px. */
+  .lecture { gap: 8px; margin-left: 0; display: flex; margin-top: 6px; }
+  .lecture button { font-size: 13px; padding: 6px 14px; min-height: 34px; }
   #bas { bottom: calc(var(--barre) + 8px); }
 
   /* --- Panneaux flottants -------------------------------------------------------- */
@@ -1185,20 +1349,31 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 }
 
 @media (max-width: 420px) {
-  /* Mesure a 360 px (iPhone SE, Android d'entree de gamme) : les ronds et le groupe de
-     depart faisaient 351 px pour 336 disponibles — onze pixels de trop, et « envoyer »
-     basculait seul sur une troisieme ligne. On les reprend sur les marges internes plutot
-     que sur la taille des cibles, qui reste au-dessus de 42 px. */
-  #micro-bas, #couper-lecture, #joindre { width: 42px; height: 42px; }
-  #saisie-barre form { gap: 8px 6px; }
-  #depart { gap: 5px; }
-  #delai { padding: 4px 20px 4px 9px; }
-  #retenir { padding: 5px 10px; }
-  #envoyer { padding: 0 12px; }
+  /* Recalibre : la rangee porte un rond de plus depuis que cet appareil peut lire et
+     dicter lui-meme. Mesure a 390 px — 360 px de contenu pour 366 disponibles, plus les
+     espaces, donc quinze de trop, et « envoyer » repartait sur une troisieme ligne.
+     Une barre de saisie qui occupe trois lignes sur un telephone ne laisse plus voir la
+     conversation : c'est la hauteur qu'on defend ici, pas l'esthetique.
+     On reprend sur les marges internes, jamais sous 40 px de cible tactile. */
+  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 40px; height: 40px; }
+  #composer { gap: 8px 6px; }
+  #depart { gap: 4px; }
+  #delai { padding: 4px 17px 4px 6px; font-size: 11.5px; background-position: right 4px center; }
+  #retenir { padding: 5px 8px; font-size: 12px; }
+  #envoyer { padding: 0 11px; font-size: 13px; }
   header { padding-left: 10px; padding-right: 10px; }
   header h1 { font-size: 14px; }
   #flux { padding-left: 8px; padding-right: 8px; }
   .zone-controles button { padding: 6px 9px; font-size: 12.5px; }
+}
+
+/* Les tres petits ecrans (iPhone SE de premiere generation, 320 px). Meme resserres, six
+   controles n'y tiennent pas : il faut en retirer un. C'est le delai qui part — il regle au
+   bout de combien de silence la dictee du PC s'envoie toute seule, ce qui ne veut plus dire
+   grand-chose sur un telephone qui dicte lui-meme et dont on commande l'envoi au doigt.
+   « retenir » et « envoyer », eux, sont des gestes, pas des reglages : ils restent. */
+@media (max-width: 340px) {
+  #delai { display: none; }
 }
 
 @media (max-width: 900px) and (orientation: landscape) {
@@ -1214,10 +1389,23 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <svg class="marque" viewBox="0 0 32 32" aria-hidden="true">
       <path d="M15.13 11.89Q15.38 7.50 16.00 2.20Q16.62 7.50 16.87 11.89Z M17.30 12.01Q19.12 9.54 21.40 6.65Q20.03 10.07 18.81 12.88Z M19.12 13.19Q23.05 11.21 27.95 9.10Q23.67 12.29 19.99 14.70Z M20.11 15.13Q23.15 15.47 26.80 16.00Q23.15 16.53 20.11 16.87Z M19.99 17.30Q23.67 19.71 27.95 22.90Q23.05 20.79 19.12 18.81Z M18.81 19.12Q20.03 21.93 21.40 25.35Q19.12 22.46 17.30 19.99Z M16.87 20.11Q16.62 24.50 16.00 29.80Q15.38 24.50 15.13 20.11Z M14.70 19.99Q12.88 22.46 10.60 25.35Q11.97 21.93 13.19 19.12Z M12.88 18.81Q8.95 20.79 4.05 22.90Q8.33 19.71 12.01 17.30Z M11.89 16.87Q8.85 16.53 5.20 16.00Q8.85 15.47 11.89 15.13Z M12.01 14.70Q8.33 12.29 4.05 9.10Q8.95 11.21 12.88 13.19Z M13.19 12.88Q11.97 10.07 10.60 6.65Q12.88 9.54 14.70 12.01Z"/>
     </svg>
-    claude-talk
+    <span class="marque-nom">claude-talk</span>
+    <!-- Sur telephone, c'est CE nom qu'on lit, pas celui de l'application. Le nom de la
+         conversation vivait dans la troisieme rangee de l'en-tete, celle qui se replie des
+         qu'on fait defiler le flux : deux conversations ouvertes cote a cote etaient alors
+         indiscernables, et rien a l'ecran ne disait laquelle on tenait. Le titre de la
+         fenetre le porte, mais un telephone ne montre aucun titre d'onglet. Ici il reste,
+         parce que le h1 survit au repli. -->
+    <span id="ou" hidden></span>
   </h1>
   <span id="etat" class="e-listening">connexion…</span>
   <span id="alerte-entete" class="alerte" style="display:none"></span>
+  <!-- Apparait UNIQUEMENT quand le serveur sert une page plus recente que celle-ci. Le reste
+       du temps il n'existe pas : un bouton « actualiser » permanent serait du bruit, et
+       surtout il n'apprendrait rien — on ne sait pas, en le regardant, s'il y a quelque
+       chose a actualiser. Celui-ci ne s'affiche que lorsque la reponse est oui. -->
+  <button id="maj-page" type="button" hidden
+          title="le serveur a une version plus récente de cette page">↻ nouvelle version</button>
 
   <!-- Trois zones plutôt qu'une rangée qui se replie n'importe comment : ce que tu PILOTES,
        ce qui se PASSE, et les mesures. Sans elles, la pastille « parole » sautait à la ligne
@@ -1304,6 +1492,30 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          permanence occuperait la place sans jamais servir. -->
     <button id="couper-lecture" type="button" class="micro-rond coupe-son" hidden
             title="couper la lecture en cours (ou dis « chut »)">⏹</button>
+    <!-- Lire les reponses SUR CET APPAREIL. Rien a voir avec le bouton precedent : celui-la
+         coupe la voix qui sort du PC, celui-ci fait parler le telephone qu'on tient.
+         Eteint au chargement, toujours, et ce n'est pas un reglage prudent — c'est une
+         contrainte de WebKit. iOS refuse toute synthese qui ne descend pas d'un geste de
+         l'utilisateur : une page qui tenterait de parler toute seule a l'ouverture resterait
+         muette pour le reste de la session, sans erreur. Le premier appui sert donc de clef,
+         et c'est exactement le geste demande. -->
+    <button id="lire-ici" type="button" class="micro-rond" hidden
+            aria-pressed="false" title="lire les réponses sur cet appareil">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path
+        d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Z"/>
+        <path class="onde1" d="M15.6 9.2a4 4 0 0 1 0 5.6"/>
+        <path class="onde2" d="M18.1 6.8a7.5 7.5 0 0 1 0 10.4"/></svg>
+    </button>
+    <!-- Dicter AVEC CET APPAREIL. Le micro rond, a gauche, pilote le micro du PC — celui
+         qui tient la session et la chaine de reconnaissance. Vu du telephone, il est donc
+         inutilisable : on n'est pas dans la piece. Celui-ci fait ecouter le telephone qu'on
+         tient, et ecrit dans la barre comme le ferait la dictee du PC. -->
+    <button id="dicter-ici" type="button" class="micro-rond" hidden
+            aria-pressed="false" title="dicter avec le micro de cet appareil">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="9.2" y="3" width="5.6" height="10.4" rx="2.8"/>
+        <path d="M5.8 11.4a6.2 6.2 0 0 0 12.4 0"/><path d="M12 17.6V21"/></svg>
+    </button>
     <!-- Joindre une image. Le bouton est a cote du micro parce qu'il repond au meme
          besoin : dire quelque chose qu'on ne veut pas taper. -->
     <label id="joindre" class="micro-rond" title="joindre une photo ou une capture">
@@ -1367,6 +1579,7 @@ const GROUPES = [
     { g: "dictee",  lib: "retenu",   quoi: "dit mais pas envoyé — ça attend dans la barre",
       cache: true },
     { g: "attente", lib: "attente",  quoi: "une autre conversation parle, celle-ci patiente" },
+    { g: "question", lib: "question", quoi: "Claude te demande quelque chose, et ta réponse" },
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
     { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
@@ -1615,6 +1828,17 @@ function corps(e) {
     }
     case "permission":
       return `${ech(e.texte)}${e.decision ? ` — <b>${ech(e.decision)}</b>` : ""}`;
+    case "question": {
+      // Les options sont AFFICHÉES même si la réponse est libre. À l'oral on répond ce
+      // qu'on veut, mais savoir entre quoi et quoi Claude hésite change la réponse qu'on
+      // donne — et c'est l'information qu'une réponse parlée ferait perdre.
+      const opts = (e.questions || []).flatMap(q => q.options || []);
+      const choix = opts.length
+        ? ` <span class="opts">${opts.map(o => `<span class="opt">${ech(o)}</span>`).join("")}</span>`
+        : "";
+      const rep = e.reponse ? ` — <b>${ech(e.reponse)}</b>` : "";
+      return `${ech(e.texte)}${choix}${rep}`;
+    }
     case "tour": {
       const bouts = [];
       if (e.actions != null) bouts.push(`${e.actions} action${e.actions > 1 ? "s" : ""}`);
@@ -1686,6 +1910,7 @@ function etatInitial(e) {
     case "resultat": return e.echec ? "echec" : "ok";
     case "erreur": return "echec";
     case "permission": return e.decision === "refusé" ? "echec" : "ok";
+    case "question": return e.reponse ? "ok" : "encours";
     default: return "";
   }
 }
@@ -1698,6 +1923,11 @@ function cleDeSuivi(e) {
   if (e.genre === "outil") return "outil:" + (e.id || "?");
   if (e.genre === "partiel") return "stt";
   if (e.genre === "pensee" || e.genre === "voix") return e.genre;
+  // Une question EN ATTENTE est le seul moment ou la machine attend l'utilisateur plutot que
+  // l'inverse : elle merite son indicateur. Celle qui porte deja sa reponse n'attend plus
+  // rien — la suivre la ferait tourner pour toujours, ce qui est exactement le defaut qu'on
+  // a passe la journee a retirer d'ailleurs.
+  if (e.genre === "question") return e.reponse ? null : "question:" + (e.id || "?");
   return null;
 }
 
@@ -1787,6 +2017,11 @@ function ajouter(e) {
              e.echec ? "l'outil a renvoyé une erreur" : "sans sortie");
     return;
   }
+  // La reponse eteint l'attente de SA question, et ne laisse qu'une ligne : la question
+  // seule et la question repondue sont le meme evenement a deux moments, pas deux echanges.
+  if (e.genre === "question" && e.reponse && e.id) {
+    resoudre("question:" + e.id, "ok");
+  }
   const meme = dernier && dernier.dataset.g === e.genre;
   let nouvelle = false;
   if (e.genre === "partiel" && meme) {
@@ -1839,7 +2074,21 @@ function ajouter(e) {
              e.echec ? "l'outil a renvoyé une erreur" : "");
   }
   if (e.genre === "pensee") battre("pensee");
-  if (e.genre === "voix") battre("voix");
+  // L'identifiant de session confirme par le SDK. Il arrive APRES la liste des
+  // conversations, et il peut la dementir : si la reprise n'a pas pris, Claude Code ouvre
+  // une conversation neuve sans rien dire. Recaler ici garde le nom affiche honnete dans
+  // les deux cas — celui ou la reprise a marche, et celui ou elle a echoue.
+  if (e.genre === "session" && e.id && e.id !== convCourante) {
+    convCourante = e.id;
+    majConvs();
+  }
+  if (e.genre === "voix") {
+    battre("voix");
+    // On RETIENT, on ne lit pas. Personne ne veut qu'un telephone se mette a parler tout
+    // seul a la fin de chaque reponse — en reunion, dans le train, a cote de quelqu'un.
+    // La lecture part du bouton, jamais de l'arrivee d'un message.
+    suivreReponse(e);
+  }
   // La réflexion s'arrête dès qu'elle produit quelque chose : du texte, ou un outil.
   if (e.genre === "texte" || e.genre === "outil") {
     clearTimeout(echeances.pensee); resoudre("pensee", "ok");
@@ -1862,43 +2111,70 @@ function ajouter(e) {
 let socket = null, microActif = true, reconnexionPrevue = false;
 let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il en est ?
 
-// Sur telephone, la console du navigateur est inaccessible : une socket qui
-// refuse de s ouvrir donnait « connexion... » sans jamais dire pourquoi.
-// On affiche l erreur dans la page, c est le seul endroit ou elle sera lue.
+// Sur telephone, la console du navigateur est inaccessible : une socket qui refuse de
+// s'ouvrir donnait « connexion... » sans jamais dire pourquoi. Cette boite existe pour ce
+// cas-la, et pour lui seul.
+//
+// Elle s'affichait a CHAQUE fermeture de socket, en rouge, en haut de l'ecran et par-dessus
+// l'en-tete. Or une fermeture suivie d'une reconnexion reussie n'est pas une erreur : c'est
+// le fonctionnement normal d'un telephone qu'on met dans sa poche. Le resultat etait le pire
+// possible — un bandeau d'alarme rouge qui masque la conversation pour annoncer que tout va
+// bien. L'etat de liaison, dans l'en-tete, disait deja « reconnexion dans 3 s » calmement.
+//
+// Elle n'apparait donc plus que lorsqu'il y a reellement quelque chose a diagnostiquer :
+// plusieurs echecs d'affilee ET une coupure qui dure. En bas, au-dessus de la barre, parce
+// qu'un diagnostic ne doit pas prendre la place de ce qu'on est en train de lire. Et en
+// ambre : c'est un avertissement, pas une panne — l'agent, lui, tourne probablement encore.
+const DIAG_APRES = 45000;   // au-dela, ce n'est plus un aller-retour
+let coupeDepuis = 0;        // Date.now() de la coupure en cours, 0 si la liaison tient
+
 function __diagBoite() {
   let b = document.getElementById("diag-ws");
   if (!b) {
     b = document.createElement("div");
     b.id = "diag-ws";
-    b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99;padding:8px 12px;"
-      + "font:12px/1.4 ui-monospace,monospace;color:#f85149;background:#1a0f10;"
-      + "border-bottom:1px solid #f8514966;white-space:pre-wrap;word-break:break-all";
-    document.body.prepend(b);
+    b.style.cssText = "position:fixed;left:8px;right:8px;bottom:calc(var(--barre) + 10px);"
+      + "z-index:6;padding:8px 12px;border-radius:10px;"
+      + "font:12px/1.4 ui-monospace,monospace;color:#e3b341;background:#1c1710;"
+      + "border:1px solid #e3b34155;white-space:pre-wrap;word-break:break-word;cursor:pointer";
+    b.title = "toucher pour masquer";
+    b.onclick = () => b.remove();
+    document.body.appendChild(b);
   }
   return b;
+}
+
+function retirerDiag() { document.getElementById("diag-ws")?.remove(); }
+
+// Appelee chaque seconde par l'affichage de la liaison : un seul endroit decide, et il
+// decide sur la DUREE plutot que sur l'evenement.
+function majDiagnostic() {
+  const dure = coupeDepuis ? Date.now() - coupeDepuis : 0;
+  if (echecs < 4 || dure < DIAG_APRES) { retirerDiag(); return; }
+  __diagBoite().textContent =
+    "la reconnexion échoue depuis " + Math.round(dure / 1000) + " s"
+    + (causeCoupure ? "\n" + causeCoupure : "")
+    + "\nl'agent tourne peut-être toujours : vérifie qu'il est lancé sur le PC"
+    + "\n" + location.host;
 }
 function __diagSocket(ws) {
   // Le talon des tests donne une socket sans addEventListener : rien a surveiller.
   if (!ws || typeof ws.addEventListener !== "function") return;
-  const t0 = Date.now();
   const attente = setTimeout(() => {
-    if (ws.readyState === WebSocket.CONNECTING) {
-      __diagBoite().textContent = "⚠ WebSocket bloqué en CONNECTING depuis 6 s\n" + ws.url;
-    }
+    if (ws.readyState === WebSocket.CONNECTING) causeCoupure = "connexion bloquée à l'ouverture";
   }, 6000);
   ws.addEventListener("open", () => {
     clearTimeout(attente);
-    document.getElementById("diag-ws")?.remove();
+    coupeDepuis = 0;
+    retirerDiag();
   });
-  ws.addEventListener("error", () => {
-    __diagBoite().textContent = "⚠ WebSocket : erreur\n" + ws.url + "\npage : " + location.href;
-  });
+  // On ENREGISTRE la cause, on ne l'affiche pas. Elle part dans l'infobulle de l'etat de
+  // liaison, et dans la boite de diagnostic si la coupure s'installe — pas avant.
+  ws.addEventListener("error", () => { causeCoupure = causeCoupure || "erreur de connexion"; });
   ws.addEventListener("close", (e) => {
     clearTimeout(attente);
     if (e.code === 1000 || e.code === 1001) return;
-    __diagBoite().textContent = "⚠ WebSocket fermé code=" + e.code
-      + (e.reason ? " raison=" + e.reason : "")
-      + " après " + Math.round((Date.now() - t0) / 1000) + " s\n" + ws.url;
+    causeCoupure = "fermeture code " + e.code + (e.reason ? " (" + e.reason + ")" : "");
   });
 }
 
@@ -1922,6 +2198,15 @@ function envoyerCmd(ordre) {
   // deux messages ecrits sont deux messages, pas un etat qu'on ecrase.
   if (ordre.cmd !== "texte") enAttente = enAttente.filter(o => o.cmd !== ordre.cmd);
   enAttente.push(ordre);
+  // Le DIRE. Sans ça, appuyer sur le micro alors que la liaison est morte ne produisait
+  // rigoureusement rien a l'ecran : le bouton ne changeait pas — c'est le serveur qui
+  // confirme l'etat, et il n'est plus la — et une reconnexion partait en silence. Vu du
+  // telephone, ça ressemble a une page qui ignore les appuis. L'action n'est pourtant pas
+  // perdue : elle est en file et partira. C'est exactement ce qu'il faut annoncer.
+  // « texte » est exclu : les messages ont deja leur zone « en vol », qui dit mieux.
+  if (ordre.cmd !== "texte") {
+    noteBarre("liaison perdue — l'action partira dès que la connexion revient", true);
+  }
   reconnecter();          // ne pas attendre le prochain clic pour s'en apercevoir
   return false;
 }
@@ -2210,14 +2495,40 @@ function noteBarre(texte, collante = false) {
 const enVol = [];   // { texte, quand }
 const ATTENTE_ACCUSE = 20000;
 
+// Ecrits sur le disque de l'appareil a chaque changement. iOS tue un onglet en arriere-plan
+// sans prevenir : la page qui revient est NEUVE, et une liste tenue en memoire n'existe plus.
+// C'est exactement le cas « j'ai envoye, je suis parti trop tot, et au retour il fallait
+// tout renvoyer comme si de rien n'etait ». Par origine, donc par conversation — chaque
+// conversation vit sur son port.
+const CLE_EN_VOL = "voix.enVol";
+function persisterEnVol() {
+  try { localStorage.setItem(CLE_EN_VOL, JSON.stringify(enVol.map(m => ({ texte: m.texte, quand: m.quand })))); }
+  catch (_) {}
+}
+function restaurerEnVol() {
+  let brut = [];
+  try { brut = JSON.parse(localStorage.getItem(CLE_EN_VOL) || "[]"); } catch (_) {}
+  // Un quart d'heure : au-dela, le message a ete revu dans le flux ou il est perdu pour de
+  // bon, et le reposter surprendrait plus qu'il n'aiderait.
+  const recents = (Array.isArray(brut) ? brut : [])
+    .filter(m => m && m.texte && Date.now() - (m.quand || 0) < 15 * 60000);
+  for (const m of recents) {
+    if (!enVol.some(x => x.texte === m.texte)) enVol.push({ texte: m.texte, quand: m.quand, restaure: true });
+  }
+  if (enVol.length) majEnVol();
+  return recents.length;
+}
+
 function majEnVol() {
   const z = document.getElementById("en-vol");
   if (!z) return;
+  persisterEnVol();
   if (!enVol.length) { z.hidden = true; z.innerHTML = ""; return; }
   const horsLigne = !socket || socket.readyState !== WebSocket.OPEN;
   z.innerHTML = enVol.map((m, i) => {
     const tarde = !horsLigne && Date.now() - m.quand > ATTENTE_ACCUSE;
-    const quoi = horsLigne ? "part à la reconnexion" : tarde ? "sans confirmation" : "envoi…";
+    const quoi = (m.restaure ? "envoyé avant de quitter la page — " : "")
+      + (horsLigne ? "part à la reconnexion" : tarde ? "sans confirmation" : "envoi…");
     return `<div class="vol${tarde ? " tarde" : ""}"><span class="quoi">${tarde ? "⚠" : "⏳"} ${quoi}</span>`
       + `<span class="dit">${ech(m.texte)}</span>`
       + (tarde ? `<button type="button" data-vol="${i}">remettre dans le champ</button>` : "")
@@ -2258,6 +2569,9 @@ function renvoyerEnVol() {
 }
 // Le temps qui passe change ce qu'on affiche (« envoi… » puis « sans confirmation »).
 setInterval(() => { if (enVol.length) majEnVol(); }, 1000);
+// Au chargement : ce qui etait en vol quand la page precedente est morte. Le rejeu de
+// l'historique accusera ce qui est arrive ; la fin de reprise renverra le reste, une fois.
+restaurerEnVol();
 
 function lancerCompte(min, max, fin) {
   if (fin) {
@@ -2850,6 +3164,8 @@ function recevoir(e, etat = false) {
     if (e.genre === "pupitre") { majPupitre(e); return; }
     // Le texte est complet, mais la voix le lit encore : on rearme le garde-fou plutot
     // que d'eteindre l'indicateur, sinon « parole » s'eteindrait en pleine phrase.
+    // La fin de la reponse vide le tampon : la derniere phrase n'a pas toujours de point,
+    // et sans ce coup de balai elle resterait a attendre une suite qui ne vient jamais.
     if (e.genre === "parole_fin") { battre("voix"); outillerParole(e); return; }
     if (e.genre === "lecture") {
       lectureEnCours = e.actif ? e.id : null;
@@ -3098,6 +3414,7 @@ function dessinerChoix() {
 // conversations sur le même projet, « 22:49 » et « 22:55 » ne distinguent rien.
 let convs = [], convCourante = null, convDossier = "";
 const btnConvs = document.getElementById("convs");
+const ou = document.getElementById("ou");
 
 function ilYA(iso) {
   if (!iso) return "";
@@ -3116,6 +3433,11 @@ function majConvs() {
   const nom = c ? (c.titre || c.projet || "sans nom") : "nouvelle conversation";
   btnConvs.innerHTML = `<span class="rond"></span><b>${ech(nom)}</b>`
     + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "");
+  // Le meme `nom`, pose au meme instant : deux endroits qui l'affichent, une seule source.
+  // Le recalculer ailleurs aurait fini par donner deux noms differents pour une conversation.
+  ou.textContent = nom;
+  ou.hidden = false;
+  ou.title = nom;
   btnConvs.title = c
     ? `${c.titre ? c.titre + " · " : ""}${c.projet} — ${c.tours} tours`
       + `\nCliquer pour en reprendre une autre, ou en ouvrir une neuve.`
@@ -3282,12 +3604,312 @@ function outillerParole(e) {
   relire.type = "button";
   relire.textContent = "relire";
   relire.title = "relire cette réponse — utile si la lecture a été coupée";
-  relire.onclick = () => envoyerCmd({ cmd: "relire", id: e.id });
+  relire.onclick = () => {
+    // Quand cet appareil lit lui-meme, « relire » ne doit pas reveiller les haut-parleurs du
+    // PC — souvent dans une autre piece, et parfois devant quelqu'un d'autre.
+    if (lireDeCeCote()) {
+      const t = (corps.textContent || "").replace(/\s*(couper|relire)\s*$/g, "").trim();
+      if (t) { couperLectureLocale(); lectureLocale = true; majBoutonLecture(); lireTexte(t); return; }
+    }
+    envoyerCmd({ cmd: "relire", id: e.id });
+  };
 
   zone.append(couper, relire);
   corps.appendChild(zone);
   ligne.zoneLecture = zone;
   majBoutonsLecture();
+}
+
+// --- lire les reponses sur CET appareil --------------------------------------------------
+// La voix du projet sort des haut-parleurs du PC, parce que c'est lui qui tient Azure et la
+// session. Vu du telephone, ça rend la page a moitie muette : on lit les reponses, on ne les
+// entend pas — alors que le telephone sait parler tout seul, gratuitement et hors ligne.
+//
+// Trois contraintes de WebKit commandent tout ce qui suit, et chacune se manifeste par un
+// SILENCE plutot que par une erreur, ce qui les rend penibles a diagnostiquer :
+//
+//  1. Aucune synthese sans geste de l'utilisateur. D'ou le bouton, et d'ou le fait qu'il
+//     serve de clef : le premier appui debloque la synthese pour le reste de la session.
+//  2. La liste des voix arrive APRES le premier appel. `getVoices()` rend un tableau vide au
+//     chargement ; il faut attendre `voiceschanged`, sinon on lit en anglais un texte
+//     francais, ce qui est pire que de ne pas lire.
+//  3. Les longs textes sont tronques sans prevenir. On decoupe donc par phrases — ce qui a
+//     l'avantage de rendre la coupure naturelle a l'oreille plutot que de la subir au milieu
+//     d'un mot.
+const peutLireIci = typeof speechSynthesis !== "undefined"
+                 && typeof SpeechSynthesisUtterance !== "undefined";
+// Atteindre la page en localhost veut dire qu'on est ASSIS devant la machine qui tient la
+// session — celle dont les haut-parleurs disent deja tout a voix haute. Y relire quoi que ce
+// soit avec la voix du navigateur ferait parler deux fois. Depuis n'importe quelle autre
+// adresse, on est ailleurs : le PC parle dans une piece vide, et le seul son utile est ici.
+// Evalue a chaque appel plutot que fige au chargement. Le nom d'hote ne change pas en
+// pratique, mais une decision qu'on ne peut pas reproduire dans un test est une decision
+// qu'on ne verifie jamais — et celle-ci commande ou le son va sortir.
+const surLaMachine = () => ["127.0.0.1", "localhost", "::1", "[::1]"]
+  .includes((location.hostname || "").toLowerCase());
+const lireDeCeCote = () => peutLireIci && !surLaMachine();
+// Un bouton d'ACTION, pas un abonnement. La premiere version lisait tout ce qui arrivait
+// une fois allumee : c'est le contraire de ce qu'on veut sur un telephone qu'on sort de sa
+// poche au milieu d'une reunion. On appuie quand on veut entendre, et seulement alors.
+let lectureLocale = false;    // une lecture est en train de se jouer ICI
+let voixChoisie = null;
+
+function choisirVoix() {
+  if (!peutLireIci) return null;
+  const dispo = speechSynthesis.getVoices() || [];
+  // Une voix francaise, et de preference locale : sur iOS les voix distantes se taisent
+  // quand le reseau hesite, ce qui est exactement la situation ou l'on tient son telephone.
+  const fr = dispo.filter(v => (v.lang || "").toLowerCase().startsWith("fr"));
+  voixChoisie = fr.find(v => v.localService) || fr[0] || null;
+  return voixChoisie;
+}
+if (peutLireIci) {
+  choisirVoix();
+  speechSynthesis.addEventListener?.("voiceschanged", choisirVoix);
+}
+
+// Decoupe en phrases : (3) les longs textes sont tronques sans prevenir, et une coupure
+// sur une fin de phrase s'entend comme une respiration au lieu d'un accident.
+function decouperPhrases(texte) {
+  const sorties = [];
+  let reste = (texte || "").trim();
+  const coupe = /[.!?…]["»)]?\s/;
+  let m;
+  while ((m = coupe.exec(reste)) !== null) {
+    sorties.push(reste.slice(0, m.index + m[0].length).trim());
+    reste = reste.slice(m.index + m[0].length);
+  }
+  if (reste.trim()) sorties.push(reste.trim());
+  return sorties.filter(Boolean);
+}
+
+function direIci(texte, derniere) {
+  if (!peutLireIci || !texte) return;
+  const u = new SpeechSynthesisUtterance(texte);
+  if (voixChoisie) u.voice = voixChoisie;
+  u.lang = voixChoisie?.lang || "fr-FR";
+  u.rate = 1.05;
+  // Seule la DERNIERE phrase rend le bouton a son etat normal : le faire sur chacune le
+  // ferait clignoter entre deux phrases, comme si la lecture s'arretait sans arret.
+  if (derniere) u.onend = () => { lectureLocale = false; majBoutonLecture(); };
+  // speak() EMPILE : la file est tenue par le navigateur, donc enchainer les phrases ne
+  // demande aucun ordonnanceur de notre cote.
+  speechSynthesis.speak(u);
+}
+
+// Appele pour chaque morceau de reponse qui arrive. Pas pendant un rejeu : revenir sur la
+// page relirait alors toute la conversation depuis le debut, d'un coup, par-dessus elle-meme.
+// Un texte entier, decoupe en phrases et enfile d'un coup. Plus de tampon a tenir entre
+// deux evenements : on ne lit plus au fil de l'eau, on lit ce qui est deja ecrit.
+function lireTexte(texte) {
+  const phrases = decouperPhrases(texte);
+  phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
+  return phrases.length > 0;
+}
+
+// Le texte de la derniere reponse, tenu au fil de l'eau plutot que relu dans la page. Le
+// relire dans le DOM paraissait economique et ne l'etait pas : il fallait retrouver la bonne
+// ligne, puis retrancher les boutons « couper » et « relire » que l'outillage y ajoute — donc
+// dependre de la mise en forme pour recuperer du texte qu'on avait deja eu en main.
+//
+// Accumule MEME pendant un rejeu, alors qu'on ne lit rien pendant un rejeu : revenir sur la
+// page et vouloir se faire relire la derniere reponse est un geste parfaitement normal, et
+// c'est meme le plus probable sur un telephone qu'on ressort de sa poche.
+let idReponse = null, texteReponse = "";
+function suivreReponse(e) {
+  if (e.id && e.id !== idReponse) { idReponse = e.id; texteReponse = ""; }
+  texteReponse += e.texte || "";
+}
+function derniereReponse() { return texteReponse.trim(); }
+
+function majBoutonLecture() {
+  const b = document.getElementById("lire-ici");
+  if (b) {
+    b.setAttribute("aria-pressed", lectureLocale ? "true" : "false");
+    b.title = lectureLocale ? "arrêter la lecture"
+                            : "lire la dernière réponse sur cet appareil";
+  }
+}
+
+function couperLectureLocale() {
+  lectureLocale = false;
+  try { speechSynthesis.cancel(); } catch (_) {}
+  majBoutonLecture();
+}
+
+function basculerLectureIci() {
+  if (lectureLocale) { couperLectureLocale(); return; }
+  const texte = derniereReponse();
+  // Le dire plutot que de ne rien faire : un bouton qui reste inerte passe pour casse, et
+  // « il n'y a rien a lire » est une reponse, pas une panne.
+  if (!texte) { noteBarre("rien à lire : aucune réponse reçue pour l'instant"); return; }
+  // La clef (1) : la synthese s'ouvre depuis un geste. Comme on lit MAINTENANT et depuis le
+  // gestionnaire du clic, la condition est remplie sans avoir besoin d'amorce.
+  choisirVoix();
+  lectureLocale = true;
+  majBoutonLecture();
+  if (!lireTexte(texte)) couperLectureLocale();
+}
+
+if (lireDeCeCote()) {
+  const b = document.getElementById("lire-ici");
+  if (b) {
+    b.hidden = false;
+    // Pose explicitement plutot que laisse au HTML : l'etat du bouton et la variable qui
+    // decide vraiment doivent partir du meme endroit, sinon ils divergent au premier oubli.
+    b.setAttribute("aria-pressed", "false");
+    b.onclick = basculerLectureIci;
+  }
+}
+
+// --- dicter depuis CET appareil ----------------------------------------------------------
+// Le telephone ENREGISTRE, le PC TRANSCRIT. C'est la deuxieme version de cette fonction, et
+// la premiere merite d'etre racontee : elle s'appuyait sur la reconnaissance vocale du
+// navigateur. Sur Android, ça marche. Sur iPhone, ça s'allume, ne demande aucune
+// autorisation, n'entend rien, et ne dit rien — tout ce qui a ete tente pour la faire parler
+// a echoue en silence. Un fichier audio, lui, ne peut pas mentir : ou il contient de la voix,
+// ou il n'en contient pas, et dans les deux cas on le sait.
+//
+// Le gain va au-dela d'iOS. Le son passe par la MEME chaine que le micro du PC — Azure,
+// Deepgram, le vocabulaire du projet, les sigles maison — et le texte entre dans la
+// conversation comme une phrase entendue : decompte avant envoi, « retenir », retenue
+// d'office pendant que Claude travaille. Rien de tout ça n'existait avec la reconnaissance du
+// navigateur, qui rendait du texte a envoyer soi-meme.
+//
+// Appuyer, parler, appuyer. Pas de maintien : sur un ecran tactile, le doigt qui glisse d'un
+// millimetre relache le bouton en pleine phrase, et un enregistrement coupe au milieu d'un
+// mot ne se transcrit pas. Une minute et demie de garde-fou, pour l'appui qu'on oublie.
+const peutEnregistrerIci = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+                        && typeof MediaRecorder !== "undefined";
+const VOCAL_MAX_MS = 90000;
+let enregistreur = null, fluxMicro = null, morceauxAudio = [], minuterieVocal = null;
+let vocalEnCours = false, vocalEnvoi = false;
+
+// Opus dans WebM la ou c'est possible (Chrome, Firefox), AAC dans MP4 sinon (Safari). Le PC
+// decode les deux ; ce qui compte est de demander un format que CET appareil sait produire,
+// sinon MediaRecorder leve a la construction et rien ne s'enregistre.
+function mimeVocal() {
+  const candidats = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  for (const c of candidats) {
+    try { if (MediaRecorder.isTypeSupported(c)) return c; } catch (_) {}
+  }
+  return "";
+}
+
+function majBoutonDictee() {
+  const b = document.getElementById("dicter-ici");
+  if (!b) return;
+  b.setAttribute("aria-pressed", vocalEnCours ? "true" : "false");
+  b.classList.toggle("envoi", vocalEnvoi);
+  b.title = vocalEnCours ? "arrêter et envoyer l'enregistrement"
+          : vocalEnvoi ? "transcription en cours sur le PC…"
+          : "dicter avec le micro de cet appareil — appuie, parle, appuie";
+}
+
+function libererMicro() {
+  if (fluxMicro) { try { fluxMicro.getTracks().forEach(t => t.stop()); } catch (_) {} }
+  fluxMicro = null;
+  enregistreur = null;
+  clearTimeout(minuterieVocal);
+  minuterieVocal = null;
+}
+
+async function demarrerVocal() {
+  let flux;
+  try {
+    // C'est CET appel qui fait apparaitre la demande d'autorisation. Et s'il est refuse, on
+    // le sait tout de suite, avec la raison — l'inverse exact de la version precedente.
+    flux = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    const nom = (e && e.name) || "";
+    noteBarre(nom === "NotAllowedError" || nom === "SecurityError"
+      ? "micro refusé : autorise le microphone pour ce site dans les réglages, puis réessaie"
+      : "micro indisponible : " + (nom || e), true);
+    return;
+  }
+  fluxMicro = flux;
+  morceauxAudio = [];
+  const mime = mimeVocal();
+  try {
+    enregistreur = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
+  } catch (e) {
+    libererMicro();
+    noteBarre("impossible d'enregistrer sur cet appareil : " + ((e && e.message) || e), true);
+    return;
+  }
+  enregistreur.ondataavailable = ev => { if (ev.data && ev.data.size) morceauxAudio.push(ev.data); };
+  enregistreur.onstop = () => {
+    const type = (enregistreur && enregistreur.mimeType) || mime || "audio/webm";
+    const blob = new Blob(morceauxAudio, { type });
+    libererMicro();
+    vocalEnCours = false;
+    majBoutonDictee();
+    if (!blob.size) { noteBarre("enregistrement vide — rien n'a été capté", true); return; }
+    envoyerVocal(blob, type);
+  };
+  enregistreur.onerror = ev => {
+    noteBarre("l'enregistrement a échoué : " + ((ev && ev.error && ev.error.name) || "?"), true);
+    arreterVocal();
+  };
+  enregistreur.start();
+  vocalEnCours = true;
+  majBoutonDictee();
+  noteBarre("j'écoute — appuie à nouveau pour envoyer");
+  minuterieVocal = setTimeout(() => { if (vocalEnCours) arreterVocal(); }, VOCAL_MAX_MS);
+}
+
+function arreterVocal() {
+  if (!enregistreur) { vocalEnCours = false; libererMicro(); majBoutonDictee(); return; }
+  try { enregistreur.stop(); }          // onstop fait le reste
+  catch (_) { libererMicro(); vocalEnCours = false; majBoutonDictee(); }
+}
+
+async function envoyerVocal(blob, type) {
+  vocalEnvoi = true;
+  majBoutonDictee();
+  noteBarre("envoi au PC pour transcription…");
+  try {
+    const corps = new FormData();
+    const ext = /mp4|m4a|aac/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg"
+              : /wav/.test(type) ? "wav" : "webm";
+    corps.append("audio", blob, "vocal." + ext);
+    // Relatif au chemin de la page, comme les images : derriere un proxy, l'absolu viserait
+    // la racine du proxy.
+    const r = await fetch(location.pathname.replace(/\/$/, "") + "/audio",
+                          { method: "POST", body: corps });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.erreur) throw new Error(d.erreur || `envoi refusé (${r.status})`);
+    // Le texte n'est PAS pris ici : il arrive par le flux d'evenements, comme une dictee du
+    // PC, et c'est ce chemin-la qui remplit la barre et arme le decompte. Deux sources pour
+    // un meme texte finiraient par l'ecrire deux fois.
+    noteBarre(null);
+  } catch (e) {
+    noteBarre("vocal non transcrit — " + ((e && e.message) || e), true);
+  } finally {
+    vocalEnvoi = false;
+    majBoutonDictee();
+  }
+}
+
+function basculerDicteeIci() {
+  if (vocalEnCours) { arreterVocal(); return; }
+  if (vocalEnvoi) return;    // l'envoi precedent n'est pas fini : un second appui n'aiderait pas
+  // Sans https, Safari refuse le micro — et il le refuse en silence, ce qui se lit comme
+  // « la page est cassee ». On teste avant, et on le DIT.
+  if (!globalThis.isSecureContext) {
+    noteBarre("le micro de cet appareil demande une connexion sécurisée : ouvre la page "
+              + "en https plutôt qu'en http", true);
+    return;
+  }
+  demarrerVocal();
+}
+
+if (peutEnregistrerIci) {
+  const b = document.getElementById("dicter-ici");
+  if (b) { b.hidden = false; b.setAttribute("aria-pressed", "false"); b.onclick = basculerDicteeIci; }
+  // La classe porte la decision au CSS : sur telephone, le micro du PC cede sa place a
+  // celui d'ici. Un booleen JS ne peut pas etre lu par une media query.
+  document.getElementById("composer")?.classList.add("dictee-locale");
 }
 
 // « couper » n'a de sens que sur la lecture qui joue : ailleurs, il ne ferait rien.
@@ -3306,6 +3928,37 @@ function majBoutonsLecture() {
 }
 
 const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };
+
+// --- servir a se savoir perimee ----------------------------------------------------------
+// On developpe cette page DEPUIS cette page, en parlant. Le serveur la garde en memoire au
+// demarrage : modifier le code, recharger l'onglet et ne rien voir changer est donc le
+// comportement NORMAL, et c'est un piege parfait — on cherche un bug dans un correctif qui
+// n'est pas la. Le serveur relit maintenant son fichier, et annonce sa version dans chaque
+// pouls. Il ne reste qu'a comparer.
+//
+// Proposer, jamais imposer : un rechargement automatique effacerait le message en cours de
+// frappe, et arriverait forcement au pire moment. Le flux, lui, ne risque rien — le serveur
+// le rejoue.
+const MA_VERSION = "__VERSION_PAGE__";
+// Se comparer au marqueur litteral pour savoir s'il a ete substitue ne pouvait pas marcher :
+// la substitution remplace TOUTES ses occurrences, donc la garde elle-meme devenait vraie et
+// la fonction sortait toujours. Un piege joli — le code se lit correctement, et il se
+// desamorce lui-meme. On teste donc la FORME du resultat, qui ne peut pas se confondre.
+const VERSION_CONNUE = /^[0-9]+$/.test(MA_VERSION);
+
+// Pose explicitement plutot que laisse au seul balisage : l'etat de depart et la variable
+// qui decide doivent partir du meme endroit.
+document.getElementById("maj-page")?.setAttribute("hidden", "");
+if (document.getElementById("maj-page")) document.getElementById("maj-page").hidden = true;
+
+function verifierVersion(v) {
+  if (!v || !VERSION_CONNUE) return;
+  const b = document.getElementById("maj-page");
+  if (!b) return;
+  if (String(v) === MA_VERSION) { b.hidden = true; return; }
+  b.hidden = false;
+  b.onclick = () => location.reload();
+}
 
 // --- l'etat de la liaison, et ce qu'on en dit --------------------------------------------
 // Ce bloc remplace un compteur d'echecs et un delai fixe de 1,2 s. Ce que ca ratait, dans
@@ -3364,14 +4017,27 @@ function direLiaison() {
   // « deconnecte » reste reserve a l'echec repete : une coupure d'une seconde annoncee comme
   // une panne fait chercher un bug la ou il n'y a qu'un aller-retour.
   const perdu = echecs >= 4;
+  const essai = echecs + 1;
+  const depuis = coupeDepuis ? Math.round((Date.now() - coupeDepuis) / 1000) : 0;
   el.textContent = perdu
-    ? `déconnecté — essai ${echecs + 1}${reste ? ` dans ${reste} s` : "…"}`
+    ? `déconnecté · essai ${essai}${reste ? ` dans ${reste} s` : "…"}`
     : (reste > 1 ? `reconnexion dans ${reste} s…` : "reconnexion…");
   el.className = "e-listening" + (perdu ? "" : " vif");
+  // Le POURQUOI, la ou le regard est. « reconnexion… » tout seul, en haut a gauche, se lit
+  // comme « quelque chose s'est casse cote serveur et j'ai perdu l'etat ». Or neuf fois sur
+  // dix c'est le telephone qui a mis la page en veille, l'agent n'a rien vu, et rien n'est
+  // perdu. La cause, le numero d'essai et ce qui va se passer tiennent dans la barre de
+  // saisie, qui est vide a ce moment-la et sous les yeux.
+  const pourquoi = causeCoupure ? ` — ${causeCoupure}` : "";
   champ.placeholder = perdu
-    ? "déconnecté — l'agent tourne toujours ? le message part à la reconnexion"
-    : "reconnexion…";
+    ? `déconnecté depuis ${depuis} s${pourquoi} · essai ${essai} — l'agent tourne peut-être `
+      + "encore ; ce que tu écris partira à la reconnexion"
+    : `reconnexion${reste > 1 ? ` dans ${reste} s` : "…"}${pourquoi} · essai ${essai} — `
+      + "rien n'est perdu, ce que tu écris partira dès le retour";
   el.title = (causeCoupure ? causeCoupure + ". " : "") + motDuServeur();
+  // Sur telephone il n'y a pas d'infobulle : un appui sur l'etat la remplace.
+  el.onclick = () => noteBarre(el.title, true);
+  majDiagnostic();
 }
 
 function arreterRebranche() {
@@ -3408,6 +4074,10 @@ function rebrancherMaintenant(pourquoi, force) {
   if (socket && socket.readyState === 0 && !force) return;
   if (socket && socket.readyState === 1 && !perimee() && !force) return;
   causeCoupure = pourquoi;
+  // L'horloge de la coupure demarre ICI et ne repart pas a chaque tentative : ce qui
+  // interesse est « depuis combien de temps je n'ai plus de serveur », pas « depuis combien
+  // de temps dure cet essai-ci ».
+  if (!coupeDepuis) coupeDepuis = Date.now();
   echecs = 0;
   arreterRebranche();
   // Pas de compte a rebours : la tentative part maintenant. Sans cette remise a zero,
@@ -3491,6 +4161,8 @@ function brancher() {
   ws.onopen = () => {
     echecs = 0;
     causeCoupure = "";
+    coupeDepuis = 0;
+    retirerDiag();
     dernierPouls = Date.now();
     arreterRebranche();
     reconnexionPrevue = false;
@@ -3522,6 +4194,8 @@ function brancher() {
     }
     majEnvoyer();
     champ.placeholder = "écrire au lieu de parler — touche /";
+    const etatEl = document.getElementById("etat");
+    if (etatEl) etatEl.onclick = null;
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
     viderFile();
   };
@@ -3531,9 +4205,10 @@ function brancher() {
     // une liaison silencieuse parce que rien ne se passe d'une liaison silencieuse parce
     // qu'elle est morte.
     dernierPouls = Date.now();
-    if (d.genre === "_pouls") { serveur = d; return; }
+    if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version); return; }
     if (d.genre === "_bonjour") {
       serveur = d;
+      verifierVersion(d.version);
       // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
       // « ça tourne alors que rien ne tourne ». L'historique renvoyé contient les lignes
       // telles qu'elles ont été publiées : un vieux « voix » y rallume la pastille parole,
@@ -3643,12 +4318,64 @@ document.getElementById("bas").onclick = () => {
 </script></body></html>
 """
 
+# --- servir la DERNIERE version de la page ------------------------------------------------
+# `PAGE` est une constante de module : elle est figee au premier import, donc un serveur qui
+# tourne sert eternellement la page telle qu'elle etait a son demarrage. C'est sans importance
+# pour une application installee, et c'en est une ici — on developpe claude-talk DEPUIS
+# claude-talk, en parlant. Modifier la page, recharger l'onglet, et constater qu'il ne s'est
+# rien passe : le temps perdu a chercher un bug dans un correctif absent est considerable.
+#
+# On relit donc le fichier quand sa date de modification a bouge. Le cout est un `stat` par
+# requete de page — c'est-a-dire rien — et le fichier n'est relu que s'il a change.
+_SOURCE = pathlib.Path(__file__).resolve()
+_cache_page: dict = {"mtime": None, "html": None}
+
+
+def _version_page() -> int:
+    """La date de modification du source, en secondes. L'identite de la version servie."""
+    try:
+        return int(_SOURCE.stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def _page_html() -> str:
+    """Le HTML a servir, relu du disque si le fichier a change depuis la derniere fois."""
+    mtime = _version_page()
+    if _cache_page["mtime"] == mtime and _cache_page["html"]:
+        return _cache_page["html"]
+    html = PAGE
+    if mtime:
+        try:
+            brut = _SOURCE.read_text(encoding="utf-8")
+            trouve = re.search(r'PAGE = r"""(.*?)"""', brut, re.S)
+            if trouve:
+                html = _decorer_page(trouve.group(1))
+        except OSError:
+            # Le fichier a disparu ou n'est pas lisible : la version en memoire fait tres
+            # bien l'affaire. Une page un peu vieille vaut mieux qu'une page absente.
+            pass
+    html = html.replace("__VERSION_PAGE__", str(mtime))
+    _cache_page.update(mtime=mtime, html=html)
+    return html
+
+
 # Le lien de retour n'existe que si quelqu'un a dit ou retourner. Lancee a la main dans un
 # terminal, la page n'a pas de « liste des sessions » ou revenir ; servie par le tableau de
 # bord de la maison, elle en a une, et c'est lui qui la nomme.
 _RETOUR = os.environ.get("VOIX_UI_RETOUR", "").strip()
-if _RETOUR:
-    _ECHAPPE = _RETOUR.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
-    PAGE = PAGE.replace("<!--RETOUR-->",
-                        f'<a id="retour" href="{_ECHAPPE}" '
+
+
+def _decorer_page(html: str) -> str:
+    """Ce qu'on ajoute au HTML brut. Extrait pour que la relecture du fichier passe par le
+    MEME chemin que le chargement initial : sans ça, la page relue perdrait son lien de
+    retour, et le defaut ne se verrait que sur les machines qui en ont un."""
+    if not _RETOUR:
+        return html
+    echappe = _RETOUR.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+    return html.replace("<!--RETOUR-->",
+                        f'<a id="retour" href="{echappe}" '
                         f'title="revenir a la liste des sessions">&#8592;</a>')
+
+
+PAGE = _decorer_page(PAGE)

@@ -11,6 +11,7 @@ last paragraph of text.
 import asyncio
 import logging
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,15 @@ from claude_agent_sdk import (
 import config
 
 log = logging.getLogger("voix.worker")
+
+# Le SDK previent, a chaque construction de client, que `can_use_tool` ne sera pas consulte en
+# bypassPermissions. C'est exact pour les permissions, et c'est le mode qu'on a choisi — mais
+# on fournit le rappel pour AskUserQuestion, qui lui y passe quand meme. L'avertissement est
+# donc juste dans sa lettre et faux dans ce qu'il laisse croire ici, et il tombe a chaque
+# changement de modele ou d'effort. On le tait, en disant pourquoi plutot qu'en le subissant.
+warnings.filterwarnings(
+    "ignore", category=getattr(__import__("claude_agent_sdk.types", fromlist=["types"]),
+                               "CanUseToolShadowedWarning", Warning))
 
 # Second filter, under the CLI's own. Read-only tools never ask: a spoken approval for
 # every `grep` would make the voice channel unusable. Under acceptEdits the CLI already lets
@@ -152,12 +162,14 @@ class Journal:
 class Worker:
     """A long-lived Claude Code session plus an event queue the voice layer drains."""
 
-    def __init__(self, on_permission=None, tableau=None, conversation=None):
+    def __init__(self, on_permission=None, on_question=None, tableau=None,
+                 conversation=None):
         self.client: ClaudeSDKClient | None = None
         self.events: asyncio.Queue = asyncio.Queue()
         self.journal = Journal()
         self.occupe = False
         self._on_permission = on_permission
+        self._on_question = on_question
         self._tableau = tableau
         self._conv = conversation
         self.session_id: str | None = None
@@ -176,6 +188,18 @@ class Worker:
             self._tableau.publier(genre, **donnees)
 
     async def _can_use_tool(self, name: str, args: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
+        # AskUserQuestion passe par ici, et c'est le seul outil qui y passe QUOI QU'IL ARRIVE :
+        # meme en bypassPermissions, ou le CLI approuve tout sans consulter le rappel, celui-la
+        # le consulte quand meme — il declare `requiresUserInteraction`, donc il n'a personne
+        # d'autre a qui demander. Verifie, pas suppose.
+        #
+        # Ce n'est pas une permission : c'est une question, et la reponse attendue est une
+        # phrase, pas un oui. On la rend au CLI dans `updated_input["response"]` — c'est le
+        # champ qu'il lit pour fabriquer « The user responded: … ». Les trois autres formes
+        # essayees (answers seul, answers avec l'entree, rien) rendent « The user did not
+        # answer the questions » ou cassent la validation du schema.
+        if name == "AskUserQuestion":
+            return await self._question(args)
         if name in AUTO_ALLOW or self._on_permission is None:
             return PermissionResultAllow()
         libelle = getattr(ctx, "display_name", None) or getattr(ctx, "title", None) or name
@@ -187,6 +211,22 @@ class Worker:
             return PermissionResultAllow()
         return PermissionResultDeny(message="Refusé à la voix. Propose autre chose.", interrupt=False)
 
+    async def _question(self, args: dict) -> PermissionResultAllow:
+        """Claude demande quelque chose a l'utilisateur. On va le lui demander pour de vrai.
+
+        Sans ce chemin, l'outil rendait « The user did not answer the questions » et Claude
+        enchainait en expliquant que la session etait non-interactive — alors qu'il y a
+        quelqu'un, qui ecoute, et dont c'est exactement le role."""
+        questions = args.get("questions") or []
+        if self._on_question is None or not questions:
+            return PermissionResultAllow()
+        reponse = await self._on_question(questions)
+        if not reponse:
+            # Pas de reponse : on laisse l'outil dire lui-meme qu'il n'en a pas eu, plutot
+            # que d'inventer un « l'utilisateur n'a pas repondu » qui se lirait comme un refus.
+            return PermissionResultAllow()
+        return PermissionResultAllow(updated_input={**args, "response": reponse})
+
     def _options(self, effort: str | None = None, reprendre: str | None = None):
         """Les options du client, en un seul endroit.
 
@@ -194,9 +234,13 @@ class Worker:
         client : le SDK n'expose pas de set_effort. Deux constructions divergentes auraient
         fini par ne plus se ressembler, et la difference se serait vue comme un changement de
         comportement inexplicable apres un simple reglage."""
+        niveau = effort or self.effort
         return ClaudeAgentOptions(
             model=self.modele,
-            effort=effort or self.effort,
+            # Traduit, jamais brut : « ultracode » n'existe pas cote SDK, ou l'effort est un
+            # Literal de cinq valeurs. Le CLI le definit comme xhigh plus l'orchestration,
+            # et c'est exactement ce qu'on envoie — xhigh ici, l'orchestration plus bas.
+            effort=config.effort_sdk(niveau),
             cwd=config.WORKDIR,
             cli_path=config.claude_binary(),
             permission_mode=config.PERMISSION,
@@ -206,7 +250,11 @@ class Worker:
             # Only bypassPermissions really asks nothing; every other mode still routes
             # boundary crossings through the callback, which is how an out-of-project shell
             # command gets asked out loud instead of silently denied.
-            can_use_tool=None if config.PERMISSION == "bypassPermissions" else self._can_use_tool,
+            # Toujours fourni, y compris en bypassPermissions ou le SDK previent qu'il ne
+            # sera pas consulte. C'est vrai pour les permissions — c'est le mode choisi — et
+            # faux pour AskUserQuestion, qui y passe quand meme : le poser a None privait
+            # donc la conversation de toute question, sans rien dire.
+            can_use_tool=self._can_use_tool,
             # Vides par defaut : sans eux le CLI ne borne rien, et en mettre un chiffre
             # arbitraire introduirait la coupure qu'on cherche justement a expliquer. Quand
             # ils sont poses, l'arret porte un nom (error_max_turns, error_max_budget_usd)
@@ -231,7 +279,37 @@ class Worker:
                 # plutot que de continuer indefiniment en silence. Un tour qui rend la parole
                 # se relance d'un mot ; un tour qui tourne sans fin se coupe, et c'est la
                 # coupure qui fait perdre le contexte.
-                "append": (
+                "append": self._consignes(niveau),
+            },
+        )
+
+    # Le mot-cle « ultracode » tape dans une session Claude Code fait deux choses : il monte
+    # l'effort a xhigh et il ouvre l'outil Workflow pour ce tour. Le second passe par un
+    # system-reminder que le CLI injecte lui-meme — et qu'il n'injecte PAS en mode SDK :
+    # verifie, le mot-cle place dans le message n'y declenche rien du tout. L'outil Workflow,
+    # lui, est bien la : il est dans la liste des outils de la session. Ce qui manque n'est
+    # donc pas la capacite mais l'autorisation, et c'est precisement ce que ce bloc donne.
+    #
+    # Il ne desserre que l'exploration. La consigne orale, elle, tient toujours : un tour qui
+    # lance huit agents doit rendre trois phrases, pas un rapport.
+    ULTRACODE = (
+        "\n\n"
+        "Le mode ultracode est actif : l'utilisateur a explicitement demandé l'orchestration "
+        "multi-agents pour cette session. Tu peux donc utiliser l'outil Workflow de toi-même, "
+        "sans redemander l'autorisation, dès qu'une tâche se décompose en travaux indépendants "
+        "— explorer plusieurs pistes de front, relire un diff sous plusieurs angles, couvrir "
+        "un large périmètre. Le paragraphe précédent te demandait de ne pas explorer "
+        "indéfiniment : en ultracode cette retenue ne s'applique plus à la PROFONDEUR du "
+        "travail, va au fond des choses. Elle s'applique toujours à la PAROLE : quel que soit "
+        "le nombre d'agents lancés, la réponse dite à voix haute reste de deux à quatre "
+        "phrases, et un travail long rend la parole en chemin au lieu de disparaître."
+    )
+
+    def _consignes(self, niveau: str) -> str:
+        """Ce qu'on ajoute au prompt systeme de Claude Code."""
+        return self._CONSIGNES + (self.ULTRACODE if config.est_ultracode(niveau) else "")
+
+    _CONSIGNES = (
                     "Tes réponses finales sont lues à voix haute par une synthèse vocale. "
                     "Écris-les en prose continue : pas de markdown, pas de liste, pas de tableau, "
                     "pas de bloc de code, pas de chemin de fichier complet. Deux à quatre phrases, "
@@ -247,9 +325,7 @@ class Worker:
                     "tu as répondu à la question posée, arrête-toi. Si tu tournes en rond ou "
                     "qu'une piste ne donne rien, dis-le au lieu de continuer à chercher — un "
                     "constat d'échec est une réponse utile, un silence de dix minutes ne l'est pas."
-                ),
-            },
-        )
+    )
 
     def _a_reprendre(self) -> str | None:
         """Quelle conversation reprendre au demarrage, et le dire.
