@@ -1563,7 +1563,9 @@ socket = sockAvant;
 brancher(); ouvrirSock();
 
 // ---- lire une reponse : la voix d Azure, celle du PC ---------------------------------------
-// Asynchrone : la lecture demande le MP3 au serveur avant de jouer quoi que ce soit.
+// Asynchrone : la lecture demande l ADRESSE du MP3 au serveur, puis l element audio le joue.
+const versParler = () => requetes.filter(r => /\/parler\/preparer$/.test(r.url));
+const jouesAzure = () => joues.filter(x => /\/parler\/abc123$/.test(x));
 async function testerLecture() {
   const tick = () => new Promise(r => setTimeout(r, 0));
   titre('lecture : la voix d Azure, a la demande, et JAMAIS toute seule');
@@ -1580,27 +1582,30 @@ async function testerLecture() {
   await tick();
   dire(dit.length === 0 && joues.length === 0, 'une reponse qui arrive ne declenche AUCUN son');
 
-  // Un appui : c est Azure qui parle, pas la voix du systeme. C est tout l enjeu — la meme
-  // conversation doit avoir la meme voix qu au PC.
+  // L appui. Le point qui fait marcher iPhone : l element audio est DEBLOQUE dans l appui
+  // lui-meme, de facon synchrone, AVANT qu on demande quoi que ce soit au serveur. Sans ça,
+  // une reponse longue a synthetiser arrivait apres l expiration du geste et Safari refusait
+  // de la jouer — la petite reponse passait, la vraie non.
   azureMarche = true; requetes.length = 0; joues.length = 0; dit.length = 0;
   btnLire.onclick();
+  dire(joues.length === 1 && /^data:audio/.test(joues[0]),
+       'le deblocage (un silence) est joue DANS l appui, avant tout await');
   await tick(); await tick(); await tick();
-  const versParler = requetes.filter(r => /\/parler$/.test(r.url));
-  dire(versParler.length === 1, 'un appui demande la synthese au serveur');
-  const envoye = versParler[0] && JSON.parse(versParler[0].opts.body);
+  dire(versParler().length === 1, 'puis la page demande l adresse du son au serveur');
+  const envoye = versParler()[0] && JSON.parse(versParler()[0].opts.body);
   dire(envoye && /barre du bas/.test(envoye.texte),
        'avec le texte de la derniere reponse : ' + JSON.stringify((envoye || {}).texte || ''));
-  dire(joues.length === 1, 'et le MP3 rendu est joue');
+  dire(jouesAzure().length === 1, 'et l element debloque joue l adresse rendue');
   dire(dit.length === 0, 'la synthese du navigateur n est PAS utilisee quand Azure repond');
 
   // Azure indisponible : la voix du navigateur prend le relais plutot que de laisser un
-  // bouton muet.
+  // bouton muet. Elle aussi a ete amorcee dans l appui.
   azureMarche = false; joues.length = 0; dit.length = 0; requetes.length = 0;
   couperLectureLocale();
   btnLire.onclick();
   await tick(); await tick(); await tick();
-  dire(joues.length === 0, 'sans Azure, rien n est joue en MP3');
-  dire(dit.length >= 1, 'mais le navigateur prend le relais : ' + JSON.stringify(dit.slice(0, 2)));
+  dire(jouesAzure().length === 0, 'sans Azure, aucune adresse n est jouee');
+  dire(dit.some(x => /barre du bas/.test(x)), 'mais le navigateur prend le relais : ' + JSON.stringify(dit.slice(0, 3)));
   azureMarche = true;
 
   // Un second appui coupe.
@@ -1621,9 +1626,57 @@ async function testerLecture() {
   couperLectureLocale();
   __zoneRelire.children[1].onclick();
   await tick(); await tick(); await tick();
-  dire(joues.length === 1, 'depuis un telephone, « relire » lit sur CET appareil');
+  dire(jouesAzure().length === 1, 'depuis un telephone, « relire » lit sur CET appareil');
   dire(!envoyes.some(o => o.cmd === 'relire'), 'et ne reveille pas les haut-parleurs du PC');
   couperLectureLocale();
+
+  // ---- deux reponses d affilee : deux lignes, deux jeux de boutons ------------------------
+  titre('deux reponses d affilee ne se fondent pas en une');
+  // La courte, puis la vraie. Chaque debrief dit « suite » des son premier morceau : sans
+  // l identifiant, la seconde s ajoutait a la ligne de la premiere, et n avait ni boutons ni
+  // existence propre — impossible a reecouter seule.
+  emettre({ genre: 'voix', texte: 'Compris, je regarde. ', id: 'R1', suite: true });
+  recevoir({ genre: 'parole_fin', id: 'R1' });
+  const ligneCourte = dernier;
+  emettre({ genre: 'voix', texte: 'La cause est le raccourci en http. ', id: 'R2', suite: true });
+  emettre({ genre: 'voix', texte: 'Ouvre le socle en https. ', id: 'R2', suite: true });
+  recevoir({ genre: 'parole_fin', id: 'R2' });
+  const ligneLongue = dernier;
+  dire(ligneCourte !== ligneLongue, 'la seconde reponse a SA ligne');
+  dire(ligneCourte.texteBrut.trim() === 'Compris, je regarde.'
+       && /raccourci en http/.test(ligneLongue.texteBrut),
+       'et chacune garde son texte : ' + JSON.stringify([ligneCourte.texteBrut.trim(), ligneLongue.texteBrut.trim()]));
+  dire(!!ligneCourte.zoneLecture && !!ligneLongue.zoneLecture, 'les deux ont leurs boutons');
+  dire(/raccourci en http/.test(derniereReponse()) && !/Compris/.test(derniereReponse()),
+       'et « la derniere reponse » est bien la seconde, seule : ' + JSON.stringify(derniereReponse()));
+  // Une interjection sans identifiant ne vient pas se coller au dernier debrief.
+  emettre({ genre: 'voix', texte: "d'accord, j'y vais." });
+  dire(dernier !== ligneLongue, 'une phrase courte sans identifiant fait sa propre ligne');
+  dire(!/j'y vais/.test(derniereReponse()), 'et ne s ajoute pas a la derniere reponse');
+  // Relire la seconde, depuis sa ligne, ne lit QUE la seconde.
+  joues.length = 0; requetes.length = 0; couperLectureLocale();
+  ligneLongue.zoneLecture.children[1].onclick();
+  await tick(); await tick(); await tick();
+  const demande = versParler()[0] && JSON.parse(versParler()[0].opts.body);
+  dire(demande && /raccourci en http/.test(demande.texte) && !/Compris/.test(demande.texte),
+       'relire la seconde envoie son texte a elle seule');
+  couperLectureLocale();
+
+  // ---- la version, toujours visible ---------------------------------------------------------
+  titre('version : toujours affichee, et juste');
+  const badge = document.getElementById('version');
+  socket.onmessage({ data: JSON.stringify({ genre: '_pouls', version: MA_VERSION,
+                                            libelle: 'v22 · 2026-09-30 · abc1234', pret: true }) });
+  dire(badge.textContent === 'v22 · 2026-09-30', 'le badge montre la version du serveur, sans le hash : ' + badge.textContent);
+  dire(!badge.classList.contains('perimee'), 'et reste sobre quand la page est a jour');
+  socket.onmessage({ data: JSON.stringify({ genre: '_pouls', version: 999,
+                                            libelle: 'v23 · 2026-10-01 · def5678', pret: true }) });
+  dire(badge.classList.contains('perimee'), 'il passe en ambre quand la page est en retard');
+  dire(/v23/.test(document.getElementById('maj-page').textContent), 'et le bouton nomme la version qui attend : ' + document.getElementById('maj-page').textContent);
+  noteBarre(null); badge.onclick();
+  dire(/serveur : v23/.test(document.getElementById('note-barre').textContent || ''), 'un appui donne le detail : ' + document.getElementById('note-barre').textContent);
+  socket.onmessage({ data: JSON.stringify({ genre: '_pouls', version: MA_VERSION, libelle: 'v22 · 2026-09-30 · abc1234', pret: true }) });
+  noteBarre(null);
 }
 
 // ---- reecouter l historique, pas seulement le dernier message -----------------------------
@@ -1648,12 +1701,12 @@ async function testerEcouteHistorique() {
   const boutonEcoute = ligneTexte.zoneEcoute.children[0];
   boutonEcoute.onclick();
   await tick(); await tick(); await tick();
-  const dem = requetes.filter(r => /\/parler$/.test(r.url));
+  const dem = requetes.filter(r => /\/parler\/preparer$/.test(r.url));
   dire(dem.length === 1, 'l appuyer demande la synthese de CETTE ligne');
   const quoi = dem[0] && JSON.parse(dem[0].opts.body);
   dire(quoi && /desormais sur une ligne/.test(quoi.texte),
        'avec son texte a elle : ' + JSON.stringify((quoi || {}).texte || ''));
-  dire(joues.length === 1, 'et elle est lue');
+  dire(joues.some(x => /\/parler\/abc123$/.test(x)), 'et elle est lue par l element debloque');
 
   // Le texte vient de ce qui est ARRIVE, pas du DOM : les libelles des boutons ne doivent
   // jamais se retrouver dans ce qu on fait prononcer.

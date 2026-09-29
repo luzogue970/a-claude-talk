@@ -109,7 +109,7 @@ class Tableau:
         self._images = 0
         # Les enregistrements deja synthetises, du plus vieux au plus recent. Relire une
         # reponse est un geste qu'on refait, et chaque relecture coute du credit Azure.
-        self._voix_cache: "OrderedDict[str, bytes]" = OrderedDict()
+        self._voix_cache: "OrderedDict[str, tuple[bytes, bool]]" = OrderedDict()
         # L'ETAT, garde a part du flux. Un etat n'est pas un evenement : « quels modeles
         # existent » reste vrai tant que personne ne le change, alors qu'« un outil a demarre »
         # appartient a un instant. Les melanger avait une consequence precise et mesuree : ces
@@ -368,17 +368,76 @@ class Tableau:
         PCM qu'il faudrait emballer. L'API REST rend du MP3, que tout navigateur joue nativement
         et qui pese dix fois moins sur un reseau mobile.
         """
+        cle, erreur = await self._synthetiser(requete)
+        if erreur is not None:
+            return erreur
+        mp3, en_cache = self._voix_cache[cle]
+        return web.Response(body=mp3, content_type="audio/mpeg",
+                            headers={"X-Voix": "azure", "X-Cache": "oui" if en_cache else "non"})
+
+    async def _preparer_voix(self, requete):
+        """Synthetiser sans rendre le son : rendre une CLE, que l'element audio ira chercher.
+
+        C'est le detour qui fait marcher la lecture sur iPhone, et il vaut d'etre explique.
+        Safari n'autorise le son que dans la foulee d'un appui, et tolere quelques secondes
+        de delai ; au-dela, `play()` est refuse sans bruit. Une reponse courte est synthetisee
+        vite et passe ; une vraie reponse prend plus longtemps chez Azure, l'autorisation
+        expire pendant l'attente, et la lecture echoue — c'est exactement « la petite reponse
+        se lit, la grande non ». La parade connue : un element audio DEBLOQUE dans l'appui
+        lui-meme, puis nourri plus tard avec une adresse. Cette route fournit l'adresse.
+        """
+        cle, erreur = await self._synthetiser(requete)
+        if erreur is not None:
+            return erreur
+        mp3, en_cache = self._voix_cache[cle]
+        return web.json_response({"cle": cle, "octets": len(mp3), "cache": en_cache})
+
+    async def _servir_voix(self, requete):
+        """Le MP3 d'une cle, avec les plages d'octets : iOS les exige d'un element audio.
+
+        Safari demande d'abord « bytes=0-1 » et attend un 206 ; un serveur qui repond 200 avec
+        tout le fichier passe pour ne pas savoir servir du son, et l'element se declare en
+        erreur. Un cache evince rend 404 : la page refait alors la synthese complete."""
+        cle = requete.match_info.get("cle", "")
+        entree = self._voix_cache.get(cle)
+        if entree is None:
+            return web.json_response({"erreur": "enregistrement expiré"}, status=404)
+        self._voix_cache.move_to_end(cle)
+        mp3, _ = entree
+        total = len(mp3)
+        entetes = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=600",
+                   "X-Voix": "azure"}
+        plage = requete.headers.get("Range", "")
+        if plage.startswith("bytes="):
+            debut_s, _, fin_s = plage[6:].partition("-")
+            try:
+                debut = int(debut_s) if debut_s else max(0, total - int(fin_s))
+                fin = int(fin_s) if (fin_s and debut_s) else total - 1
+            except ValueError:
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
+            fin = min(fin, total - 1)
+            if debut > fin or debut >= total:
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
+            entetes["Content-Range"] = f"bytes {debut}-{fin}/{total}"
+            return web.Response(status=206, body=mp3[debut:fin + 1], content_type="audio/mpeg",
+                                headers=entetes)
+        return web.Response(body=mp3, content_type="audio/mpeg", headers=entetes)
+
+    async def _synthetiser(self, requete):
+        """Le coeur commun : lit le texte, synthetise si besoin, met en cache.
+
+        Rend (cle, None) quand le MP3 est dans le cache, ou (None, reponse d'erreur)."""
         MAX = 6000        # une reponse parlee fait quelques centaines de caracteres
         if not config.AZURE_KEY:
-            return web.json_response(
+            return None, web.json_response(
                 {"erreur": "pas de clé Azure : la voix du navigateur prend le relais"}, status=503)
         try:
             donnees = await requete.json()
         except Exception:
-            return web.json_response({"erreur": "JSON attendu"}, status=400)
+            return None, web.json_response({"erreur": "JSON attendu"}, status=400)
         texte = str((donnees or {}).get("texte") or "").strip()
         if not texte:
-            return web.json_response({"erreur": "rien à dire"}, status=400)
+            return None, web.json_response({"erreur": "rien à dire"}, status=400)
         if len(texte) > MAX:
             texte = texte[:MAX]
 
@@ -387,10 +446,10 @@ class Tableau:
         # les ecrire sur le disque ferait tenir une conversation entiere en clair dans un
         # cache qu'on oublierait de vider.
         cle = hashlib.sha256(f"{config.AZURE_VOICE}\n{texte}".encode("utf-8")).hexdigest()
-        if (deja := self._voix_cache.get(cle)) is not None:
+        if cle in self._voix_cache:
             self._voix_cache.move_to_end(cle)
-            return web.Response(body=deja, content_type="audio/mpeg",
-                                headers={"X-Voix": "azure", "X-Cache": "oui"})
+            self._voix_cache[cle] = (self._voix_cache[cle][0], True)
+            return cle, None
 
         url = f"https://{config.AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
         # `escape` et pas une simple concatenation : une reponse contient des esperluettes et
@@ -413,19 +472,18 @@ class Tableau:
                     if r.status != 200:
                         detail = corps[:200].decode("utf-8", "replace")
                         log.warning("Azure a refuse la synthese (%s) : %s", r.status, detail)
-                        return web.json_response(
+                        return None, web.json_response(
                             {"erreur": f"Azure a refusé la synthèse ({r.status})"}, status=502)
         except asyncio.TimeoutError:
-            return web.json_response({"erreur": "Azure n'a pas répondu à temps"}, status=504)
+            return None, web.json_response({"erreur": "Azure n'a pas répondu à temps"}, status=504)
         except Exception as exc:
             log.warning("synthese Azure indisponible : %s", exc)
-            return web.json_response({"erreur": "Azure injoignable"}, status=502)
+            return None, web.json_response({"erreur": "Azure injoignable"}, status=502)
 
-        self._voix_cache[cle] = corps
+        self._voix_cache[cle] = (corps, False)
         while len(self._voix_cache) > 40:
             self._voix_cache.popitem(last=False)
-        return web.Response(body=corps, content_type="audio/mpeg",
-                            headers={"X-Voix": "azure", "X-Cache": "non"})
+        return cle, None
 
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
@@ -502,6 +560,7 @@ class Tableau:
             # une page figee au demarrage en croyant tester la derniere version, et on conclut
             # que le correctif ne marche pas alors qu'il n'est simplement pas la.
             "version": _version_page(),
+            "libelle": _libelle_version(),
             # L'etat de l'agent voyage avec le pouls : c'est lui qui permet a la page de
             # decider, en fin de reprise, si quelque chose peut ENCORE etre en cours.
             "etat": (etat.get("etat") or {}).get("vers", ""),
@@ -593,6 +652,8 @@ class Tableau:
         app.router.add_post("/image", self._image)
         app.router.add_post("/audio", self._audio)
         app.router.add_post("/parler", self._parler)
+        app.router.add_post("/parler/preparer", self._preparer_voix)
+        app.router.add_get("/parler/{cle}", self._servir_voix)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         # Loopback only: this stream carries the content of your code.
@@ -1340,6 +1401,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 #etat.vif{animation:pulse 1.4s ease-in-out infinite}
 /* Ni rouge ni alarmant : ce n'est pas un probleme, c'est une proposition. Assez visible
    pour qu'on le remarque en developpant, assez discret pour qu'on l'ignore sans effort. */
+#version{color:#6b7684;font-size:11px;white-space:nowrap;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+#version:hover{color:var(--texte)}
+#version.perimee{color:#e3b341}
 #maj-page{border:1px solid var(--outil);background:#1c1710;color:#e3b341;border-radius:999px;
   padding:3px 11px;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
 #maj-page:hover{background:#241d12}
@@ -1572,6 +1637,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <span class="mesures">
       <span id="travail"></span>
       <span id="compteurs"></span>
+      <!-- La version servie par le serveur, en permanence. Derivee de git, jamais ecrite a la
+           main : un numero qu'on doit penser a incrementer finit par mentir. Ambre quand la
+           page chargee est en retard sur elle. -->
+      <span id="version" title="version du serveur — appuie pour le détail"></span>
     </span>
   </div>
 </header>
@@ -2160,7 +2229,13 @@ function ajouter(e) {
   if (e.genre === "question" && e.reponse && e.id) {
     resoudre("question:" + e.id, "ok");
   }
-  const meme = dernier && dernier.dataset.g === e.genre;
+  // Deux reponses de Claude ne se fondent pas en une. Chaque debrief porte son identifiant,
+  // et un identifiant nouveau ouvre une ligne — meme si son premier morceau dit « suite »,
+  // ce qu'ils disent tous. Sans ça, deux reponses d'affilee — la courte, puis la vraie —
+  // donnaient UNE ligne, un seul jeu de boutons pour la premiere, et la seconde impossible a
+  // reecouter seule.
+  const meme = dernier && dernier.dataset.g === e.genre
+    && (e.genre !== "voix" || (e.id || null) === (dernier.idVoix || null));
   let nouvelle = false;
   if (e.genre === "partiel" && meme) {
     dernier.querySelector(".corps").textContent = e.texte;
@@ -2180,6 +2255,7 @@ function ajouter(e) {
       + `<div class="badge">${LIB[e.genre] || e.genre}</div>`
       + `<div class="pip ${etatInitial(e)}"></div>`
       + `<div class="corps">${corps(e)}</div>`;
+    if (e.genre === "voix") ligne.idVoix = e.id || null;
     flux.appendChild(ligne);
     dernier = ligne;
     nouvelle = true;
@@ -3765,6 +3841,7 @@ function outillerEcoute(ligne, e) {
   b.textContent = "écouter";
   b.title = "lire cette réponse sur cet appareil";
   b.onclick = () => {
+    debloquerLecture();
     const t = texteDeLigne(ligne);
     if (!t) { noteBarre("rien à lire dans cette ligne"); return; }
     couperLectureLocale();
@@ -3800,6 +3877,7 @@ function outillerParole(e) {
     // Quand cet appareil lit lui-meme, « relire » ne doit pas reveiller les haut-parleurs du
     // PC — souvent dans une autre piece, et parfois devant quelqu'un d'autre.
     if (lireDeCeCote()) {
+      debloquerLecture();
       const t = texteDeLigne(ligne);
       if (t) {
         couperLectureLocale();
@@ -3885,40 +3963,73 @@ function decouperPhrases(texte) {
 // repli : pas de cle, Azure injoignable, quota epuise — une voix passable vaut mieux qu'un
 // bouton qui ne fait rien. Ce qui change s'entend immediatement, et c'est le point : c'est la
 // meme conversation, ce doit etre la meme voix.
-let lecteurAudio = null;
+//
+// UN SEUL element audio, cree une fois, et ce n'est pas une economie : c'est ce qui fait
+// marcher la lecture sur iPhone. Safari n'autorise le son que dans la foulee d'un appui, et
+// tolere quelques secondes de delai — au-dela, play() est refuse sans un bruit. La premiere
+// version creait un element neuf APRES avoir demande le MP3 au serveur : une reponse courte
+// etait synthetisee vite et passait ; une vraie reponse prenait plus longtemps chez Azure,
+// l'autorisation expirait pendant l'attente, et la lecture etait refusee — « la petite
+// reponse se lit, la grande non ». La parade : DEBLOQUER l'element dans l'appui lui-meme
+// avec un silence d'un vingtieme de seconde, puis lui donner l'adresse du vrai son quand
+// elle arrive. Un element deja joue dans un geste accepte ensuite un nouveau src sans geste.
+const SILENCE = "data:audio/mpeg;base64,SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcuMTAzAAAAAAAAAAAAAAD/4zjAAAAAAAAAAAAASW5mbwAAAA8AAAADAAABsACqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqrV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dX///////////////////////////////////////////8AAAAATGF2YzYxLjE5AAAAAAAAAAAAAAAAJALwAAAAAAAAAbD3CmUrAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/4xjEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/4xjEOwAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/4xjEdgAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=";
+const lecteur = typeof Audio !== "undefined" ? new Audio() : null;
+if (lecteur) lecteur.preload = "auto";
+let lecteurFin = null;         // resout la lecture en cours : "ok", "erreur" ou "coupe"
 
-function arreterAudio() {
-  if (lecteurAudio) { try { lecteurAudio.pause(); } catch (_) {} lecteurAudio = null; }
+// A appeler DANS le gestionnaire du clic, avant tout await. Deux amorces, pour les deux
+// voix : l'element audio pour Azure, une utterance vide pour le repli.
+function debloquerLecture() {
+  if (lecteur) {
+    try {
+      lecteur.onended = null; lecteur.onerror = null;
+      lecteur.src = SILENCE;
+      const p = lecteur.play();
+      if (p && p.catch) p.catch(() => {});
+    } catch (_) {}
+  }
+  if (peutLireIci) { try { speechSynthesis.speak(new SpeechSynthesisUtterance(" ")); } catch (_) {} }
 }
 
-// Rend true si Azure a parle, false s'il faut se rabattre sur la voix du navigateur.
+function arreterAudio() {
+  if (!lecteur) return;
+  try { lecteur.onended = null; lecteur.onerror = null; lecteur.pause(); } catch (_) {}
+  if (lecteurFin) { const f = lecteurFin; lecteurFin = null; f("coupe"); }
+}
+
+// Joue une adresse dans l'element debloque. Rend "ok" a la fin, "erreur" si l'element ou le
+// reseau refusent, "coupe" si quelqu'un a arrete entre-temps.
+function jouer(src) {
+  return new Promise(resolve => {
+    lecteurFin = resolve;
+    const fini = (quoi) => { if (lecteurFin === resolve) lecteurFin = null; resolve(quoi); };
+    lecteur.onended = () => fini("ok");
+    lecteur.onerror = () => fini("erreur");
+    lecteur.src = src;
+    const p = lecteur.play();
+    if (p && p.catch) p.catch(() => fini("erreur"));
+  });
+}
+
+// Rend true si Azure a parle (ou si on a coupe exprès), false s'il faut le repli.
 async function lireParAzure(texte) {
-  let url = null;
+  if (!lecteur) return false;
+  const base = location.pathname.replace(/\/$/, "");
   try {
-    const r = await fetch(location.pathname.replace(/\/$/, "") + "/parler",
+    // On ne demande pas le son, on demande son ADRESSE : c'est l'element audio qui ira le
+    // chercher, et lui a le droit, puisqu'il a ete debloque dans l'appui.
+    const r = await fetch(base + "/parler/preparer",
                           { method: "POST", headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ texte }) });
-    if (!r.ok) return false;
-    const blob = await r.blob();
-    if (!blob || !blob.size) return false;
-    url = URL.createObjectURL(blob);
-    const a = new Audio(url);
-    lecteurAudio = a;
-    await new Promise((fini, rate) => {
-      a.onended = fini;
-      a.onerror = () => rate(new Error("lecture impossible"));
-      // play() rend une promesse que WebKit rejette si le geste de l'utilisateur est trop
-      // loin. Comme on descend d'un clic, elle passe — mais un echec ici doit basculer sur
-      // le repli plutot que de laisser un silence.
-      const essai = a.play();
-      if (essai && essai.catch) essai.catch(rate);
-    });
-    return true;
+    const type = (r.headers && r.headers.get("content-type")) || "";
+    if (!r.ok || r.redirected || !/json/.test(type)) return false;
+    const d = await r.json().catch(() => ({}));
+    if (!d.cle) return false;
+    const sort = await jouer(base + "/parler/" + d.cle);
+    return sort !== "erreur";
   } catch (_) {
     return false;
-  } finally {
-    if (url) URL.revokeObjectURL(url);
-    if (lecteurAudio && lecteurAudio.ended) lecteurAudio = null;
   }
 }
 
@@ -3960,7 +4071,11 @@ async function lireTexte(texte) {
 // c'est meme le plus probable sur un telephone qu'on ressort de sa poche.
 let idReponse = null, texteReponse = "";
 function suivreReponse(e) {
-  if (e.id && e.id !== idReponse) { idReponse = e.id; texteReponse = ""; }
+  // Seules les reponses IDENTIFIEES comptent : une ligne sans identifiant est une
+  // interjection — « d'accord, j'y vais » — et la coller au dernier debrief faisait relire
+  // ce « d'accord » a la fin de la reponse. Elle a son propre bouton sur sa ligne.
+  if (!e.id) return;
+  if (e.id !== idReponse) { idReponse = e.id; texteReponse = ""; }
   texteReponse += e.texte || "";
 }
 function derniereReponse() { return texteReponse.trim(); }
@@ -3983,12 +4098,11 @@ function couperLectureLocale() {
 
 function basculerLectureIci() {
   if (lectureLocale) { couperLectureLocale(); return; }
+  debloquerLecture();            // dans l'appui, avant le moindre await
   const texte = derniereReponse();
   // Le dire plutot que de ne rien faire : un bouton qui reste inerte passe pour casse, et
   // « il n'y a rien a lire » est une reponse, pas une panne.
   if (!texte) { noteBarre("rien à lire : aucune réponse reçue pour l'instant"); return; }
-  // La clef (1) : la synthese s'ouvre depuis un geste. Comme on lit MAINTENANT et depuis le
-  // gestionnaire du clic, la condition est remplie sans avoir besoin d'amorce.
   choisirVoix();
   lectureLocale = true;
   majBoutonLecture();
@@ -4230,6 +4344,7 @@ const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle"
 // frappe, et arriverait forcement au pire moment. Le flux, lui, ne risque rien — le serveur
 // le rejoue.
 const MA_VERSION = "__VERSION_PAGE__";
+const MON_LIBELLE = "__VERSION_LIBELLE__";   // la version de CETTE page, telle que servie
 // Se comparer au marqueur litteral pour savoir s'il a ete substitue ne pouvait pas marcher :
 // la substitution remplace TOUTES ses occurrences, donc la garde elle-meme devenait vraie et
 // la fonction sortait toujours. Un piege joli — le code se lit correctement, et il se
@@ -4241,12 +4356,28 @@ const VERSION_CONNUE = /^[0-9]+$/.test(MA_VERSION);
 document.getElementById("maj-page")?.setAttribute("hidden", "");
 if (document.getElementById("maj-page")) document.getElementById("maj-page").hidden = true;
 
-function verifierVersion(v) {
+function afficherVersion(libelle, perimee) {
+  const el = document.getElementById("version");
+  if (!el) return;
+  const propre = libelle && !/^__/.test(libelle) ? libelle : "";
+  el.textContent = propre ? propre.replace(/ · [0-9a-f]{6,}.*$/, "") : "";
+  el.classList.toggle("perimee", !!perimee);
+  el.onclick = () => noteBarre(
+    (propre ? "serveur : " + propre : "version du serveur inconnue")
+    + (MON_LIBELLE && !/^__/.test(MON_LIBELLE) && MON_LIBELLE !== propre
+       ? " — cette page : " + MON_LIBELLE + " (recharge pour la mettre à jour)" : ""), true);
+}
+afficherVersion(MON_LIBELLE, false);
+
+function verifierVersion(v, libelle) {
   if (!v || !VERSION_CONNUE) return;
   const b = document.getElementById("maj-page");
   if (!b) return;
-  if (String(v) === MA_VERSION) { b.hidden = true; return; }
+  const perimee = String(v) !== MA_VERSION;
+  afficherVersion(libelle || MON_LIBELLE, perimee);
+  if (!perimee) { b.hidden = true; return; }
   b.hidden = false;
+  b.textContent = "↻ nouvelle version" + (libelle ? " " + String(libelle).split(" · ")[0] : "");
   b.onclick = () => location.reload();
 }
 
@@ -4495,10 +4626,10 @@ function brancher() {
     // une liaison silencieuse parce que rien ne se passe d'une liaison silencieuse parce
     // qu'elle est morte.
     dernierPouls = Date.now();
-    if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version); return; }
+    if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version, d.libelle); return; }
     if (d.genre === "_bonjour") {
       serveur = d;
-      verifierVersion(d.version);
+      verifierVersion(d.version, d.libelle);
       // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
       // « ça tourne alors que rien ne tourne ». L'historique renvoyé contient les lignes
       // telles qu'elles ont été publiées : un vieux « voix » y rallume la pastille parole,
@@ -4634,6 +4765,45 @@ def _version_page() -> int:
         return 0
 
 
+_cache_version: dict = {"cle": None, "libelle": ""}
+
+
+def _libelle_version() -> str:
+    """« v21 · 2026-09-29 · eedc991 », et « +modifs » si le depot a des changements.
+
+    Derive de git a chaque fois qu'il peut avoir change, jamais ecrit a la main : un numero
+    qu'on doit penser a incrementer finit toujours par mentir. Le compte de commits donne un
+    ordre lisible, la date situe, le hash identifie. Sans git — archive, autre machine — la
+    date de modification du fichier fait foi, ce qui est deja plus que rien."""
+    racine = _SOURCE.parent.parent
+    try:
+        cle = (_version_page(),
+               int((racine / ".git" / "index").stat().st_mtime),
+               int((racine / ".git" / "HEAD").stat().st_mtime))
+    except OSError:
+        cle = (_version_page(),)
+    if _cache_version["cle"] == cle and _cache_version["libelle"]:
+        return _cache_version["libelle"]
+    libelle = ""
+    try:
+        import subprocess
+        def git(*args):
+            return subprocess.run(["git", "-C", str(racine), *args], capture_output=True,
+                                  text=True, timeout=3).stdout.strip()
+        n, entete = git("rev-list", "--count", "HEAD"), git("log", "-1", "--format=%h %cs")
+        if n and entete:
+            h, date = entete.split(" ", 1)
+            sale = git("status", "--porcelain", "--untracked-files=no")
+            libelle = f"v{n} · {date} · {h}" + (" +modifs" if sale else "")
+    except Exception:
+        libelle = ""
+    if not libelle:
+        m = _version_page()
+        libelle = time.strftime("%Y-%m-%d %H:%M", time.localtime(m)) if m else "version inconnue"
+    _cache_version.update(cle=cle, libelle=libelle)
+    return libelle
+
+
 def _page_html() -> str:
     """Le HTML a servir, relu du disque si le fichier a change depuis la derniere fois."""
     mtime = _version_page()
@@ -4651,6 +4821,7 @@ def _page_html() -> str:
             # bien l'affaire. Une page un peu vieille vaut mieux qu'une page absente.
             pass
     html = html.replace("__VERSION_PAGE__", str(mtime))
+    html = html.replace("__VERSION_LIBELLE__", _libelle_version())
     _cache_page.update(mtime=mtime, html=html)
     return html
 

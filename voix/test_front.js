@@ -283,12 +283,15 @@ globalThis.fetch = (url, opts) => {
   globalThis.requetes.push({ url, opts });
   // endsWith et pas une expression reguliere : ce stub vit dans un template literal, ou
   // chaque antislash est mange une fois de plus — /\/parler$/ y devenait un commentaire.
-  if (String(url).endsWith("/parler")) {
+  if (String(url).endsWith("/parler/preparer") || String(url).endsWith("/parler")) {
     if (!globalThis.azureMarche) {
-      return Promise.resolve({ ok: false, status: 503,
+      return Promise.resolve({ ok: false, status: 503, redirected: false,
+                               headers: { get: () => "application/json" },
                                json: () => Promise.resolve({ erreur: "pas de clé Azure" }) });
     }
-    return Promise.resolve({ ok: true, status: 200,
+    return Promise.resolve({ ok: true, status: 200, redirected: false,
+                             headers: { get: () => "application/json; charset=utf-8" },
+                             json: () => Promise.resolve({ cle: "abc123", octets: 9792, cache: false }),
                              blob: () => Promise.resolve({ size: 9792, type: "audio/mpeg" }) });
   }
   const r = globalThis.reponseAudio;
@@ -307,12 +310,12 @@ globalThis.URL = { createObjectURL: () => "blob:faux", revokeObjectURL: () => {}
 globalThis.joues = [];
 globalThis.Audio = function (src) {
   const self = this;
-  this.src = src;
+  this.src = src || "";
   this.ended = false;
   this.pause = () => {};
   this.play = () => {
-    globalThis.joues.push(src);
-    // Joue puis se termine, comme un vrai element une fois le MP3 fini.
+    // Ce qu on joue est le src DU MOMENT : l element est reutilise, son src change.
+    globalThis.joues.push(self.src);
     setTimeout(() => { self.ended = true; if (self.onended) self.onended(); }, 0);
     return Promise.resolve();
   };

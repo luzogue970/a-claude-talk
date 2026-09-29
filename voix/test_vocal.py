@@ -311,6 +311,31 @@ async def la_route_parler():
                 dire(r.headers.get("X-Cache") == "oui", "la seconde sort du cache")
                 dire(premier == second, "et rend exactement le meme enregistrement")
             dire(r.headers.get("X-Voix") == "azure", "la reponse dit quelle voix a parle")
+
+            # Preparer puis servir : le detour qui fait marcher iPhone. L'element audio va
+            # chercher le son lui-meme, et il exige des plages d'octets.
+            async with s.post(url + "/parler/preparer", json={"texte": phrase}) as r:
+                d = await r.json()
+                dire(r.status == 200 and len(d.get("cle", "")) == 64,
+                     f"preparer rend une cle ({r.status}, cache={d.get('cache')})")
+                cle = d.get("cle", "")
+            async with s.get(url + "/parler/" + cle) as r:
+                entier = await r.read()
+                dire(r.status == 200 and r.headers.get("Accept-Ranges") == "bytes",
+                     f"la cle se sert en entier, et annonce les plages ({r.status})")
+            async with s.get(url + "/parler/" + cle, headers={"Range": "bytes=0-1"}) as r:
+                deux = await r.read()
+                dire(r.status == 206 and len(deux) == 2
+                     and r.headers.get("Content-Range") == f"bytes 0-1/{len(entier)}",
+                     f"la sonde d'iOS « bytes=0-1 » recoit un 206 juste ({r.status}, "
+                     f"{r.headers.get('Content-Range')})")
+            async with s.get(url + "/parler/" + cle, headers={"Range": "bytes=100-"}) as r:
+                fin = await r.read()
+                dire(r.status == 206 and fin == entier[100:], "une plage ouverte rend la fin du fichier")
+            async with s.get(url + "/parler/" + cle, headers={"Range": "bytes=99999999-"}) as r:
+                dire(r.status == 416, f"une plage hors du fichier rend 416 ({r.status})")
+            async with s.get(url + "/parler/" + "0" * 64) as r:
+                dire(r.status == 404, f"une cle inconnue rend 404, la page refera la synthese ({r.status})")
     finally:
         fin = getattr(t, "arreter", None) or getattr(t, "stop", None)
         if fin:

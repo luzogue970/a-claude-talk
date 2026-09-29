@@ -425,6 +425,42 @@ L'enquête a aussi levé un défaut sans rapport : la **dictée retenue** était
 revenait remplir la barre à la reconnexion. C'est un *état* : seule la dernière compte, et
 elle est vide une fois consommée.
 
+**Depuis le téléphone : l'adresse compte.** Le micro n'existe qu'en HTTPS — en HTTP, Safari
+retire `mediaDevices` tout entier, sans erreur, et rien de ce qui précède ne peut marcher.
+L'adresse à ouvrir, et à mettre sur l'écran d'accueil, est celle du socle **par son nom
+Tailscale** : `https://socle.<tailnet>.ts.net/talk/` ramène à la dernière session ouverte,
+`https://socle.<tailnet>.ts.net/talk/<projet>/` à un projet précis. Pas l'adresse IP en http.
+La connexion au socle est un cookie **par origine** : passer de l'IP au nom demande de se
+reconnecter une fois. La page le dit désormais en clair quand elle est ouverte au mauvais
+endroit.
+
+**Une réponse longue se lit aussi, sur iPhone.** Safari n'autorise le son que dans la foulée
+d'un appui, et tolère quelques secondes ; au-delà, `play()` est refusé sans bruit. La
+première version créait un élément audio *après* avoir demandé le MP3 : une réponse courte
+était synthétisée vite et passait, une vraie réponse prenait plus longtemps chez Azure,
+l'autorisation expirait pendant l'attente, et la lecture échouait — « la petite réponse se
+lit, la grande non ». La parade : **un seul élément audio, débloqué dans l'appui lui-même**
+avec un silence d'un vingtième de seconde, puis nourri avec l'*adresse* du son quand elle
+arrive (`POST /parler/preparer` rend une clé, `GET /parler/<clé>` sert le MP3). Un élément
+déjà joué dans un geste accepte ensuite un nouveau `src` sans geste. Et l'élément audio
+d'iOS exige les **plages d'octets** — il sonde `bytes=0-1` et attend un 206 — donc la route
+les sert. Le repli vers la voix du navigateur est amorcé dans le même appui.
+
+**Deux réponses d'affilée, deux lignes.** Chaque débrief dit « suite » dès son premier
+morceau ; la page fusionnait donc deux réponses consécutives — la courte, puis la vraie — en
+une seule ligne, avec un seul jeu de boutons, pour la première. La seconde n'avait ni
+existence propre ni moyen d'être réécoutée seule. Un identifiant nouveau ouvre maintenant
+une ligne, et « la dernière réponse » ne retient que les réponses identifiées : une
+interjection sans identifiant — « d'accord, j'y vais » — a sa propre ligne et ne vient pas
+se coller au dernier débrief.
+
+**La version, toujours visible, jamais écrite à la main.** Un petit badge dans le rang des
+mesures — `v21 · 2026-09-29` — dit la version que le serveur sert, dérivée de git à chaque
+fois qu'elle peut avoir changé : compte de commits, date, hash, et « +modifs » si le dépôt
+n'est pas propre. Un numéro qu'on doit penser à incrémenter finit toujours par mentir. Le
+badge passe en ambre quand la page chargée est en retard sur le serveur, le bouton « nouvelle
+version » nomme celle qui attend, et un appui sur le badge donne le détail des deux.
+
 **La voix du téléphone est celle du PC.** La synthèse intégrée au navigateur était gratuite
 et déjà là, mais ce n'était pas la même voix : sur le PC Claude parle avec une voix neurale
 française, sur le téléphone il prenait celle du système, et l'écart s'entend immédiatement —
