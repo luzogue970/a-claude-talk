@@ -46,6 +46,11 @@ ETATS = frozenset({
     "config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
     "consommation", "conversations",
     "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
+    # La dictee retenue : ce qui attend dans la barre. Un ETAT, parce qu'une seule compte —
+    # la derniere — et qu'elle doit etre vide une fois consommee. Rejouee comme un simple
+    # evenement, chaque vieille dictee de l'historique revenait remplir la barre a la
+    # reconnexion, y compris celles envoyees depuis longtemps.
+    "dictee",
 })
 
 
@@ -330,6 +335,11 @@ class Tableau:
             return web.json_response(
                 {"erreur": "audio illisible — ffmpeg absent, ou format inconnu"}, status=415)
         secondes = len(pcm) / 2 / 16000
+        # Au journal, a chaque fois : quand un vocal ne marche pas, la premiere question est
+        # « est-il seulement arrive ? », et sans cette ligne le journal ne pouvait pas y
+        # repondre — ce qui a coute une enquete entiere.
+        log.info("vocal reçu : %s, %d octets, %.1f s de parole", mime or "type inconnu",
+                 octets, secondes)
         if secondes < 0.3:
             return web.json_response({"erreur": "enregistrement trop court"}, status=400)
         try:
@@ -1142,6 +1152,7 @@ body{overflow-x:hidden}
 #dicter-ici.envoi{color:var(--outil);border-color:var(--outil);background:#1c1710;animation:none}
 #dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
 #dicter-ici[hidden]{display:none}
+#dicter-ici.indisponible{opacity:.45;border-style:dashed}
 @media (prefers-reduced-motion: reduce){
   #dicter-ici[aria-pressed="true"], #dicter-ici.envoi svg{animation:none} }
 #lire-ici svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.6;
@@ -3347,6 +3358,10 @@ function recevoir(e, etat = false) {
     }
     // Déposé pour relecture : la dictée devient définitive dans la barre, à toi de jouer.
     if (e.genre === "dictee") {
+      // Pendant le rejeu de l'historique, on ignore : la dictee qui compte est arrivee
+      // juste avant, comme etat, et c'est elle qui fait foi. Les copies dans l'historique
+      // sont le passe — souvent deja envoye.
+      if (enRejeu) { ajouter(e); return; }
       // Le texte du serveur est le texte CONSOLIDÉ du tour : il fait autorité sur les
       // segments accumulés côté page, qui peuvent avoir manqué un morceau.
       fermerDictee(e.texte || "");
@@ -4058,6 +4073,9 @@ async function demarrerVocal() {
   }
   fluxMicro = flux;
   morceauxAudio = [];
+  // Une lecture Azure en cours et un micro qui s'ouvre se disputent la session audio d'iOS :
+  // le micro pouvait capter du silence. On coupe la lecture d'abord.
+  couperLectureLocale();
   const mime = mimeVocal();
   try {
     enregistreur = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
@@ -4080,10 +4098,14 @@ async function demarrerVocal() {
     noteBarre("l'enregistrement a échoué : " + ((ev && ev.error && ev.error.name) || "?"), true);
     arreterVocal();
   };
-  enregistreur.start();
+  // Une tranche par seconde : iOS a eu des versions qui rendaient un fichier vide quand
+  // tout arrivait en un seul bloc a l'arret. Et ça dit, seconde apres seconde, que ça
+  // enregistre vraiment.
+  enregistreur.start(1000);
   vocalEnCours = true;
   majBoutonDictee();
-  noteBarre("j'écoute — appuie à nouveau pour envoyer");
+  noteBarre("j'écoute (" + (enregistreur.mimeType || mime || "format par défaut")
+            + ") — appuie à nouveau pour envoyer");
   minuterieVocal = setTimeout(() => { if (vocalEnCours) arreterVocal(); }, VOCAL_MAX_MS);
 }
 
@@ -4106,12 +4128,22 @@ async function envoyerVocal(blob, type) {
     // la racine du proxy.
     const r = await fetch(location.pathname.replace(/\/$/, "") + "/audio",
                           { method: "POST", body: corps });
+    // Le socle redirige vers sa page de connexion quand la session est tombee. fetch SUIT la
+    // redirection et rend un 200 avec du HTML : pris pour un succes, c'etait un vocal qui
+    // partait dans le vide sans un mot. Verifie en rejouant la chaine sans cookie.
+    const typeReponse = (r.headers && r.headers.get("content-type")) || "";
+    if (r.redirected || (r.ok && !/json/.test(typeReponse))) {
+      throw new Error("la session du socle a expiré : reconnecte-toi sur le tableau de bord, "
+                      + "puis réessaie");
+    }
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.erreur) throw new Error(d.erreur || `envoi refusé (${r.status})`);
     // Le texte n'est PAS pris ici : il arrive par le flux d'evenements, comme une dictee du
     // PC, et c'est ce chemin-la qui remplit la barre et arme le decompte. Deux sources pour
-    // un meme texte finiraient par l'ecrire deux fois.
-    noteBarre(null);
+    // un meme texte finiraient par l'ecrire deux fois. Mais on DIT que ça a marche, et par
+    // qui : un vocal qui reussit sans un mot ressemble a un vocal perdu.
+    noteBarre(`transcrit par ${d.moteur || "le PC"}`
+              + (d.secondes ? ` — ${d.secondes} s de parole` : ""));
   } catch (e) {
     noteBarre("vocal non transcrit — " + ((e && e.message) || e), true);
   } finally {
@@ -4133,12 +4165,41 @@ function basculerDicteeIci() {
   demarrerVocal();
 }
 
-if (peutEnregistrerIci) {
+// Pourquoi cet appareil ne peut pas enregistrer, quand il ne peut pas. Un bouton qui
+// disparait ne s'explique pas ; un bouton qui refuse en disant pourquoi, si. Les deux causes
+// qu'on rencontre vraiment : une page servie en http — Safari retire alors mediaDevices tout
+// entier, sans erreur — et un navigateur trop vieux pour MediaRecorder.
+function pourquoiPasDEnregistrement() {
+  if (!globalThis.isSecureContext) {
+    return "le micro demande une page en https : ouvre le socle par son adresse https, "
+         + "pas par l'adresse IP";
+  }
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+    return "ce navigateur ne donne pas accès au micro (mediaDevices absent)";
+  }
+  if (typeof MediaRecorder === "undefined") {
+    return "ce navigateur ne sait pas enregistrer (MediaRecorder absent) — iOS 14.5 au moins";
+  }
+  return "";
+}
+
+{
   const b = document.getElementById("dicter-ici");
-  if (b) { b.hidden = false; b.setAttribute("aria-pressed", "false"); b.onclick = basculerDicteeIci; }
+  if (b) {
+    b.hidden = false;
+    b.setAttribute("aria-pressed", "false");
+    if (peutEnregistrerIci) {
+      b.onclick = basculerDicteeIci;
+    } else {
+      // Visible mais explicite : l'appui dit la cause au lieu de ne rien faire.
+      b.classList.add("indisponible");
+      b.title = pourquoiPasDEnregistrement();
+      b.onclick = () => noteBarre(pourquoiPasDEnregistrement(), true);
+    }
+  }
   // La classe porte la decision au CSS : sur telephone, le micro du PC cede sa place a
   // celui d'ici. Un booleen JS ne peut pas etre lu par une media query.
-  document.getElementById("composer")?.classList.add("dictee-locale");
+  if (peutEnregistrerIci) document.getElementById("composer")?.classList.add("dictee-locale");
 }
 
 // « couper » n'a de sens que sur la lecture qui joue : ailleurs, il ne ferait rien.

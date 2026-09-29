@@ -396,6 +396,35 @@ infobulle. Le dépliant des arguments est passé **sur** la ligne, replié en `�
 lieu d'occuper une rangée entière sous chaque outil : sur un tour de vingt actions, c'étaient
 vingt lignes de « arguments » à faire défiler pour rien.
 
+**Le vocal depuis le téléphone, enquête et verdict.** Le téléphone n'atteint pas
+claude-talk en direct : il passe par le **socle** — le tableau de bord de la maison, un
+serveur Fastify sur le tailnet — qui proxifie `/talk/<projet>/` vers le port de l'agent, avec
+une authentification par cookie d'un mois. Ce chemin a été rejoué de bout en bout, en
+production, avec un fichier au format exact d'un iPhone (AAC dans un MP4 fragmenté, généré
+par la voix Azure puis transcodé) : proxy, cookie, décodage, Deepgram — la phrase revient mot
+pour mot. Un envoi de 1,4 Mo traverse, la synthèse revient en MP3 intact. **Le serveur est
+hors de cause.** Ce que l'enquête a établi, et ce qu'elle a corrigé :
+
+- Sans cookie, le socle redirige vers sa page de connexion ; `fetch` **suit** la redirection
+  et rend un 200 avec du HTML. La page prenait ça pour un succès : un vocal qui partait dans
+  le vide sans un mot. Elle vérifie maintenant le type de la réponse et dit « la session du
+  socle a expiré ».
+- Le journal de l'agent ne disait pas si un vocal était **arrivé** — la première question à
+  poser quand ça ne marche pas. Chaque arrivée est maintenant journalisée : type, taille,
+  durée.
+- Le bouton disparaissait sans explication quand l'appareil ne pouvait pas enregistrer. Il
+  reste visible, en pointillés, et l'appui dit pourquoi : page servie en http (Safari retire
+  alors `mediaDevices` tout entier), navigateur sans `MediaRecorder`.
+- Un succès se dit — « transcrit par deepgram, 3,9 s de parole » — parce qu'un vocal qui
+  réussit en silence ressemble à un vocal perdu. L'enregistrement annonce son format, coupe
+  une lecture Azure en cours (iOS ne partage pas sa session audio), et se découpe par
+  tranches d'une seconde, iOS ayant eu des versions qui rendaient un fichier vide en un bloc.
+
+L'enquête a aussi levé un défaut sans rapport : la **dictée retenue** était rejouée comme un
+événement de l'historique, donc chaque vieille dictée — même envoyée depuis des heures —
+revenait remplir la barre à la reconnexion. C'est un *état* : seule la dernière compte, et
+elle est vide une fois consommée.
+
 **La voix du téléphone est celle du PC.** La synthèse intégrée au navigateur était gratuite
 et déjà là, mais ce n'était pas la même voix : sur le PC Claude parle avec une voix neurale
 française, sur le téléphone il prenait celle du système, et l'écart s'entend immédiatement —

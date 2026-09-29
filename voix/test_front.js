@@ -292,7 +292,14 @@ globalThis.fetch = (url, opts) => {
                              blob: () => Promise.resolve({ size: 9792, type: "audio/mpeg" }) });
   }
   const r = globalThis.reponseAudio;
-  return Promise.resolve({ ok: r.ok, status: r.status, json: () => Promise.resolve(r.corps) });
+  // Une reponse a des en-tetes et sait si elle a ete redirigee : c est ainsi que la page
+  // distingue un vrai succes d une page de connexion rendue avec un 200.
+  return Promise.resolve({
+    ok: r.ok, status: r.status, redirected: !!r.redirige,
+    headers: { get: (n) => (n.toLowerCase() === "content-type"
+      ? (r.type || "application/json; charset=utf-8") : null) },
+    json: () => Promise.resolve(r.corps),
+  });
 };
 globalThis.URL = { createObjectURL: () => "blob:faux", revokeObjectURL: () => {} };
 // L element audio. Il retient ce qu on lui donne a jouer — c est la seule chose a verifier :

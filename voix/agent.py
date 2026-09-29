@@ -1390,6 +1390,9 @@ async def entrypoint(ctx: JobContext):
         elif nom == "barre_vide":
             # La barre a ete videe a la main : plus rien n'attend, la retenue collante tombe.
             agent._retenu_en_attente = False
+            # Et l'etat le dit, pour la prochaine page qui se connectera : sinon elle
+            # retrouverait la dictee que l'on vient justement de jeter.
+            tableau.publier("dictee", texte="", raison="", auto=False)
         elif nom == "texte":
             # Écrire au lieu de parler, sans créer un second chemin.
             #
@@ -1409,6 +1412,7 @@ async def entrypoint(ctx: JobContext):
             agent.marquer_tape()
             # La barre part : plus rien n'attend de relecture, la retenue collante se libere.
             agent._retenu_en_attente = False
+            tableau.publier("dictee", texte="", raison="", auto=False)
             # Et l'enonce vocal en cours est consomme lui aussi : ce qu'on vient d'envoyer au
             # clavier contient deja la dictee relue. Sans ça, une finale arrivant apres
             # l'envoi repartirait dans le tour suivant — le meme defaut par l'autre porte,
@@ -1437,10 +1441,19 @@ async def entrypoint(ctx: JobContext):
             moteurs = (moteur_stt._stt_instances
                        if isinstance(moteur_stt, stt_api.FallbackAdapter) else [moteur_stt])
             texte, qui, capables = "", "", 0
+
+            def nom_moteur(m) -> str:
+                # « livekit.plugins.deepgram.stt.STT » se lit « deepgram » : ce nom est dit
+                # a l'ecran, pas dans un journal.
+                brut = getattr(m, "label", "") or type(m).__module__ or ""
+                if "plugins." in brut:
+                    return brut.split("plugins.", 1)[1].split(".", 1)[0]
+                return (brut.rsplit(".", 1)[-1] or type(m).__name__).lower()
+
             tableau.publier("transcrit", actif=True, direct=False, source="téléphone")
             try:
                 for m in moteurs:
-                    etiquette = getattr(m, "label", "") or type(m).__name__
+                    etiquette = nom_moteur(m)
                     try:
                         # Dans le contexte du job, quelle que soit la tache d'ou l'on vient.
                         ev = await asyncio.wait_for(

@@ -1487,6 +1487,28 @@ emettre({ genre: 'session', id: 'sess-neuve', repris: false, tours: 0 });
 dire(/nouvelle conversation/.test(document.getElementById('ou').textContent),
      'une reprise qui echoue ne ment pas non plus sur le nom');
 
+// ---- une vieille dictee ne revient pas hanter la barre ------------------------------------
+titre('dictee retenue : un etat, pas un evenement');
+champ.value = ''; fermerDictee(null);
+// L etat, envoye AVANT l historique : c est lui qui fait foi.
+emettre({ genre: 'dictee', texte: 'corrige la barre du bas', raison: 'occupe', auto: true });
+dire(champ.value === 'corrige la barre du bas', 'la dictee retenue courante remplit la barre');
+// L historique rejoue une dictee d il y a deux heures, envoyee depuis : elle doit rester ou
+// elle est. Avant, elle ecrasait la barre a chaque reconnexion.
+champ.value = ''; fermerDictee(null);
+// 8650 : plus haut que ce qui precede, plus bas que ce que les blocs suivants utilisent —
+// un numero deja vu serait silencieusement ecarte, et le test passerait sans rien prouver.
+recevoir({ genre: '_histoire', evenements: [
+  { genre: 'dictee', texte: 'une vieille phrase deja envoyee', raison: 'mode', n: 8650, h: '10:00' },
+] });
+dire(dernier && dernier.dataset && dernier.dataset.g === 'dictee',
+     'la dictee rejouee est bien passee (une ligne existe dans le flux)');
+dire(champ.value === '', 'mais elle ne touche pas la barre : ' + JSON.stringify(champ.value));
+// Consommee, l etat se vide — et vide la barre.
+emettre({ genre: 'dictee', texte: 'encore une', raison: 'mode', auto: false });
+emettre({ genre: 'dictee', texte: '', raison: '', auto: false });
+dire(champ.value === '', 'un etat vide efface ce qui etait retenu');
+
 // ---- une reconnexion n est pas une erreur -------------------------------------------------
 titre('diagnostic : rouge seulement quand c est vraiment casse');
 const diagLa = () => !!document.getElementById('diag-ws');
@@ -1690,6 +1712,24 @@ async function testerRelaisVocal() {
        'un echec de transcription se lit dans la barre : ' + document.getElementById('note-barre').textContent);
   dire(!btnDicter.classList.contains('envoi'), 'et le bouton n est pas reste en « envoi »');
   reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
+
+  // La session du socle est tombee : le proxy redirige vers sa page de connexion, fetch la
+  // suit et rend un 200 avec du HTML. Pris pour un succes, le vocal partait dans le vide.
+  reponseAudio = { ok: true, status: 200, redirige: true, type: "text/html; charset=utf-8", corps: {} };
+  requetes.length = 0; noteBarre(null);
+  btnDicter.onclick(); await tick();
+  btnDicter.onclick(); await tick(); await tick();
+  dire(/session du socle/.test(document.getElementById('note-barre').textContent || ''),
+       'une redirection vers la connexion est nommee, pas prise pour un succes : '
+       + document.getElementById('note-barre').textContent);
+  reponseAudio = { ok: true, status: 200, corps: { texte: 'ok', moteur: 'deepgram', secondes: 3.9 } };
+
+  // Et un succes se DIT : un vocal qui reussit sans un mot ressemble a un vocal perdu.
+  noteBarre(null);
+  btnDicter.onclick(); await tick();
+  btnDicter.onclick(); await tick(); await tick();
+  dire(/transcrit par deepgram/.test(document.getElementById('note-barre').textContent || ''),
+       'le succes nomme le moteur, en clair : ' + document.getElementById('note-barre').textContent);
 
   // Micro refuse : la raison, tout de suite — pas un bouton allume sur du vide.
   microAccorde = false; noteBarre(null); enregistreurs.length = 0;
