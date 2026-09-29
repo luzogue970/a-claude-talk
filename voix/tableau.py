@@ -664,6 +664,11 @@ PAGE = r"""<!doctype html>
      se sont retrouvees fausses en meme temps, et « suivre » a fini derriere la barre.
      14 haut + 52 (le champ) + 8 (l'interligne) + 48 (les boutons) + 20 bas = 142. */
   --barre:142px;
+  /* La place que « suivre » prend au-dessus de la barre, quand il est affiche — zero
+     sinon. Ecrite par le gestionnaire de defilement, qui mesure le bouton une fois
+     visible plutot que de parier sur sa hauteur. Declaree ici parce qu'une variable
+     absente ne leve rien : elle rend la valeur initiale, et le decalage serait mort. */
+  --bouton-bas:0px;
   /* « ça attend ta relecture » : la note contre la barre quand une dictée est retenue.
      L'ambre plutôt que le rouge — rien n'est cassé, quelque chose demande un geste. */
   --retenu:#d8a657;
@@ -872,8 +877,16 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   animation:tourne .75s linear infinite}
 
 /* Le bandeau de cogitation, posé juste au-dessus de la barre de saisie. En position absolue
-   pour qu'il apparaisse et disparaisse sans jamais pousser le contenu du flux. */
-#pile-barre{position:absolute;bottom:100%;left:16px;right:16px;margin-bottom:8px;
+   pour qu'il apparaisse et disparaisse sans jamais pousser le contenu du flux.
+
+   « suivre » visait le meme creux : les notes partent de la gauche, le bouton est colle a
+   droite, et sur un telephone une note un peu longue — « rebranché — 3 messages renvoyés »
+   — traversait toute la largeur et passait SOUS le bouton, qui la recouvrait. On empile
+   donc verticalement des que le bouton est la. Sa hauteur est mesuree au moment ou il
+   s'affiche, pas ecrite ici : une constante de plus aurait vieilli comme les trois
+   precedentes. */
+#pile-barre{position:absolute;bottom:100%;left:16px;right:16px;
+  margin-bottom:calc(8px + var(--bouton-bas, 0px));
   display:flex;flex-direction:column;align-items:flex-start;gap:6px;pointer-events:none}
 #pile-barre > *{pointer-events:auto;max-width:100%}
 #cogitation{display:flex;gap:8px;align-items:center;background:var(--carte);
@@ -4498,7 +4511,12 @@ brancher();
 
 addEventListener("scroll", () => {
   suivre = window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
-  document.getElementById("bas").style.display = suivre ? "none" : "block";
+  const bouton = document.getElementById("bas");
+  bouton.style.display = suivre ? "none" : "block";
+  // Mesure APRES l'affichage : un element en display:none a une hauteur nulle, et la
+  // pile serait remontee de zero — c'est-a-dire pas du tout.
+  document.documentElement.style.setProperty("--bouton-bas",
+    suivre ? "0px" : (bouton.offsetHeight + 8) + "px");
 });
 document.getElementById("bas").onclick = () => {
   suivre = true; window.scrollTo(0, document.body.scrollHeight);
