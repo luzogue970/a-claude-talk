@@ -374,6 +374,28 @@ y prennent leur session HTTP, et une requête arrivant par la route web n'en hé
 forcément. Vérifié contre Deepgram dans le pire cas — serveur démarré depuis un contexte
 vide — le piège est réel hors contexte et disparaît dedans.
 
+**Une action dit ce qu'elle fait, pas par quel mot elle commence.** Le flux affichait
+« Bash cd », « Grep def », « Bash cd » : on voyait que ça travaillait, jamais sur quoi — et le
+bilan parlé du tour disait la même chose à voix haute. Deux causes, et la seconde explique la
+première. Le CLI **fournit** une description en clair pour les commandes shell et les
+délégations ; elle était essayée en dernier, donc jamais atteinte, la commande répondant
+toujours avant elle. Et le résumé d'une commande gardait son premier mot, or une commande
+commence presque toujours par un changement de dossier.
+
+L'ordre va maintenant du plus parlant au plus brut : la phrase écrite par Claude, puis ce que
+l'outil vise, puis un repli. `cd /un/dossier && npm test` se lit « npm test » — le prélude
+emporte son argument, sans quoi on résumerait par le nom du dossier, ce qui est pire encore :
+on croit lire une action, on lit un chemin. Un tube est gardé entier, parce que
+`grep -rn X voix/ | head -20` dit son intention complète. Une recherche annonce où elle
+cherche, et un fichier relu partiellement annonce ses lignes.
+
+**Sans prendre un pixel de plus.** Mesuré, avant et après, à largeur d'écran de téléphone :
+366 px pour six actions dans les deux cas. L'action tient sur **une seule ligne**, tronquée
+par une ellipse si besoin — l'information utile est au début, et le texte entier reste en
+infobulle. Le dépliant des arguments est passé **sur** la ligne, replié en `⋯` à droite, au
+lieu d'occuper une rangée entière sous chaque outil : sur un tour de vingt actions, c'étaient
+vingt lignes de « arguments » à faire défiler pour rien.
+
 **La voix du téléphone est celle du PC.** La synthèse intégrée au navigateur était gratuite
 et déjà là, mais ce n'était pas la même voix : sur le PC Claude parle avec une voix neurale
 française, sur le téléphone il prenait celle du système, et l'écart s'entend immédiatement —

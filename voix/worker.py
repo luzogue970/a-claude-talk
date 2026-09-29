@@ -9,6 +9,7 @@ last paragraph of text.
 """
 
 import asyncio
+import re
 import logging
 import os
 import warnings
@@ -50,19 +51,93 @@ warnings.filterwarnings(
 AUTO_ALLOW = {"Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite", "NotebookRead"}
 
 
+# Les preludes d'une commande shell : ils ne disent rien de ce qu'elle FAIT. Deux familles,
+# et la difference compte. `cd /un/dossier` emporte son argument — sans ça on resume
+# « cd /un/dossier && npm test » par « dossier », ce qui est encore pire que par « cd ».
+# `sudo npm test` n'en emporte aucun : ce qui suit EST la commande.
+_PRELUDES_AVEC_ARG = {"cd", "source", ".", "pushd"}
+_PRELUDES_SEULS = {"sudo", "env", "time", "nohup", "exec", "command"}
+_LONGUEUR = 64          # au-dela, on tronque : la ligne doit rester une ligne
+
+_ASSIGNATION = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
+
+
+def _verbe_shell(commande: str) -> str:
+    """Ce qu'une commande shell fait vraiment, en quelques mots.
+
+    On coupe sur les ENCHAINEMENTS (`&&`, `||`, `;`) et on garde le premier morceau qui ne
+    soit pas un prelude. Pas sur les tubes : `grep -rn X voix/ | head -20` dit son intention
+    entiere, la couper la mutilerait. Prendre le dernier morceau serait tentant — c'est
+    souvent lui qui compte — mais une chaine se termine aussi bien par un `| tail -3`.
+    """
+    for morceau in re.split(r"&&|\|\||;|\n", commande):
+        mots = morceau.strip().split()
+        while mots:
+            tete = mots[0]
+            if tete in _PRELUDES_AVEC_ARG:
+                del mots[:2]                       # le prelude ET ce qu'il vise
+            elif tete in _PRELUDES_SEULS or _ASSIGNATION.match(tete) or tete == "export":
+                mots.pop(0)
+            else:
+                break
+        if mots:
+            # Le binaire sans son chemin : « .venv/bin/python » se lit « python ».
+            mots[0] = mots[0].rsplit("/", 1)[-1]
+            return " ".join(mots)
+    return commande.strip()
+
+
 def _cible(name: str, args: dict) -> str:
-    """A short, speakable description of one tool call. Paths become basenames because
-    nobody wants to hear a full path read out, and commands keep only their verb."""
-    if path := args.get("file_path") or args.get("path") or args.get("notebook_path"):
-        return Path(str(path)).name
-    if cmd := args.get("command"):
-        return str(cmd).strip().split()[0] if str(cmd).strip() else ""
-    if pattern := args.get("pattern") or args.get("query"):
-        return str(pattern)[:40]
-    if url := args.get("url"):
-        return str(url).split("/")[2] if "://" in str(url) else str(url)[:40]
+    """Ce qu'un appel d'outil fait, en une ligne lisible ET prononcable.
+
+    L'ancienne version rendait « cd » pour toute commande commencant par un changement de
+    dossier, et un motif brut pour les recherches. Au tableau comme a l'oral, ça donnait une
+    suite de « Bash cd », « Grep def », « Bash cd » : on voyait que ça travaillait, jamais sur
+    quoi. Or le CLI FOURNIT une description en clair pour les commandes shell et les
+    delegations — elle etait la, en derniere position, donc jamais atteinte.
+
+    L'ordre compte, et il va du plus parlant au plus brut : la description ecrite par Claude,
+    puis ce que l'outil vise, puis un repli. La longueur est bornee : cette ligne partage
+    l'ecran avec la conversation, et elle est lue a voix haute dans le bilan du tour.
+    """
+    def court(texte: str) -> str:
+        texte = " ".join(str(texte).split())
+        return texte if len(texte) <= _LONGUEUR else texte[:_LONGUEUR - 1].rstrip() + "…"
+
+    # 1. La description, quand le CLI en fournit une — commandes shell, delegations. C'est
+    #    une phrase ecrite pour etre lue, on ne fera jamais mieux nous-memes.
     if desc := args.get("description"):
-        return str(desc)[:60]
+        return court(desc)
+
+    # 2. Une recherche : le motif ET l'endroit. « def _cible » seul ne dit pas ou l'on
+    #    cherche, et c'est souvent l'endroit qui renseigne sur l'intention.
+    if name in ("Grep", "Glob") and (motif := args.get("pattern")):
+        ou = args.get("path") or args.get("glob") or ""
+        ou = Path(str(ou)).name if ou and "/" in str(ou) else str(ou)
+        return court(f"{motif} dans {ou}" if ou and ou != "." else str(motif))
+
+    # 3. Un fichier : son nom, jamais son chemin complet — personne ne veut entendre
+    #    s'epeler trois niveaux de dossiers. La portion lue, quand elle est precisee, dit
+    #    la difference entre relire un fichier et en verifier deux lignes.
+    if chemin := args.get("file_path") or args.get("path") or args.get("notebook_path"):
+        nom = Path(str(chemin)).name
+        if (debut := args.get("offset")) and (combien := args.get("limit")):
+            return court(f"{nom}, lignes {debut} à {int(debut) + int(combien)}")
+        return court(nom)
+
+    # 4. Une commande shell sans description : on cherche ce qu'elle fait vraiment.
+    if cmd := args.get("command"):
+        return court(_verbe_shell(str(cmd)))
+
+    if requete := args.get("query"):
+        return court(requete)
+    if motif := args.get("pattern"):
+        return court(motif)
+    if url := args.get("url"):
+        brut = str(url)
+        return court(brut.split("/")[2] if "://" in brut else brut)
+    if prompt := args.get("prompt"):
+        return court(prompt)
     return ""
 
 

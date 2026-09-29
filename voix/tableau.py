@@ -1219,6 +1219,19 @@ body{overflow-x:hidden}
 .g-pensee .badge{color:var(--pensee)} .g-pensee .corps{color:#c3a6f5;font-size:13px}
 .g-texte .badge{color:#7d8590} .g-texte .corps{color:#b6bec8}
 .g-outil .badge{color:var(--outil)}
+/* L'action tient sur une ligne et une seule : elle partage l'ecran avec la conversation. */
+.g-outil .corps{display:flex;align-items:baseline;gap:8px;white-space:normal}
+.g-outil .quoi{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.g-outil .args{flex:none}
+.g-outil .args summary{list-style:none;cursor:pointer;color:#6b7684;font-size:13px;
+  padding:0 4px;border-radius:4px}
+.g-outil .args summary::-webkit-details-marker{display:none}
+.g-outil .args summary:hover{color:var(--texte);background:#1a1f27}
+/* Deplie, le detail reprend toute la largeur : c'est la qu'on vient lire, pas survoler. */
+.g-outil .args[open]{flex:1 1 100%}
+.g-outil .args[open] summary{color:var(--texte)}
+.g-outil .args pre{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .g-resultat .badge{color:#7d8590} .g-resultat .corps{color:var(--faible);font-size:13px}
 .g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#9fe6ec;font-size:13px}
 .g-permission .badge{color:var(--permission)} .g-permission .corps{color:#ffc9c4}
@@ -1922,8 +1935,23 @@ function completerTour(e) {
 function corps(e) {
   switch (e.genre) {
     case "outil": {
-      const args = e.args ? `<details><summary>arguments</summary><pre>${ech(JSON.stringify(e.args, null, 2))}</pre></details>` : "";
-      return `<code>${ech(e.nom)}</code> ${ech(e.cible || "")}${args}`;
+      // Une seule ligne, quoi qu'il arrive. Ce que fait l'outil est desormais une phrase —
+      // « Cherche la définition de la fonction de résumé » plutot que « cd » — et une phrase
+      // se replie sur deux lignes des qu'on la lit sur un telephone. L'action tronquee en
+      // fin reste lisible : l'information utile est au debut. Le texte entier va dans
+      // l'infobulle, et les arguments disent le reste.
+      //
+      // Le depliant des arguments passe SUR la ligne au lieu de dessous. Il y occupait une
+      // rangee entiere pour un mot, sous chaque outil : sur un tour de vingt actions, ça
+      // faisait vingt lignes de « arguments » a faire defiler pour rien. Replie en « ⋯ »
+      // a droite, il rend cette place — de quoi payer largement la phrase qu'on affiche.
+      const quoi = `${ech(e.nom)} ${ech(e.cible || "")}`.trim();
+      const args = e.args
+        ? `<details class="args"><summary title="voir les arguments">⋯</summary>`
+          + `<pre>${ech(JSON.stringify(e.args, null, 2))}</pre></details>`
+        : "";
+      return `<span class="quoi" title="${ech(quoi)}"><code>${ech(e.nom)}</code> `
+        + `${ech(e.cible || "")}</span>${args}`;
     }
     case "permission":
       return `${ech(e.texte)}${e.decision ? ` — <b>${ech(e.decision)}</b>` : ""}`;
