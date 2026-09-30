@@ -1213,10 +1213,14 @@ body{overflow-x:hidden}
 #dicter-ici svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
 #dicter-ici{color:#8b95a3}
-/* Rouge : il enregistre, et c'est la seule chose de la page qui merite du rouge — un micro
-   ouvert qu'on a oublie coute quelque chose. Ambre : le PC transcrit, on attend. */
-#dicter-ici[aria-pressed="true"]{color:#ff7b72;border-color:#ff7b72;background:#2a1517;
-  animation:lit 1.2s ease-in-out infinite}
+/* Bleu, comme tout ce qui vient de TOI dans cette page — et comme le micro du PC juste a
+   cote, qui porte deja cette couleur quand il est ouvert. Il etait rouge, et c'etait deux
+   fautes en une : le rouge est la couleur de l'erreur ici, et un micro qui ecoute n'est pas
+   un incident mais l'etat qu'on vient de demander. Deux boutons faisant la meme chose ne
+   peuvent pas se peindre differemment.
+   Le halo et la pulsation disent la presence, qui est la vraie information a donner. */
+#dicter-ici[aria-pressed="true"]{color:var(--toi);border-color:var(--toi);background:#121c28;
+  box-shadow:0 0 0 3px #58a6ff26;animation:lit 1.2s ease-in-out infinite}
 #dicter-ici.envoi{color:var(--outil);border-color:var(--outil);background:#1c1710;animation:none}
 #dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
 #dicter-ici[hidden]{display:none}

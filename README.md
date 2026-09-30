@@ -481,6 +481,14 @@ c'est pire que rien, puisqu'on croit savoir. Le mot reste, minuscule et en retra
 qu'il fait une preuve de vie animée ; il ne tient plus la place de ce qui informe, et
 disparaît complètement sur écran étroit.
 
+**Le micro qui écoute est bleu, pas rouge.** Il l'a été, et c'étaient deux fautes en une :
+le rouge est la couleur de l'erreur dans cette page, et un micro qui écoute n'est pas un
+incident — c'est l'état qu'on vient de demander. Il porte maintenant le bleu de tout ce qui
+vient de *toi*, celui que le micro du PC juste à côté arbore déjà quand il est ouvert : deux
+boutons qui font la même chose ne peuvent pas se peindre différemment. Le halo et la
+pulsation disent la présence, qui est la vraie information. L'ambre reste pour la
+transcription en cours, où l'on attend vraiment quelque chose.
+
 **Depuis le téléphone : l'adresse compte.** Le micro n'existe qu'en HTTPS — en HTTP, Safari
 retire `mediaDevices` tout entier, sans erreur, et rien de ce qui précède ne peut marcher.
 L'adresse à ouvrir, et à mettre sur l'écran d'accueil, est celle du socle **par son nom
