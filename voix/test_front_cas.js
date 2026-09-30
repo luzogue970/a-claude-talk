@@ -1586,14 +1586,20 @@ dire(/envoyé/.test(mesure.textContent), 'et il dit « envoyé » tant que Claud
 dire(mesure.className === 'attente', 'dans le ton de l attente, pas de la confirmation');
 
 // 2. L API repond : « message_start » est la PREUVE que le message est arrive.
-emettre({ genre: 'jetons', total: 24000, entree: 24000, sortie: 0, echanges: 1, recu: true });
+emettre({ genre: 'jetons', contexte: 24000, sortie: 0, echanges: 1, recu: true });
 dire(/reçu|jetons/.test(mesure.textContent) && mesure.className === 'recu',
      'la premiere reponse de l API bascule le bandeau en « reçu » : ' + mesure.textContent);
-dire(/24,0 k jetons/.test(mesure.textContent), 'avec les jetons REELS, lisibles : ' + mesure.textContent);
+dire(/24,0 k jetons/.test(mesure.textContent), 'avec le poids REEL de la conversation : ' + mesure.textContent);
 
-// 3. Ça consomme, et ça se voit monter.
-emettre({ genre: 'jetons', total: 31500, entree: 24000, sortie: 7500, echanges: 3 });
-dire(/31,5 k jetons/.test(mesure.textContent), 'le compteur suit la consommation : ' + mesure.textContent);
+// 3. Le contexte ne s ADDITIONNE pas d un echange a l autre : le modele relit la meme
+//    conversation, il ne la consomme pas trois fois. L additionner affichait 294 k sur une
+//    conversation qui en pesait 98 — un cumul de relectures presente comme une consommation.
+emettre({ genre: 'jetons', contexte: 26000, sortie: 7500, echanges: 3 });
+dire(/26,0 k jetons/.test(mesure.textContent),
+     'le contexte suit son poids courant, il ne cumule pas : ' + mesure.textContent);
+dire(/\+7,5 k/.test(mesure.textContent),
+     'et ce que Claude a ecrit s ajoute a part, lui qui s accumule vraiment : ' + mesure.textContent);
+dire(!/57,5|33,5/.test(mesure.textContent), 'les deux ne sont jamais melangees en un seul chiffre');
 dire(/3 échanges/.test(mesure.textContent),
      'et le nombre d allers-retours explique un tour long et muet : ' + mesure.textContent);
 
@@ -1857,6 +1863,9 @@ async function testerEcouteHistorique() {
 // Asynchrone : l envoi attend fetch. La fonction est appelee juste avant le tally, qui l attend.
 async function testerRelaisVocal() {
   const tick = () => new Promise(r => setTimeout(r, 0));
+  // Un envoi traverse fetch : les microtaches ne suffisent pas a le voir retomber,
+  // et un envoi en retard ecrase la note du cas suivant.
+  const pause = () => new Promise(r => setTimeout(r, 40));
   titre('vocal : le telephone enregistre, le PC transcrit');
   const btnDicter = document.getElementById('dicter-ici');
   dire(!btnDicter.hidden, 'le bouton apparait quand l appareil sait enregistrer');
@@ -1874,7 +1883,7 @@ async function testerRelaisVocal() {
        'et la barre dit quoi faire : ' + document.getElementById('note-barre').textContent);
 
   // Appuyer encore : l enregistrement s arrete et PART vers le PC.
-  btnDicter.onclick(); await tick(); await tick();
+  btnDicter.onclick(); await pause();
   dire(enregistreurs[0].etat === 'inactive', 'un second appui arrete l enregistrement');
   dire(requetes.length === 1 && /\/audio$/.test(requetes[0].url),
        'et le fichier part vers /audio : ' + (requetes[0] && requetes[0].url));
@@ -1898,10 +1907,12 @@ async function testerRelaisVocal() {
   reponseAudio = { ok: false, status: 422, corps: { erreur: 'rien compris dans l enregistrement' } };
   requetes.length = 0; noteBarre(null);
   btnDicter.onclick(); await tick();
-  btnDicter.onclick(); await tick(); await tick();
+  btnDicter.onclick(); await pause();
   dire(/rien compris/.test(document.getElementById('note-barre').textContent || ''),
        'un echec de transcription se lit dans la barre : ' + document.getElementById('note-barre').textContent);
   dire(!btnDicter.classList.contains('envoi'), 'et le bouton n est pas reste en « envoi »');
+  dire(!!vocalEnAttente, 'et l enregistrement est garde plutot que jete');
+  vocalEnAttente = null; majBoutonDictee();   // le cas suivant part d une ardoise propre
   reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
 
   // La session du socle est tombee : le proxy redirige vers sa page de connexion, fetch la
@@ -1909,16 +1920,18 @@ async function testerRelaisVocal() {
   reponseAudio = { ok: true, status: 200, redirige: true, type: "text/html; charset=utf-8", corps: {} };
   requetes.length = 0; noteBarre(null);
   btnDicter.onclick(); await tick();
-  btnDicter.onclick(); await tick(); await tick();
+  btnDicter.onclick(); await pause();
   dire(/session du socle/.test(document.getElementById('note-barre').textContent || ''),
        'une redirection vers la connexion est nommee, pas prise pour un succes : '
        + document.getElementById('note-barre').textContent);
+  dire(!!vocalEnAttente, 'la aussi, ce qui a ete dit attend au lieu d etre perdu');
+  vocalEnAttente = null; majBoutonDictee();
   reponseAudio = { ok: true, status: 200, corps: { texte: 'ok', moteur: 'deepgram', secondes: 3.9 } };
 
   // Et un succes se DIT : un vocal qui reussit sans un mot ressemble a un vocal perdu.
   noteBarre(null);
   btnDicter.onclick(); await tick();
-  btnDicter.onclick(); await tick(); await tick();
+  btnDicter.onclick(); await pause();
   dire(/transcrit par deepgram/.test(document.getElementById('note-barre').textContent || ''),
        'le succes nomme le moteur, en clair : ' + document.getElementById('note-barre').textContent);
 
@@ -1937,6 +1950,60 @@ async function testerRelaisVocal() {
   dire(microDemandes === 0 && /https/.test(document.getElementById('note-barre').textContent || ''),
        'en http, on explique au lieu de tenter : ' + document.getElementById('note-barre').textContent);
   isSecureContext = true; noteBarre(null);
+
+  // ---- parler dans le vide : jamais -------------------------------------------------------
+  // Le cas vecu : micro ouvert, on parle trente secondes, et on apprend a l arret que la
+  // liaison etait tombee depuis longtemps. Trente secondes de parole et d energie perdues.
+  titre('vocal : ne jamais laisser parler dans le vide');
+  brancher(); ouvrirSock();
+  // Le bloc precedent a laisse un envoi en vol : on le laisse retomber avant de mesurer,
+  // sinon sa note d arrivee ecraserait celle qu on veut lire. Une vraie pause, pas des
+  // microtaches : l envoi traverse fetch, donc plusieurs tours de boucle.
+  await new Promise(r => setTimeout(r, 60));
+  noteBarre(null); enregistreurs.length = 0; vibrations.length = 0;
+
+  // 1. Liaison deja morte : on refuse d ouvrir le micro, et on le dit AVANT.
+  fermerSock(1006);
+  btnDicter.onclick(); await tick();
+  dire(enregistreurs.length === 0, 'liaison morte : le micro ne s ouvre meme pas');
+  dire(/inutile de parler/.test(document.getElementById('note-barre').textContent || ''),
+       'et on le dit avant, pas apres : ' + document.getElementById('note-barre').textContent);
+  dire(vibrations.length >= 1, 'avec une alerte qu on sent sans regarder l ecran');
+
+  // 2. La liaison tombe PENDANT qu on parle : on coupe court au lieu de laisser continuer.
+  brancher(); ouvrirSock();
+  noteBarre(null); enregistreurs.length = 0; vibrations.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(enregistreurs.length === 1 && btnDicter.getAttribute('aria-pressed') === 'true',
+       'liaison vivante : l enregistrement demarre');
+  audioEchoue = true;                             // le reseau est coupe : l envoi echouera
+  fermerSock(1006);
+  await new Promise(r => setTimeout(r, 700));     // la veille bat toutes les 500 ms
+  dire(btnDicter.getAttribute('aria-pressed') === 'false',
+       'la liaison tombe : l enregistrement s arrete tout seul, en moins d une seconde');
+  // Un seul message, qui dit la cause ET le sort de la parole : « arrête de parler » est la
+  // phrase qui compte, puisqu on est en train de parler quand elle arrive.
+  const note = document.getElementById('note-barre').textContent || '';
+  dire(/arrête de parler/.test(note) && /liaison est tombée/.test(note),
+       'on te dit d arreter, et pourquoi : ' + note);
+  dire(vibrations.length >= 1, 'la aussi, une alerte qui se sent');
+
+  // 3. Ce qui a ete dit n est PAS jete : il attend et repart a la reconnexion.
+  dire(/GARDÉ/.test(document.getElementById('note-barre').textContent || ''),
+       'et que ce qui a ete dit est garde — dans le meme message, pas ecrase par le suivant');
+  await pause();
+  dire(!!vocalEnAttente, 'un enregistrement attend bien la liaison');
+  dire(btnDicter.classList.contains('garde'), 'et le bouton le porte, pour qu on ne l oublie pas');
+  requetes.length = 0;
+  audioEchoue = false;                            // le reseau revient
+  brancher(); ouvrirSock();
+  socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 0, pret: true }) });
+  await pause();
+  dire(requetes.some(r => /\/audio$/.test(r.url)),
+       'et il repart TOUT SEUL des que la liaison revient');
+  dire(!vocalEnAttente, 'une fois parti, il n attend plus');
+  noteBarre(null);
+
 }
 
 // ---- une question de Claude attend, puis cesse d attendre --------------------------------

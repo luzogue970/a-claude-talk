@@ -476,6 +476,37 @@ téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il r
 écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
 cours comprise.
 
+**Ne jamais laisser parler dans le vide.** Le cas vécu : micro ouvert, on parle trente
+secondes, et on apprend à l'arrêt que la liaison était tombée depuis longtemps. La parole est
+perdue, le temps et l'énergie avec. L'enregistrement ne surveillait rien — il découvrait
+l'échec au moment d'envoyer, c'est-à-dire trop tard. Trois protections, dans cet ordre :
+
+- **Avant** : si la liaison est déjà coupée, le micro ne s'ouvre même pas, et on le dit
+  plutôt que de laisser parler pour rien.
+- **Pendant** : la liaison est surveillée deux fois par seconde. Si elle tombe,
+  l'enregistrement s'arrête de lui-même en moins d'une seconde, avec une vibration — on est
+  en train de parler, donc on ne regarde pas l'écran.
+- **Après** : ce qui a été dit n'est **jamais** jeté. L'enregistrement est gardé, le bouton
+  le porte en ambre pour qu'on ne l'oublie pas, et il repart tout seul dès que la liaison
+  revient — avant les messages écrits, puisqu'il a été dit avant eux.
+
+Le message d'interruption et celui de l'échec d'envoi sont **fusionnés** : l'envoi qui suit
+une interruption échoue forcément, et son message écrasait le seul qui compte — « arrête de
+parler ». Les deux sont dits ensemble, une fois.
+
+**Les jetons : ce que la conversation pèse, pas la somme des relectures.** Le compteur
+affichait 294 k sur une conversation qui en pesait 98. L'entrée de chaque aller-retour était
+**additionnée**, alors qu'elle est le *contexte relu* — la même conversation, servie
+largement par le cache, que le modèle relit à chaque échange sans la consommer trois fois. On
+montrait un cumul de relectures en le présentant comme une consommation.
+
+Deux mesures distinctes désormais, parce qu'elles ne se comportent pas pareil : le
+**contexte**, qui est remplacé à chaque échange — c'est le poids courant — et la **sortie**,
+seule vraiment cumulative, puisque chaque échange produit du texte nouveau. Affichées à part,
+jamais mélangées : « 12 s · 38,0 k jetons · +601 · 2 échanges ». Vérifié sur un tour réel où
+le contexte passe de 24 k à 38 k à mesure que Claude lit des fichiers — là où l'ancien calcul
+aurait annoncé 62 k.
+
 **« Est-ce que mon message est parti ? »** Entre l'envoi et la première pensée affichée, il
 peut s'écouler plusieurs secondes de silence complet — et rien n'y distinguait « ça monte »
 de « c'est perdu ». Le bandeau au-dessus de la barre répond maintenant, et il le fait avec

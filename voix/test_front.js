@@ -248,10 +248,14 @@ globalThis.declencher = (nom, ev) => {
 };
 // Le micro, tel que le navigateur le donne. Le compteur retient les fois ou l autorisation
 // a REELLEMENT ete reclamee : c est tout l enjeu, la question n etait jamais posee.
+// Les alertes fortes : on est en train de PARLER, donc on ne regarde pas l ecran. Le test
+// verifie qu on est prevenu autrement que par un texte.
+globalThis.vibrations = [];
 globalThis.microDemandes = 0;
 globalThis.microAccorde = true;
 globalThis.navigator = {
   onLine: true,
+  vibrate: (motif) => { globalThis.vibrations.push(motif); return true; },
   mediaDevices: {
     getUserMedia: () => {
       globalThis.microDemandes++;
@@ -298,6 +302,7 @@ globalThis.FormData = function () { this.champs = []; this.append = (n, v, f) =>
 // fetch : la page envoie, le test decide de la reponse. La liste requetes garde chaque appel.
 globalThis.requetes = [];
 globalThis.reponseAudio = { ok: true, status: 200, corps: { texte: "ok" } };
+globalThis.audioEchoue = false;
 // La synthese Azure, servie par /parler. Le drapeau azureMarche a false simule l absence de
 // cle ou un service injoignable : la page doit se rabattre sur la voix du navigateur.
 globalThis.azureMarche = true;
@@ -315,6 +320,9 @@ globalThis.fetch = (url, opts) => {
                              headers: { get: () => "application/json; charset=utf-8" },
                              json: () => Promise.resolve({ cle: "abc123", octets: 9792, cache: false }),
                              blob: () => Promise.resolve({ size: 9792, type: "audio/mpeg" }) });
+  }
+  if (String(url).endsWith("/audio") && globalThis.audioEchoue) {
+    return Promise.reject(new Error("reseau coupe"));
   }
   const r = globalThis.reponseAudio;
   // Une reponse a des en-tetes et sait si elle a ete redirigee : c est ainsi que la page

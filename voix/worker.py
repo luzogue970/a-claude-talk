@@ -178,7 +178,8 @@ class Journal:
     # Le detail, cumule au fil du tour et publie en direct. `jetons` reste le total que le
     # SDK donne a la fin, qui fait foi pour le bilan ; ceux-ci servent a MONTRER que ça
     # avance pendant que ça avance.
-    jetons_entree: int = 0
+    # Ce que la conversation PESE au dernier echange — pas un cumul. Voir _delta.
+    contexte: int = 0
     jetons_sortie: int = 0
     echanges: int = 0          # combien de fois le modele a repris la parole dans ce tour
     # --- comment le tour s'est termine -------------------------------------------------
@@ -552,7 +553,14 @@ class Worker:
         # chaque aller-retour.
         if genre == "message_start":
             usage = (event.get("message") or {}).get("usage") or {}
-            self.journal.jetons_entree += (
+            # REMPLACE, n'additionne pas. L'entree d'un echange est le CONTEXTE que le modele
+            # relit — la conversation entiere, largement servie par le cache. L'additionner a
+            # chaque aller-retour donnait des chiffres enormes et faux : trois echanges de
+            # 24 k affichaient 72 k, puis 294 k sur un tour un peu long, alors que la
+            # conversation n'a jamais pese que 98 k. On montrait un cumul de relectures en le
+            # presentant comme une consommation. Ce qu'on veut lire, c'est ce que la
+            # conversation pese MAINTENANT : la derniere valeur, donc.
+            self.journal.contexte = (
                 int(usage.get("input_tokens") or 0)
                 + int(usage.get("cache_read_input_tokens") or 0)
                 + int(usage.get("cache_creation_input_tokens") or 0))
@@ -561,6 +569,8 @@ class Worker:
             return
         if genre == "message_delta":
             usage = event.get("usage") or {}
+            # La sortie, elle, s'additionne vraiment : chaque echange PRODUIT du texte, et
+            # rien n'est relu. C'est la seule des deux mesures qui soit cumulative.
             self.journal.jetons_sortie += int(usage.get("output_tokens") or 0)
             self._publier_jetons()
             return
@@ -586,9 +596,8 @@ class Worker:
         pour remplacer « envoyé » par « reçu », ce qui est la question qu'on se pose en
         regardant l'ecran apres avoir parle."""
         self._voir("jetons",
-                   entree=self.journal.jetons_entree,
+                   contexte=self.journal.contexte,
                    sortie=self.journal.jetons_sortie,
-                   total=self.journal.jetons_entree + self.journal.jetons_sortie,
                    echanges=self.journal.echanges,
                    recu=recu or None)
 

@@ -1225,6 +1225,10 @@ body{overflow-x:hidden}
 #dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
 #dicter-ici[hidden]{display:none}
 #dicter-ici.indisponible{opacity:.45;border-style:dashed}
+/* Un enregistrement garde attend la liaison. L'ambre dit « quelque chose est en suspens »,
+   et la pulsation qu'il n'est pas perdu — c'est la seule chose qu'on veut savoir. */
+#dicter-ici.garde{color:var(--outil);border-color:var(--outil);background:#1c1710;
+  animation:lit 2s ease-in-out infinite}
 @media (prefers-reduced-motion: reduce){
   #dicter-ici[aria-pressed="true"], #dicter-ici.envoi svg{animation:none} }
 #lire-ici svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.6;
@@ -2676,12 +2680,18 @@ let rouleau = null, battementMesure = null;
 // setInterval sur une page au repos, c'est ce qui avait fini par coûter 1,5 Go de mémoire.
 // Ce que le tour a consomme, tel que le serveur le mesure. Remis a zero au DEBUT d'un tour
 // et pas a sa fin : le bilan reste lisible apres coup, et le tour suivant repart proprement.
-let jetonsTour = 0, echangesTour = 0, recuParClaude = false;
+// Deux mesures, et elles ne se comportent pas pareil — c'est tout l'enjeu. Le CONTEXTE est
+// ce que la conversation pese maintenant : il ne s'additionne pas d'un echange a l'autre,
+// puisque le modele relit la meme chose. La SORTIE, elle, s'accumule : chaque echange produit
+// du texte nouveau. Les confondre affichait 294 k sur une conversation qui en pesait 98.
+let contexteTour = 0, sortieTour = 0, echangesTour = 0, recuParClaude = false;
 
+// Un millier est le seuil de lecture : au-dela, les unites ne disent plus rien et « 58,2 k »
+// se compare d'un coup d'oeil a « 26,0 k », ce que « 58241 » et « 26003 » ne font pas.
 function motDesJetons(n) {
   if (!n) return "";
-  return n < 10000 ? `${n} jetons`
-       : `${(n / 1000).toFixed(n < 100000 ? 1 : 0).replace(".", ",")} k jetons`;
+  if (n < 1000) return `${n} jetons`;
+  return `${(n / 1000).toFixed(n < 100000 ? 1 : 0).replace(".", ",")} k jetons`;
 }
 
 // La ligne qui remplace les mots tires au sort. Trois etats, et chacun repond a une question
@@ -2699,7 +2709,10 @@ function majMesureCogitation() {
     return;
   }
   const bouts = [duree];
-  if (jetonsTour) bouts.push(motDesJetons(jetonsTour));
+  // Ce que la conversation pese, et ce que Claude vient d'ecrire. Deux chiffres justes
+  // valent mieux qu'un seul qui melange les deux.
+  if (contexteTour) bouts.push(motDesJetons(contexteTour));
+  if (sortieTour) bouts.push(`+${motDesJetons(sortieTour).replace(" jetons", "")}`);
   // Le nombre d'allers-retours du modele : c'est lui qui explique un tour long sans texte a
   // l'ecran — Claude lit, appelle un outil, relit. Au-dela de un, il vaut d'etre dit.
   if (echangesTour > 1) bouts.push(`${echangesTour} échanges`);
@@ -3516,7 +3529,9 @@ function recevoir(e, etat = false) {
     if (e.genre === "travail") {
       // Un tour qui s'ouvre repart a zero : le compteur du tour precedent n'a plus cours, et
       // « reçu » doit redevenir faux, sinon le tour suivant naitrait deja confirme.
-      if (e.actif && debutTravail == null) { jetonsTour = 0; echangesTour = 0; recuParClaude = false; }
+      if (e.actif && debutTravail == null) {
+        contexteTour = 0; sortieTour = 0; echangesTour = 0; recuParClaude = false;
+      }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
       if (e.actif && !minuteur) minuteur = setInterval(majTravail, 1000);
@@ -3572,7 +3587,8 @@ function recevoir(e, etat = false) {
     // Les jetons du tour, mesures par le serveur. `recu` est le premier signe que l'API a
     // repondu : c'est LA reponse a « est-ce que mon message est arrive ? ».
     if (e.genre === "jetons") {
-      jetonsTour = Number(e.total) || 0;
+      contexteTour = Number(e.contexte) || 0;
+      sortieTour = Number(e.sortie) || 0;
       echangesTour = Number(e.echanges) || 0;
       if (e.recu) recuParClaude = true;
       majMesureCogitation();
@@ -4253,7 +4269,25 @@ const peutEnregistrerIci = !!(navigator.mediaDevices && navigator.mediaDevices.g
                         && typeof MediaRecorder !== "undefined";
 const VOCAL_MAX_MS = 90000;
 let enregistreur = null, fluxMicro = null, morceauxAudio = [], minuterieVocal = null;
-let vocalEnCours = false, vocalEnvoi = false;
+let vocalEnCours = false, vocalEnvoi = false, veilleLiaisonVocal = null;
+// L'enregistrement qui n'a pas pu partir. Il est GARDE : quelqu'un vient de parler trente
+// secondes, et jeter ça parce que le reseau a hoquete est la pire chose que cette page
+// puisse faire. Il repart tout seul au retour de la liaison.
+let vocalEnAttente = null;   // { blob, type, quand, secondes }
+let vocalInterrompu = "";    // la raison d'un arret subi, a dire avec l'echec qui suit
+
+// Peut-on envoyer, maintenant ? La question se pose AVANT d'ouvrir le micro et PENDANT qu'il
+// enregistre — pas seulement au moment d'envoyer, qui est trop tard : la parole est deja
+// dite, et le temps passe a la dire est perdu.
+function liaisonVivante() {
+  return !!(socket && socket.readyState === WebSocket.OPEN) && !liaisonPerdue;
+}
+
+// Un signal qu'on ne peut pas manquer : on est en train de parler, donc on ne regarde pas
+// forcement l'ecran. La vibration n'existe pas sur iOS, mais elle ne coute rien a demander.
+function alerterFort() {
+  try { navigator.vibrate?.([120, 80, 120]); } catch (_) {}
+}
 
 // Opus dans WebM la ou c'est possible (Chrome, Firefox), AAC dans MP4 sinon (Safari). Le PC
 // decode les deux ; ce qui compte est de demander un format que CET appareil sait produire,
@@ -4271,8 +4305,12 @@ function majBoutonDictee() {
   if (!b) return;
   b.setAttribute("aria-pressed", vocalEnCours ? "true" : "false");
   b.classList.toggle("envoi", vocalEnvoi);
+  // Un enregistrement garde n'est pas une erreur de l'utilisateur, mais il attend quelque
+  // chose de lui : le bouton le porte, pour qu'on ne l'oublie pas dans une note qui s'efface.
+  b.classList.toggle("garde", !!vocalEnAttente && !vocalEnCours && !vocalEnvoi);
   b.title = vocalEnCours ? "arrêter et envoyer l'enregistrement"
           : vocalEnvoi ? "transcription en cours sur le PC…"
+          : vocalEnAttente ? "un enregistrement attend la liaison — appuie pour réessayer"
           : "dicter avec le micro de cet appareil — appuie, parle, appuie";
 }
 
@@ -4333,9 +4371,36 @@ async function demarrerVocal() {
   noteBarre("j'écoute (" + (enregistreur.mimeType || mime || "format par défaut")
             + ") — appuie à nouveau pour envoyer");
   minuterieVocal = setTimeout(() => { if (vocalEnCours) arreterVocal(); }, VOCAL_MAX_MS);
+  // La surveillance, seconde apres seconde. C'est le coeur de la correction : la liaison peut
+  // tomber PENDANT qu'on parle, et jusqu'ici rien ne le disait — on parlait trente secondes,
+  // on appuyait, et on apprenait a ce moment-la que rien ne partirait. Une demi-seconde de
+  // detection valait mieux que trente secondes de parole perdue.
+  clearInterval(veilleLiaisonVocal);
+  veilleLiaisonVocal = setInterval(() => {
+    if (!vocalEnCours) return;
+    if (!liaisonVivante()) interrompreVocal("la liaison est tombée pendant que tu parlais");
+  }, 500);
+}
+
+// Couper court, en gardant ce qui a deja ete dit. « arreterVocal » est le geste normal — on a
+// fini de parler ; celle-ci est l'accident, et les deux ne se lisent pas pareil a l'ecran.
+function interrompreVocal(pourquoi) {
+  if (!vocalEnCours) return;
+  clearInterval(veilleLiaisonVocal);
+  veilleLiaisonVocal = null;
+  alerterFort();
+  // La raison est RETENUE plutot qu'affichee tout de suite : l'envoi qui suit va echouer —
+  // c'est bien pourquoi on interrompt — et son message ecraserait celui-ci. Or « arrête de
+  // parler » est la phrase qui compte : on est en train de parler quand elle arrive. Les
+  // deux sont donc dits ensemble, en une fois.
+  vocalInterrompu = pourquoi;
+  noteBarre(pourquoi + " — arrête de parler, ce que tu as dit est gardé.", true);
+  arreterVocal();            // onstop garde l'enregistrement et tentera l'envoi
 }
 
 function arreterVocal() {
+  clearInterval(veilleLiaisonVocal);
+  veilleLiaisonVocal = null;
   if (!enregistreur) { vocalEnCours = false; libererMicro(); majBoutonDictee(); return; }
   try { enregistreur.stop(); }          // onstop fait le reste
   catch (_) { libererMicro(); vocalEnCours = false; majBoutonDictee(); }
@@ -4368,19 +4433,57 @@ async function envoyerVocal(blob, type) {
     // PC, et c'est ce chemin-la qui remplit la barre et arme le decompte. Deux sources pour
     // un meme texte finiraient par l'ecrire deux fois. Mais on DIT que ça a marche, et par
     // qui : un vocal qui reussit sans un mot ressemble a un vocal perdu.
+    vocalEnAttente = null;
+    vocalInterrompu = "";
     noteBarre(`transcrit par ${d.moteur || "le PC"}`
               + (d.secondes ? ` — ${d.secondes} s de parole` : ""));
   } catch (e) {
-    noteBarre("vocal non transcrit — " + ((e && e.message) || e), true);
+    // On ne jette RIEN. Quelqu'un vient de parler : reperdre ça parce que le reseau a
+    // hoquete serait le pire service a lui rendre. L'enregistrement attend, et repart seul
+    // des que la liaison revient.
+    vocalEnAttente = { blob, type, quand: Date.now() };
+    alerterFort();
+    // Un seul message, qui dit la cause ET ce qu'il advient de la parole. Quand l'arret a ete
+    // subi, sa raison passe devant : elle explique pourquoi on s'est fait couper.
+    const cause = vocalInterrompu || ((e && e.message) || String(e));
+    vocalInterrompu = "";
+    noteBarre(cause + " — arrête de parler. Ce que tu as dit est GARDÉ : il repartira "
+              + "à la reconnexion, ou appuie sur le micro pour réessayer.", true);
   } finally {
     vocalEnvoi = false;
     majBoutonDictee();
   }
 }
 
+// Reessayer ce qui attend. Appele au retour de la liaison, et par un appui sur le micro —
+// parce qu'attendre sans pouvoir rien tenter est insupportable.
+async function renvoyerVocalEnAttente() {
+  if (!vocalEnAttente || vocalEnvoi) return;
+  if (!liaisonVivante()) {
+    noteBarre("toujours pas de liaison — l'enregistrement reste gardé", true);
+    return;
+  }
+  const { blob, type } = vocalEnAttente;
+  vocalEnAttente = null;
+  majBoutonDictee();
+  await envoyerVocal(blob, type);
+}
+
 function basculerDicteeIci() {
   if (vocalEnCours) { arreterVocal(); return; }
   if (vocalEnvoi) return;    // l'envoi precedent n'est pas fini : un second appui n'aiderait pas
+  // Un enregistrement garde attend son tour : le geste sert a le renvoyer, pas a en empiler
+  // un second par-dessus.
+  if (vocalEnAttente) { renvoyerVocalEnAttente(); return; }
+  // Le dire AVANT, pas apres. Ouvrir le micro alors que la liaison est deja tombee, c'est
+  // laisser quelqu'un parler une minute pour rien : c'est arrive, et c'est precisement ce
+  // qu'on refuse ici.
+  if (!liaisonVivante()) {
+    alerterFort();
+    noteBarre("liaison coupée — inutile de parler pour l'instant, ça ne partirait pas. "
+              + "Réessaie dès que la connexion revient.", true);
+    return;
+  }
   // Sans https, Safari refuse le micro — et il le refuse en silence, ce qui se lit comme
   // « la page est cassee ». On teste avant, et on le DIT.
   if (!globalThis.isSecureContext) {
@@ -4769,6 +4872,9 @@ function brancher() {
       // passe, son echo serait dans l'historique qu'on vient de rejouer, et l'aurait retire.
       // C'est le seul moment ou on peut le renvoyer sans risquer de le poster deux fois, et
       // sans lui, le message tape juste avant une mise en veille etait simplement perdu.
+      // Un vocal garde repart AVANT les messages ecrits : il a ete dit, donc il est plus
+      // ancien que tout ce qu'on a pu taper depuis, et son ordre dans la conversation compte.
+      if (vocalEnAttente) renvoyerVocalEnAttente();
       const perdus = renvoyerEnVol();
       if (perdus) noteBarre(`rebranché — ${perdus} message${perdus > 1 ? "s" : ""} renvoyé${perdus > 1 ? "s" : ""}`, true);
       // Ce qu'on vient de retrouver, dit une fois. Le silence d'apres-reconnexion laissait
