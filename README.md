@@ -476,6 +476,27 @@ téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il r
 écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
 cours comprise.
 
+**Le titre s'affiche en entier, quoi qu'il arrive.** C'est lui qu'on doit pouvoir lire :
+tronqué, « claude-talk · enr… » ne dit plus rien. Il ne rétrécit donc plus, et c'est l'état de
+la liaison qui cède la place — jusqu'à n'être plus que son point coloré, qui reste
+identifiable. Le plafond du titre lui interdit seulement de manger ces vingt-deux pixels.
+Mesuré à largeur de téléphone sur trois longueurs de sujet : titre entier dans les trois cas,
+même ligne, en-tête à 170 px.
+
+Les libellés de liaison sont raccourcis en conséquence — « reconnexion · 3 s » plutôt que
+« reconnexion dans 3 s… », « déconnecté · 12 s » plutôt que le numéro d'essai — parce que
+chaque caractère de la pastille est pris au titre. Le détail complet (cause, numéro d'essai,
+ce qui va se passer) vit dans la barre de saisie juste en dessous, vide à ce moment-là, et
+dans l'infobulle.
+
+Chaque situation de liaison porte aussi sa **classe** distincte : `e-reprise` pour une reprise
+en cours, `e-perdu` pour une liaison tombée ou un appareil sans réseau, au lieu du `e-listening`
+unique qu'elles partageaient toutes. *Réserve honnête :* les couleurs associées ne se
+confirment pas dans le banc de rendu — la même règle fonctionne en isolation, le sélecteur
+correspond bien à l'élément, le CSS est valide et sans bloc conditionnel englobant, mais la
+pastille reste de la couleur d'origine. La cause n'est pas identifiée ; seules les classes
+sont donc garanties, par les tests.
+
 **Le titre dit où l'on est, en une ligne.** Sur téléphone, il répond à deux questions d'un
 coup — *où* suis-je et *sur quoi* — et il s'écrit `claude-talk · bouton suivre`. Le projet
 seul ne distingue pas deux conversations ouvertes au même endroit ; le sujet seul ne dit pas

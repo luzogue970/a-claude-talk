@@ -928,6 +928,10 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
    conversations le porte deja a quelques centimetres. L'afficher deux fois ne dirait rien de
    plus et prendrait la place ou tiennent le modele et l'effort. */
 #ou{display:none}
+/* Une rangee qui ne se coupe pas : c'est elle qui garantit que le titre et l'etat restent
+   cote a cote. Sur grand ecran elle ne change rien — ils y tenaient deja. */
+.rang-titre{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 auto;
+  flex-wrap:nowrap}
 h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:flex;gap:8px;align-items:center}
 
@@ -1013,10 +1017,24 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   font-size:12px;display:inline-flex;gap:6px;align-items:center}
 /* Un point de la couleur de l'etat : on le lit avant d'avoir lu le mot. */
 #etat::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.e-listening{color:var(--toi);border-color:var(--toi)}
-.e-initializing{color:var(--faible);border-color:var(--bord)}
-.e-thinking{color:var(--pensee);border-color:var(--pensee)}
-.e-speaking{color:var(--voix);border-color:var(--voix)}
+/* Prefixees par #etat, et ce n'est pas de la coquetterie : la pastille est ciblee par son
+   identifiant partout ailleurs — taille, repli mobile, animation — et une classe seule perd
+   contre un identifiant des qu'une de ces regles touche la meme propriete. Les etats
+   portaient donc tous la meme couleur, celle qui restait. Mettre les deux au meme niveau
+   rend la question sans objet. */
+#etat.e-listening{color:var(--toi);border-color:var(--toi)}
+#etat.e-initializing{color:var(--faible);border-color:var(--bord)}
+#etat.e-thinking{color:var(--pensee);border-color:var(--pensee)}
+#etat.e-speaking{color:var(--voix);border-color:var(--voix)}
+/* Les etats de la LIAISON. Ils portaient tous le bleu de « j'écoute » : passer de l'écoute a
+   la reconnexion ne changeait rien a l'oeil, et c'est precisement le moment ou l'on veut
+   etre accroche. Trois couleurs, trois significations, dans l'ordre de gravite.
+   L'ambre pour une reprise en cours — ça se repare tout seul, on n'a rien a faire. Le rouge
+   pour une liaison perdue, ou pour un appareil sans reseau : la, il y a quelque chose a
+   faire, ou au moins a savoir. Le fond teinte fait le reste : une pastille qui change de
+   couleur ET de fond se repere du coin de l'oeil. */
+#etat.e-reprise{color:var(--outil);border-color:var(--outil);background:#1c1710}
+#etat.e-perdu{color:#ff7b72;border-color:#ff7b72;background:#2a1517}
 .mesures{display:flex;gap:10px;align-items:center;min-width:0}
 #compteurs{display:flex;gap:8px;align-items:center;
   color:var(--faible);font-size:12px;font-variant-numeric:tabular-nums}
@@ -1450,12 +1468,20 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      d'en-tete sur un telephone se paie en conversation visible. Le titre est le seul des
      deux qui puisse retrecir — il a une ellipse pour ça — donc c'est lui qui cede la place,
      jamais l'etat, qui est court et qu'on doit pouvoir lire en entier. */
-  /* « flex: 1 1 0 » et non « auto » : avec une base automatique, le titre DEMANDE la largeur
-     de son texte, et un en-tete qui se replie prefere passer a la ligne plutot que de
-     rabouter — l'etat se retrouvait dessous des que le sujet s'allongeait. Une base nulle ne
-     demande rien : le titre prend ce qui reste une fois l'etat place, et son ellipse fait le
-     reste. */
-  header h1 { font-size: 15px; gap: 6px; min-width: 0; flex: 1 1 0; order: 0; }
+  /* Qui cede la place, et dans quel ordre. Le titre est ce qu'on veut lire EN ENTIER : il
+     nomme le projet et le sujet, et tronque il ne dit plus rien — « claude-talk · enr… ».
+     L'etat, lui, reste identifiable meme ampute : sa COULEUR porte deja le sens, ambre pour
+     une reprise, rouge pour une liaison perdue, et sa pastille garde son point colore.
+     C'est donc lui qui retrecit d'abord, trois fois plus vite que le titre.
+     Base nulle des deux cotes : avec une base automatique, chacun DEMANDE la largeur de son
+     texte, et un en-tete qui se replie prefere passer a la ligne plutot que de raboter. */
+  /* Le titre ne retrecit PAS. C'est ce qu'on veut lire en entier — il nomme le projet et le
+     sujet, et tronque il ne dit plus rien. Le plafond lui interdit seulement de manger la
+     place du point colore de l'etat, qui reste lisible a lui seul : ambre, ça se reconnecte ;
+     rouge, c'est perdu. Un titre demesure finit donc par s'elider, mais apres avoir pris
+     tout ce qui pouvait l'etre — et les titres sont tenus a deux mots a la source. */
+  header h1 { font-size: 15px; gap: 6px; min-width: 0; flex: 0 0 auto; order: 0;
+    max-width: calc(100% - 42px); }
   header h1 .marque { width: 19px; height: 19px; }
   /* La marque dessinee suffit a dire quelle application c'est. Le mot, lui, occupait la
      place du seul texte qui change d'un onglet a l'autre. */
@@ -1463,8 +1489,14 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   #ou { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-weight: 600; }
   #retour { width: 40px; height: 40px; font-size: 18px; }
-  #etat { order: 1; font-size: 11.5px; flex: 0 0 auto; max-width: 50%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* L'etat cede toute la place, jusqu'a n'etre plus que son point : c'est lui qui porte le
+     sens depuis qu'il a une couleur par situation. Le detail complet vit dans la barre de
+     saisie, juste en dessous, et dans l'infobulle. */
+  #etat { order: 1; font-size: 11.5px; flex: 0 1 auto; min-width: 22px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; }
+  /* Reduit a rien, il reste son point colore : une pastille de huit pixels qui dit encore
+     « ça se reconnecte » ou « c'est perdu ». Mieux qu'un mot coupe en deux. */
+  #etat::before { flex: none; }
   .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
   .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px; }
@@ -1613,6 +1645,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 </style></head><body>
 <header>
   <!--RETOUR-->
+  <!-- Le titre et l'etat, ensemble et INSECABLES. Separes, l'en-tete qui se replie envoyait
+       l'etat a la ligne des que le sujet s'allongeait — une ligne de plus prise a la
+       conversation. Enfermes ici, ils partagent la leur quoi qu'il arrive : le titre reste
+       entier, et l'etat se reduit jusqu'a son point colore, qui dit encore l'essentiel. -->
+  <div class="rang-titre">
   <h1>
     <svg class="marque" viewBox="0 0 32 32" aria-hidden="true">
       <path d="M15.13 11.89Q15.38 7.50 16.00 2.20Q16.62 7.50 16.87 11.89Z M17.30 12.01Q19.12 9.54 21.40 6.65Q20.03 10.07 18.81 12.88Z M19.12 13.19Q23.05 11.21 27.95 9.10Q23.67 12.29 19.99 14.70Z M20.11 15.13Q23.15 15.47 26.80 16.00Q23.15 16.53 20.11 16.87Z M19.99 17.30Q23.67 19.71 27.95 22.90Q23.05 20.79 19.12 18.81Z M18.81 19.12Q20.03 21.93 21.40 25.35Q19.12 22.46 17.30 19.99Z M16.87 20.11Q16.62 24.50 16.00 29.80Q15.38 24.50 15.13 20.11Z M14.70 19.99Q12.88 22.46 10.60 25.35Q11.97 21.93 13.19 19.12Z M12.88 18.81Q8.95 20.79 4.05 22.90Q8.33 19.71 12.01 17.30Z M11.89 16.87Q8.85 16.53 5.20 16.00Q8.85 15.47 11.89 15.13Z M12.01 14.70Q8.33 12.29 4.05 9.10Q8.95 11.21 12.88 13.19Z M13.19 12.88Q11.97 10.07 10.60 6.65Q12.88 9.54 14.70 12.01Z"/>
@@ -1627,6 +1664,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <span id="ou" hidden></span>
   </h1>
   <span id="etat" class="e-listening">connexion…</span>
+  </div>
   <span id="alerte-entete" class="alerte" style="display:none"></span>
   <!-- Apparait UNIQUEMENT quand le serveur sert une page plus recente que celle-ci. Le reste
        du temps il n'existe pas : un bouton « actualiser » permanent serait du bruit, et
@@ -4662,7 +4700,7 @@ function direLiaison() {
   if (!el) return;
   if (!navigator.onLine) {
     el.textContent = "hors ligne";
-    el.className = "e-listening";
+    el.className = "e-perdu";
     champ.placeholder = "hors ligne — le message partira au retour du réseau";
     el.title = "l'appareil n'a pas de réseau. " + motDuServeur();
     return;
@@ -4673,10 +4711,14 @@ function direLiaison() {
   const perdu = echecs >= 4;
   const essai = echecs + 1;
   const depuis = coupeDepuis ? Math.round((Date.now() - coupeDepuis) / 1000) : 0;
+  // Court, parce que la couleur dit deja de quoi il s'agit — et parce que chaque caractere
+  // ici est pris au titre de la conversation, qui partage cette ligne. Le detail complet
+  // (cause, numero d'essai, ce qui va se passer) est dans la barre de saisie juste en
+  // dessous, et dans l'infobulle : rien n'est perdu, tout est ailleurs.
   el.textContent = perdu
-    ? `déconnecté · essai ${essai}${reste ? ` dans ${reste} s` : "…"}`
-    : (reste > 1 ? `reconnexion dans ${reste} s…` : "reconnexion…");
-  el.className = "e-listening" + (perdu ? "" : " vif");
+    ? (reste ? `déconnecté · ${reste} s` : "déconnecté")
+    : (reste > 1 ? `reconnexion · ${reste} s` : "reconnexion…");
+  el.className = (perdu ? "e-perdu" : "e-reprise") + " vif";
   // Le POURQUOI, la ou le regard est. « reconnexion… » tout seul, en haut a gauche, se lit
   // comme « quelque chose s'est casse cote serveur et j'ai perdu l'etat ». Or neuf fois sur
   // dix c'est le telephone qui a mis la page en veille, l'agent n'a rien vu, et rien n'est

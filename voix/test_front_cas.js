@@ -1416,8 +1416,16 @@ echecs = 5; fermerSock(1006);
 const attente2 = prochaineTentative - Date.now();
 dire(attente2 > attente1, 'les tentatives s espacent (' + Math.round(attente1) + ' ms puis '
      + Math.round(attente2) + ' ms)');
-dire(/déconnecté/.test(etatEl.textContent) && /essai/.test(etatEl.textContent),
-     'apres plusieurs echecs on dit deconnecte AVEC le numero d essai : ' + etatEl.textContent);
+// La pastille reste COURTE : elle partage sa ligne avec le titre de la conversation, et
+// chaque caractere qu elle prend est pris a lui. Elle dit l essentiel — deconnecte, et dans
+// combien de temps — et sa couleur fait le reste. Le numero d essai, la cause et ce qui va
+// se passer vivent dans la barre de saisie juste en dessous, qui est vide a ce moment-la.
+dire(/déconnecté/.test(etatEl.textContent) && etatEl.textContent.length < 22,
+     'apres plusieurs echecs, une pastille courte qui dit deconnecte : ' + etatEl.textContent);
+dire(etatEl.className.includes('e-perdu'),
+     'et sa couleur change — le rouge de la liaison perdue, pas le bleu de l ecoute');
+dire(/essai \d+/.test(champ.placeholder),
+     'le numero d essai est dans la barre, qui a la place de l expliquer : ' + champ.placeholder);
 
 // 8. Hors ligne : ce n est pas la meme chose qu une panne du serveur, et ca se dit autrement.
 navigator.onLine = false;
@@ -1549,6 +1557,8 @@ fermerSock(1006);
 dire(!diagLa(), 'une coupure ordinaire n affiche AUCUNE boite');
 dire(/reconnexion/.test(document.getElementById('etat').textContent),
      'l etat dit calmement ce qui se passe : ' + document.getElementById('etat').textContent);
+dire(document.getElementById('etat').className.includes('e-reprise'),
+     'en ambre : une reprise en cours se repare seule, ce n est pas une panne');
 
 // Quelques echecs d affilee, mais recents : toujours rien. On ne crie pas au bout de 3 s.
 echecs = 5;
