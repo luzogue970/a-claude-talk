@@ -425,6 +425,21 @@ L'enquête a aussi levé un défaut sans rapport : la **dictée retenue** était
 revenait remplir la barre à la reconnexion. C'est un *état* : seule la dernière compte, et
 elle est vide une fois consommée.
 
+**« Suivre » se décide sur la distance au bas, pas sur le geste.** Le bouton qui ramène en
+bas de la conversation ne se recalculait qu'à l'événement `scroll`. C'était le prendre par le
+mauvais bout : ce qui le rend nécessaire n'est pas qu'on ait fait défiler, c'est qu'on soit
+**loin du bas** — et on peut s'en éloigner sans bouger le petit doigt, simplement parce que la
+page grandit sous soi. C'est exactement ce qui se passe en ouvrant une longue conversation :
+l'historique arrive par paquets de deux cents lignes, le document gagne des milliers de
+pixels, aucun `scroll` n'est émis, et le bouton reste caché alors qu'on est à des écrans du
+bas. Même chose au retour sur l'onglet, ou après une rotation de téléphone.
+
+La distance est donc mesurée chaque fois qu'elle peut avoir changé : défilement,
+redimensionnement, retour sur l'onglet, chargement, et surtout un `ResizeObserver` sur le
+flux — le seul qui voie la page grandir. Les rafales sont groupées par image, sinon le rejeu
+déclencherait deux cents mesures de mise en page pour un seul résultat. Vérifié dans un vrai
+navigateur : cent vingt messages rejoués, remonté en haut, le bouton est là.
+
 **Écouter n'importe quelle réponse, sans exception.** Le bouton n'apparaissait que sur
 certaines : il était posé sur les lignes rejouées, et on comptait sur « relire » — qui arrive
 avec `parole_fin` — pour les lignes en direct. Or `parole_fin` ne suit que les **débriefs**,

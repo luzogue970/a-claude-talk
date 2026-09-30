@@ -4819,17 +4819,68 @@ if (__entete && typeof addEventListener === "function") {
 
 brancher();
 
-addEventListener("scroll", () => {
-  suivre = window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
+// --- « suivre » : le bouton qui ramene en bas ---------------------------------------------
+//
+// Il ne se decidait QU'AU defilement. C'etait le prendre par le mauvais bout : ce qui rend ce
+// bouton necessaire n'est pas qu'on ait fait defiler, c'est qu'on soit LOIN DU BAS — et on
+// peut s'en eloigner sans bouger le petit doigt, simplement parce que la page grandit sous
+// soi. C'est exactement ce qui se passe en ouvrant une longue conversation : l'historique
+// arrive par paquets de deux cents lignes, le document gagne des milliers de pixels, aucun
+// evenement « scroll » n'est emis, et le bouton reste cache alors qu'on est a des ecrans du
+// bas. Meme chose au retour sur l'onglet, ou apres une rotation de telephone.
+//
+// La distance est donc mesuree a chaque fois qu'elle peut avoir change, et le defilement
+// n'est plus qu'une cause parmi d'autres.
+function majSuivre() {
   const bouton = document.getElementById("bas");
-  bouton.style.display = suivre ? "none" : "block";
+  if (!bouton) return;
+  const hauteur = (typeof window !== "undefined" && window.innerHeight) || 0;
+  const position = (typeof window !== "undefined" && window.scrollY) || 0;
+  const total = (document.body && document.body.scrollHeight) || 0;
+  // 60 px de tolerance : a un demi-pouce du bas, on est en bas. Sans cette marge, un pixel
+  // de sous-pixel ou une barre d'adresse qui se retracte suffirait a faire clignoter le
+  // bouton. Et un document plus court que la fenetre est toujours « en bas ».
+  const loin = total > hauteur && hauteur + position < total - 60;
+  suivre = !loin;
+  bouton.style.display = loin ? "block" : "none";
   // Mesure APRES l'affichage : un element en display:none a une hauteur nulle, et la
   // pile serait remontee de zero — c'est-a-dire pas du tout.
   document.documentElement.style.setProperty("--bouton-bas",
-    suivre ? "0px" : (bouton.offsetHeight + 8) + "px");
+    loin ? ((bouton.offsetHeight || 0) + 8) + "px" : "0px");
+}
+
+// Groupe les rafales : le rejeu ajoute deux cents lignes d'affilee, et recalculer a chaque
+// ligne ferait deux cents mesures de mise en page pour un seul resultat.
+let __suivrePrevu = false;
+function demanderMajSuivre() {
+  if (__suivrePrevu) return;
+  __suivrePrevu = true;
+  const apres = () => { __suivrePrevu = false; majSuivre(); };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(apres);
+  else setTimeout(apres, 16);
+}
+
+addEventListener("scroll", majSuivre, { passive: true });
+addEventListener("resize", demanderMajSuivre);
+// Le retour sur l'onglet : un telephone reveille restaure sa position sans emettre de
+// defilement, et la conversation a pu grandir pendant l'absence.
+addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") demanderMajSuivre();
 });
+// Le flux qui grandit — rejeu, nouvelle reponse, arguments deplies, image chargee. C'est LE
+// cas que le defilement ne pouvait pas voir. Observer le flux et non le corps evite la
+// boucle : la hauteur du bouton ne nourrit que la pile de notes, qui est hors du flux.
+if (typeof ResizeObserver === "function" && flux) {
+  new ResizeObserver(demanderMajSuivre).observe(flux);
+}
+// Et au chargement, une fois la mise en page faite : sans ça, une conversation rouverte en
+// haut n'a son bouton qu'au premier geste — c'est-a-dire trop tard pour servir.
+demanderMajSuivre();
+
 document.getElementById("bas").onclick = () => {
-  suivre = true; window.scrollTo(0, document.body.scrollHeight);
+  suivre = true;
+  window.scrollTo(0, document.body.scrollHeight);
+  demanderMajSuivre();
 };
 </script></body></html>
 """

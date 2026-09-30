@@ -1611,6 +1611,51 @@ dire(/envoyé/.test(mesure.textContent) && mesure.className === 'attente',
 emettre({ genre: 'travail', actif: false });
 toutClore('fin du cas');
 
+// ---- « suivre » : on peut s eloigner du bas sans bouger le petit doigt ---------------------
+titre('bouton « suivre » : la distance au bas, pas le geste');
+const btnSuivre = document.getElementById('bas');
+
+// Un document qui tient dans la fenetre : il n y a pas de bas a rejoindre.
+document.body.scrollHeight = 500; window.scrollY = 0; window.innerHeight = 800;
+majSuivre();
+dire(btnSuivre.style.display === 'none', 'page courte : aucun bouton, il n y a nulle part ou aller');
+
+// Une longue conversation s ouvre. L historique arrive par paquets, le document gagne des
+// milliers de pixels — et AUCUN evenement « scroll » n est emis, puisque personne n a touche
+// l ecran. C est precisement le cas ou le bouton manquait.
+document.body.scrollHeight = 12000;
+majSuivre();
+dire(btnSuivre.style.display === 'block',
+     'la page grandit sous nos pieds : le bouton apparait sans qu on ait fait defiler');
+dire(suivre === false, 'et le suivi automatique se coupe : on n est plus en bas');
+
+// On le touche : retour en bas, bouton range.
+window.scrollTo(0, 12000 - 800);
+majSuivre();
+dire(btnSuivre.style.display === 'none' && suivre === true,
+     'revenu en bas, le bouton disparait et le suivi reprend');
+
+// La tolerance : a quelques pixels du bas, on EST en bas. Sans elle, une barre d adresse qui
+// se retracte suffirait a faire clignoter le bouton.
+window.scrollTo(0, 12000 - 800 - 30);
+majSuivre();
+dire(btnSuivre.style.display === 'none', 'a trente pixels du bas, on est encore en bas');
+window.scrollTo(0, 12000 - 800 - 300);
+majSuivre();
+dire(btnSuivre.style.display === 'block', 'a trois cents, non');
+
+// La hauteur du bouton est mesuree UNE FOIS VISIBLE, et rendue a la pile de notes : un
+// element cache mesure zero, et la pile serait remontee de rien.
+dire(document.documentElement.style.getPropertyValue('--bouton-bas') !== '0px',
+     'affiche, il reserve sa place au-dessus de la barre');
+window.scrollTo(0, 12000 - 800);
+majSuivre();
+dire(document.documentElement.style.getPropertyValue('--bouton-bas') === '0px',
+     'range, il la rend');
+
+// Remise en etat pour les blocs suivants.
+document.body.scrollHeight = 0; window.scrollTo(0, 0); majSuivre();
+
 // ---- une commande qui ne part pas doit le dire -------------------------------------------
 titre('liaison morte : un appui ne doit pas disparaitre en silence');
 const sockAvant = socket;

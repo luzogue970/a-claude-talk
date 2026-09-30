@@ -179,12 +179,27 @@ globalThis.document = {
   // Un vrai element : la boite de diagnostic s y accroche, et le test doit pouvoir
   // constater qu elle n y est PAS la plupart du temps — c est tout l enjeu.
   body: elem("<body>"),
+  // La racine porte les variables CSS que le code pose — la hauteur du bouton « suivre »,
+  // notamment. Sans elle, tout appel a setProperty levait.
+  documentElement: Object.assign(elem("<html>"), {
+    style: { proprietes: {}, setProperty(n, v) { this.proprietes[n] = v; },
+             getPropertyValue(n) { return this.proprietes[n] ?? ""; } },
+  }),
 };
 // Ce qu on cree et qu on accroche au corps devient trouvable par son id, et redevient
 // introuvable quand on le retire. Sans ça, un element cree dynamiquement etait invisible au
 // test : on ne pouvait affirmer ni sa presence ni son absence.
 (() => {
   const corps = globalThis.document.body;
+  // Le corps de page n est pas un champ de texte : sa hauteur ne se deduit pas d une valeur
+  // saisie. Le getter simule des elements la calculait a 36 px, et rien ne pouvait etre
+  // affirme sur la distance au bas — c est justement ce que « suivre » mesure.
+  let hauteurCorps = 0;
+  Object.defineProperty(corps, "scrollHeight", {
+    get: () => hauteurCorps,
+    set: (v) => { hauteurCorps = Number(v) || 0; },
+    configurable: true,
+  });
   const posee = corps.appendChild.bind(corps);
   corps.appendChild = (n) => {
     if (n && n.id) { __ids.add(n.id); __cache[n.id] = n; }
@@ -195,7 +210,14 @@ globalThis.document = {
   };
   corps.prepend = corps.appendChild;
 })();
-globalThis.window = { innerHeight: 800, scrollY: 0, scrollTo() {} };
+// Une fenetre qu on peut DEPLACER : le bouton « suivre » se decide sur la distance au bas
+// du document, et un test qui ne peut pas changer cette distance ne verifie rien.
+globalThis.window = {
+  innerHeight: 800, scrollY: 0,
+  scrollTo(x, y) { globalThis.window.scrollY = y || 0; },
+};
+globalThis.innerHeight = 800;
+globalThis.scrollY = 0;
 // La page utilise requestAnimationFrame pour ne declencher une transition CSS qu'apres que
 // l'element est dans le flux. Le talon l'execute TOUT DE SUITE : ce qui est asynchrone dans
 // un navigateur doit rester observable dans un test, sinon on ne verifie que le premier
