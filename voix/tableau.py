@@ -1514,6 +1514,17 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      ete. Sans ce retrait, la rangee de boutons passait a deux lignes — et une barre de
      saisie qui occupe trois lignes sur un telephone ne laisse plus voir la conversation. */
   #composer.dictee-locale #micro-bas { display: none; }
+  /* Mesure a 390 px : 384 px de contrôles pour 366 disponibles — et 432 dès qu'une lecture
+     joue. Deux rangées de boutons sous le champ, sur un écran où la conversation se joue
+     déjà les vingt pour cent d'écran qui restent.
+     Ce qu'on retire est ce qui ne sert pas ICI, et seulement ça :
+     — « couper la lecture » pilote les haut-parleurs du PC, dans une autre pièce. Le
+       haut-parleur de cette barre coupe déjà ce qui joue sur CET appareil.
+     — le délai règle au bout de combien de silence la dictée du PC part toute seule. En
+       dictant depuis le téléphone, c'est le doigt qui décide : ce réglage ne s'applique à
+       rien. Il reste sur grand écran, où il a tout son sens. */
+  #composer.dictee-locale #couper-lecture,
+  #composer.dictee-locale #delai { display: none; }
   #saisie-barre form { gap: 8px; }
   #depart { gap: 5px; }
   #saisie {
@@ -2333,9 +2344,13 @@ function ajouter(e) {
   // Code garde d'un tour passe.
   if ((e.genre === "voix" || e.genre === "texte") && dernier) {
     dernier.texteBrut = (dernier.texteBrut || "") + (e.texte || "");
-    // Sur une ligne « voix » en direct, « relire » arrive avec parole_fin et fait deja le
-    // travail ; on n'ajoute « écouter » que la ou rien ne viendra.
-    if (e.genre === "texte" || e.passe || enRejeu) outillerEcoute(dernier, e);
+    // TOUTE reponse de Claude doit pouvoir etre ecoutee. La version precedente ne posait le
+    // bouton que sur les lignes rejouees, en comptant sur « relire » — qui arrive avec
+    // parole_fin — pour les lignes en direct. Or parole_fin ne suit que les DEBRIEFS, ceux
+    // qui portent un identifiant : les phrases courtes que l'agent dit lui-meme (« d'accord,
+    // j'y vais ») n'en ont pas, donc n'avaient aucun bouton. D'ou « il apparait sur le
+    // premier message et pas sur le second », selon lequel des deux etait une interjection.
+    if (lireDeCeCote()) outillerEcoute(dernier, e);
   }
   if (e.genre === "tour" && !e.passe) ligneTour = dernier;
   if (e.genre === "effort" && e.cle) selEffort.value = e.cle;
@@ -3924,6 +3939,10 @@ function outillerEcoute(ligne, e) {
 }
 
 function outillerParole(e) {
+  // Sur un appareil distant, la ligne porte deja « écouter », qui lit ICI. Y ajouter
+  // « couper » et « relire », qui pilotent les haut-parleurs du PC, ferait trois boutons
+  // dont deux inutiles — et sur un telephone, trois boutons de treize pixels cote a cote.
+  if (lireDeCeCote()) return;
   const ligne = lignesVoix.get(e.id);
   if (!ligne || ligne.dejaOutille) return;
   ligne.dejaOutille = true;
@@ -4390,7 +4409,9 @@ function majBoutonsLecture() {
   // Le bouton de la barre suit le MEME etat que ceux du flux : une seule source, donc pas
   // moyen qu'ils se contredisent.
   const bc = document.getElementById("couper-lecture");
-  if (bc) bc.hidden = !lectureEnCours;
+  // Il coupe la lecture du PC : inutile sur un appareil distant, ou le haut-parleur de la
+  // barre coupe deja ce qui joue ici.
+  if (bc) bc.hidden = !lectureEnCours || lireDeCeCote();
   for (const [id, ligne] of lignesVoix) {
     const z = ligne.zoneLecture;
     if (!z) continue;

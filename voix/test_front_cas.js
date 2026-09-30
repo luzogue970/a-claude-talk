@@ -557,6 +557,10 @@ dire(!/prendre-micro/.test(zonePupitre.innerHTML),
 
 // ---- couper et relire UNE reponse -------------------------------------------------------
 titre('boutons de lecture, accroches a leur reponse');
+// DEVANT la machine : ces deux boutons pilotent ses haut-parleurs, et c est la qu ils ont un
+// sens. Sur un appareil distant, la ligne porte « écouter » a la place — verifie plus bas.
+const hoteReel = location.hostname;
+location.hostname = '127.0.0.1';
 flux.children.length = 0; dernier = null; lignesVoix.clear(); lectureEnCours = null;
 ajouter({ n: 800, genre: 'voix', id: 'p1', texte: 'premiere reponse', h: '12:00:00' });
 dire(lignesVoix.has('p1'), 'la ligne de la reponse est retenue par son identifiant');
@@ -582,9 +586,24 @@ dire(!zl.children[1].classList.contains('vif'), 'et « relire » redevient discr
 envoyes.length = 0;
 zl.children[0].onclick();
 dire(envoyes.some(o => o.cmd === 'couper_lecture'), 'couper envoie la bonne commande');
-// « relire » depuis un appareil distant lit ICI : verifie plus bas, en asynchrone, parce
-// que la lecture passe d abord par Azure — donc par le reseau.
-globalThis.__zoneRelire = zl;
+location.hostname = hoteReel;      // de retour sur le telephone
+
+// Depuis un appareil distant, la MEME reponse porte « écouter », et pas les deux boutons du
+// PC : trois boutons de treize pixels cote a cote, dont deux qui commandent une autre piece.
+flux.children.length = 0; dernier = null; lignesVoix.clear();
+ajouter({ n: 810, genre: 'voix', id: 'p2', texte: 'reponse vue du telephone', h: '12:00:01' });
+const ligneTel = lignesVoix.get('p2');
+dire(!!ligneTel.zoneEcoute, 'sur un telephone, la reponse porte « écouter » des son arrivee');
+outillerParole({ id: 'p2', mots: 12 });
+dire(!ligneTel.zoneLecture, 'et pas « couper »/« relire », qui pilotent le PC');
+
+// LE bug : une phrase courte que l agent dit lui-meme n a pas d identifiant, donc pas de
+// parole_fin derriere elle. Elle n avait aucun bouton — d ou « il apparait sur le premier
+// message et pas sur le second », selon lequel des deux etait une interjection.
+ajouter({ n: 811, genre: 'voix', texte: "d'accord, j'y vais.", h: '12:00:02' });
+dire(!!dernier.zoneEcoute,
+     'une phrase sans identifiant porte « écouter » elle aussi — c etait le bug');
+globalThis.__zoneRelire = ligneTel.zoneEcoute;
 
 // Assis DEVANT la machine, l inverse : elle parle deja, la doubler serait absurde.
 const hoteVrai = location.hostname;
@@ -1160,6 +1179,7 @@ dire(histo.length >= 3 && histo[0] === 'troisieme message',
      'et se recharge tel quel : ' + histo.length + ' messages retrouves');
 
 // ---- un message envoye pendant une lecture ne disparait pas ------------------------------
+// (suite du bloc precedent : toujours devant la machine)
 titre('ce qui attend la fin de la lecture');
 // Le defaut : le message PART bien, mais LiveKit le met en file derriere la parole en cours.
 // La barre se vidait aussitot et aucune ligne n apparaissait avant plusieurs secondes : le
@@ -1172,6 +1192,10 @@ enAttenteLecture = []; majEnAttente();
 emettre({ genre: 'lecture', actif: false });
 const zoneAttente = document.getElementById('en-attente');
 const btnCouper = document.getElementById('couper-lecture');
+// Ce bouton coupe la lecture DU PC : il n existe que devant la machine. Sur un telephone, le
+// haut-parleur de la barre coupe deja ce qui joue ici, et un bouton de plus ne rentre pas.
+const hoteAvantLecture = location.hostname;
+location.hostname = '127.0.0.1';
 
 dire(zoneAttente.hidden, 'au repos, rien n attend');
 dire(btnCouper.hidden, 'et le bouton de coupure est cache : il ne servirait a rien');
@@ -1210,6 +1234,8 @@ dire(envoyes.some(o => o.cmd === 'couper_lecture'),
      'le bouton de la barre coupe bien la lecture');
 emettre({ genre: 'lecture', actif: false });
 dire(btnCouper.hidden, 'la lecture finie, le bouton se retire');
+
+location.hostname = hoteAvantLecture;   // fin du bloc « devant la machine »
 
 // ---- rejeu de l etat a la connexion --------------------------------------------------------
 titre('rejeu de l etat : les listes se remplissent quel que soit l ordre des numeros');
@@ -1664,9 +1690,9 @@ async function testerLecture() {
   // « relire » d une ligne, depuis un appareil distant : du son ICI, pas au PC.
   joues.length = 0; envoyes.length = 0;
   couperLectureLocale();
-  __zoneRelire.children[1].onclick();
+  __zoneRelire.children[0].onclick();
   await tick(); await tick(); await tick();
-  dire(jouesAzure().length === 1, 'depuis un telephone, « relire » lit sur CET appareil');
+  dire(jouesAzure().length === 1, 'depuis un telephone, « écouter » lit sur CET appareil');
   dire(!envoyes.some(o => o.cmd === 'relire'), 'et ne reveille pas les haut-parleurs du PC');
   couperLectureLocale();
 
@@ -1686,7 +1712,8 @@ async function testerLecture() {
   dire(ligneCourte.texteBrut.trim() === 'Compris, je regarde.'
        && /raccourci en http/.test(ligneLongue.texteBrut),
        'et chacune garde son texte : ' + JSON.stringify([ligneCourte.texteBrut.trim(), ligneLongue.texteBrut.trim()]));
-  dire(!!ligneCourte.zoneLecture && !!ligneLongue.zoneLecture, 'les deux ont leurs boutons');
+  dire(!!ligneCourte.zoneEcoute && !!ligneLongue.zoneEcoute,
+       'les deux portent leur bouton « écouter »');
   dire(/raccourci en http/.test(derniereReponse()) && !/Compris/.test(derniereReponse()),
        'et « la derniere reponse » est bien la seconde, seule : ' + JSON.stringify(derniereReponse()));
   // Une interjection sans identifiant ne vient pas se coller au dernier debrief.
@@ -1695,7 +1722,7 @@ async function testerLecture() {
   dire(!/j'y vais/.test(derniereReponse()), 'et ne s ajoute pas a la derniere reponse');
   // Relire la seconde, depuis sa ligne, ne lit QUE la seconde.
   joues.length = 0; requetes.length = 0; couperLectureLocale();
-  ligneLongue.zoneLecture.children[1].onclick();
+  ligneLongue.zoneEcoute.children[0].onclick();
   await tick(); await tick(); await tick();
   const demande = versParler()[0] && JSON.parse(versParler()[0].opts.body);
   dire(demande && /raccourci en http/.test(demande.texte) && !/Compris/.test(demande.texte),
@@ -1898,6 +1925,9 @@ dire(bandeau.hidden, 'et le bandeau de cogitation est refermé');
 
 // 2b. Perdre la liaison pendant une lecture laissait « couper la lecture » visible et
 //     clignotant pour toujours — un bouton qui ne couperait rien si on le pressait.
+//     Devant la machine, seul endroit ou ce bouton existe.
+const hoteAvantCoupe = location.hostname;
+location.hostname = '127.0.0.1';
 emettre({ genre: 'lecture', actif: true, id: 'p7' });
 const btnCoupe = document.getElementById('couper-lecture');
 dire(!btnCoupe.hidden, 'une lecture en cours montre le bouton qui la coupe');
@@ -1905,6 +1935,7 @@ socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 1, travail:
                                           etat: 'listening', pret: true }) });
 dire(btnCoupe.hidden && lectureEnCours === null,
      'et il disparait quand la reprise dit que plus personne ne parle');
+location.hostname = hoteAvantCoupe;
 
 // 3. L inverse doit rester vrai : si le serveur travaille VRAIMENT, on n eteint rien.
 recevoir({ genre: '_histoire', evenements: [

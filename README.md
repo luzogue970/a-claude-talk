@@ -425,6 +425,27 @@ L'enquête a aussi levé un défaut sans rapport : la **dictée retenue** était
 revenait remplir la barre à la reconnexion. C'est un *état* : seule la dernière compte, et
 elle est vide une fois consommée.
 
+**Écouter n'importe quelle réponse, sans exception.** Le bouton n'apparaissait que sur
+certaines : il était posé sur les lignes rejouées, et on comptait sur « relire » — qui arrive
+avec `parole_fin` — pour les lignes en direct. Or `parole_fin` ne suit que les **débriefs**,
+ceux qui portent un identifiant : les phrases courtes que l'agent dit lui-même (« d'accord,
+j'y vais ») n'en ont pas, donc n'avaient aucun bouton. D'où « il apparaît sur le premier
+message et pas sur le second », selon lequel des deux était une interjection. Toute ligne
+produite par Claude porte maintenant « écouter ». En contrepartie, « couper » et « relire »
+— qui pilotent les haut-parleurs du PC — ne s'affichent plus **que sur la machine** : sur un
+téléphone, c'étaient trois boutons de treize pixels côte à côte dont deux commandaient une
+autre pièce.
+
+**La barre du bas, sur téléphone : ce qui sert, et rien d'autre.** Mesure à 390 px : 384 px
+de contrôles pour 366 disponibles, et 432 dès qu'une lecture jouait — deux rangées de boutons
+sous le champ, sur un écran où la conversation se joue déjà les vingt pour cent qui restent.
+Deux retraits, et seulement ceux-là : « couper la lecture », qui pilote les haut-parleurs du
+PC alors que le haut-parleur de la barre coupe déjà ce qui joue ici ; et le **délai**, qui
+règle au bout de combien de silence la dictée du PC part toute seule — en dictant depuis le
+téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il reste sur grand
+écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
+cours comprise.
+
 **« Est-ce que mon message est parti ? »** Entre l'envoi et la première pensée affichée, il
 peut s'écouler plusieurs secondes de silence complet — et rien n'y distinguait « ça monte »
 de « c'est perdu ». Le bandeau au-dessus de la barre répond maintenant, et il le fait avec
