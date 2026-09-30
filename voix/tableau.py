@@ -1343,6 +1343,13 @@ body{overflow-x:hidden}
 .g-outil .args pre{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .g-resultat .badge{color:#7d8590} .g-resultat .corps{color:var(--faible);font-size:13px}
 .g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#9fe6ec;font-size:13px}
+/* La bascule d'effort. Discrete par construction : elle n'arrive que quand elle change
+   quelque chose, et le reste du temps cette ligne n'existe pas. */
+.g-effort .corps{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.bascule{font-weight:600;color:var(--outil);white-space:nowrap}
+.bascule i{font-style:normal;opacity:.6;margin:0 2px}
+.motif{color:var(--faible);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
 .g-permission .badge{color:var(--permission)} .g-permission .corps{color:#ffc9c4}
 /* Une question attend quelqu'un : elle emprunte la couleur des permissions, qui est deja
    celle de « rien n'avance tant que tu n'as pas repondu ». */
@@ -2127,6 +2134,16 @@ function corps(e) {
       return `<span class="quoi" title="${ech(quoi)}"><code>${ech(e.nom)}</code> `
         + `${ech(e.cible || "")}</span>${args}`;
     }
+    case "effort": {
+      // Une bascule automatique se lit d'un coup : d'ou l'on vient, ou l'on va, et pourquoi.
+      // La raison compte autant que le niveau — « élevé » seul laisse croire a un caprice,
+      // « élevé, il faut chercher avant de savoir » se comprend et se conteste.
+      if (e.auto && e.de && e.vers) {
+        return `<span class="bascule">${ech(e.de)} <i>→</i> ${ech(e.vers)}</span>`
+             + (e.pourquoi ? ` <span class="motif">${ech(e.pourquoi)}</span>` : "");
+      }
+      return ech(e.libelle || e.niveau || e.cle || "");
+    }
     case "permission":
       return `${ech(e.texte)}${e.decision ? ` — <b>${ech(e.decision)}</b>` : ""}`;
     case "question": {
@@ -2436,7 +2453,11 @@ function ajouter(e) {
     if (lireDeCeCote()) outillerEcoute(dernier, e);
   }
   if (e.genre === "tour" && !e.passe) ligneTour = dernier;
-  if (e.genre === "effort" && e.cle) selEffort.value = e.cle;
+  if (e.genre === "effort" && e.cle) {
+    selEffort.value = e.cle;
+    effortTour = e.vers || e.libelle || e.cle;
+    majMesureCogitation();
+  }
   if (e.genre === "outil" && !e.passe) actions++;
   if (e.genre === "tour" && e.jetons) jetons += e.jetons;
   majCompteurs();
@@ -2740,6 +2761,9 @@ let rouleau = null, battementMesure = null;
 // puisque le modele relit la meme chose. La SORTIE, elle, s'accumule : chaque echange produit
 // du texte nouveau. Les confondre affichait 294 k sur une conversation qui en pesait 98.
 let contexteTour = 0, sortieTour = 0, echangesTour = 0, recuParClaude = false;
+// Le niveau d'effort du tour en cours, tel que la page l'a vu passer. Tenu a part du
+// selecteur : celui-ci dit ce qui est REGLE, celui-la ce qui tourne.
+let effortTour = "";
 
 // Un millier est le seuil de lecture : au-dela, les unites ne disent plus rien et « 58,2 k »
 // se compare d'un coup d'oeil a « 26,0 k », ce que « 58241 » et « 26003 » ne font pas.
@@ -2763,7 +2787,9 @@ function majMesureCogitation() {
     el.className = "attente";
     return;
   }
-  const bouts = [duree];
+  // Le niveau en tete : c'est lui qui explique un tour long, et c'est ce qu'on regarde
+  // quand on se demande pourquoi celui-ci prend plus de temps que le precedent.
+  const bouts = effortTour ? [effortTour, duree] : [duree];
   // Ce que la conversation pese, et ce que Claude vient d'ecrire. Deux chiffres justes
   // valent mieux qu'un seul qui melange les deux.
   if (contexteTour) bouts.push(motDesJetons(contexteTour));

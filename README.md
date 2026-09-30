@@ -476,6 +476,44 @@ téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il r
 écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
 cours comprise.
 
+**L'effort s'ajuste à chaque demande.** Il était figé à `xhigh` pour toute une session. Or
+une session alterne « corrige la faute de frappe » et « diagnostique ce bug qui ne se
+reproduit qu'au troisième essai » : le premier n'a aucun besoin de quinze mille jetons de
+réflexion, et ce sont les mêmes jetons qui manqueront au second en fin de semaine. Le défaut
+passe donc à `medium`, et chaque demande est classée avant d'être transmise.
+
+Le classement est **local**, dans `complexite.py`. Pas un petit modèle qui classerait : ce
+tri s'intercale entre la parole et la réponse, donc chaque milliseconde s'y voit ; il serait
+absurde de dépenser des jetons pour décider d'en dépenser moins ; et un classificateur
+distant est une chose de plus qui peut tomber, sur le chemin qui doit le moins tomber. Le
+prix est assumé — des heuristiques se trompent — donc elles se trompent dans le sens le moins
+coûteux : **le doute rend « moyen »**. Un classement trop bas se rattrape en redemandant, un
+classement trop haut se paie.
+
+Les signaux retenus décrivent une **propriété** de la tâche, jamais son domaine : son
+étendue (plusieurs endroits, refonte), le fait qu'il faille chercher avant de savoir
+(« pourquoi », « ne marche plus »), une profondeur demandée explicitement, et surtout le
+**nombre de demandes distinctes** — quatre choses dans un message sont difficiles à tenir
+ensemble quel qu'en soit le sujet, et ça se compte sans vocabulaire. `ultracode` n'est jamais
+choisi automatiquement : il lance des agents en parallèle et coûte dix fois un tour normal,
+il se demande. Un niveau réglé à la main suspend l'ajustement — une décision qui ne tient pas
+jusqu'au message suivant n'en est pas une. `VOIX_EFFORT_AUTO=0` le coupe pour de bon.
+
+**Ce qui rend la chose possible, et qui était noté faux dans le code.** Changer d'effort
+reconstruit le client, le SDK n'exposant pas de `set_effort` — et un commentaire affirmait
+que cela « invalide le cache de prompt, le tour suivant relit la conversation au tarif
+plein ». Mesuré : c'est l'inverse. Sur une conversation de 26 000 jetons, le tour qui suit
+une reconstruction en relit 26 366 **en cache** et n'en crée que 451, contre 162 sans
+reconstruction. Ce qui se paie est la latence, et elle seule : une demi-seconde, avant que
+Claude ne commence. Si la reconstruction avait coûté le contexte, il aurait fallu s'abstenir.
+
+**Le voir sans l'avoir dans les jambes.** Une bascule produit une ligne dans le flux —
+« moyen → élevé · il faut chercher avant de savoir » — et seulement quand elle change quelque
+chose ; le reste du temps cette ligne n'existe pas. La raison compte autant que le niveau :
+« élevé » seul passe pour un caprice. Pendant le travail, le bandeau au-dessus de la barre
+porte le niveau en tête — « élevé · 12 s · 26,0 k jetons » — parce que c'est lui qui explique
+un tour plus long que le précédent.
+
 **Annuler un vocal pendant son envoi.** On vient de parler, on s'entend dire une bêtise, on
 se ravise — il faut pouvoir revenir en arrière tout de suite, sans attendre la fin de la
 transcription puis effacer le texte à la main. Pendant l'envoi, le bouton micro pulse en

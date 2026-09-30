@@ -649,8 +649,12 @@ class Worker:
           fenêtre de deux secondes et demie où `self.client` était déjà mort et où toute
           phrase arrivant là se perdait.
 
-        Le coût, à savoir : comme un changement de modèle, ça invalide le cache de prompt. Le
-        tour suivant relit la conversation au tarif plein."""
+        Le coût, mesuré plutôt que supposé — ce commentaire affirmait l'inverse. Reprendre la
+        session PRÉSERVE le cache de prompt : sur une conversation de 26 000 jetons, le tour
+        qui suit une reconstruction en relit 26 366 en cache et n'en crée que 451, contre 162
+        sans reconstruction. Ce qui se paie est donc la latence, et elle seule : une demi-
+        seconde, avant que Claude ne commence. C'est ce qui rend l'ajustement automatique de
+        l'effort viable à chaque tour — voir complexite.py."""
         entree = config.EFFORTS.get(cle)
         if not entree or not self.client:
             return ""

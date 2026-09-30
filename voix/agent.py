@@ -53,6 +53,7 @@ import moteurs_stt
 import pupitre
 import stt_local
 
+import complexite
 import config
 import journal
 
@@ -204,6 +205,9 @@ class Voix(Agent):
         # tableau, lu et effacé par llm_node — pour qu'UNE seule ligne « toi » soit publiée
         # par tour, quel que soit le canal.
         self._tape_en_attente = False
+        # Un niveau d'effort choisi a la main rend l'ajustement automatique silencieux : une
+        # decision prise doit tenir, sinon le reglage n'en est pas un.
+        self._effort_manuel = False
         # L'enonce en cours vient du micro d'un AUTRE appareil : il n'y a pas de tour audio
         # LiveKit derriere, donc rien a commettre — le texte part par generate_reply. Vrai
         # tant que `_dit` porte du texte venu du telephone, faux des qu'il est consomme.
@@ -547,6 +551,8 @@ class Voix(Agent):
             self.conv.tour_utilisateur(texte)
             # Garde pour le titre : c'est la premiere DEMANDE qui dit le sujet, pas la reponse.
             self._dernier_tour_utilisateur = texte
+        if not deja_occupe:
+            await self._ajuster_effort(texte)
         await self.worker.envoyer(texte)
         self._debut_tour = self._debut_tour or time.monotonic()
         # Deliberately short: the real answer arrives later through session.say(), so this
@@ -779,6 +785,39 @@ class Voix(Agent):
             self.conv.tour_claude(self._dernier_debrief or "", outils=journal_lignes(journal_),
                                   jetons=getattr(journal_, "jetons", None),
                                   duree=getattr(journal_, "duree_s", None))
+
+    async def _ajuster_effort(self, texte: str) -> None:
+        """Mettre l'effort au niveau que CETTE demande merite, avant de la transmettre.
+
+        Deux garde-fous, et ils disent ce qu'on respecte. « ultracode » n'est jamais touche :
+        il se demande a la main, il coute dix fois un tour normal, et l'automatique n'a pas a
+        defaire un choix pareil. Un niveau choisi a la main non plus — c'est une decision, et
+        une decision qui ne tient pas jusqu'au message suivant n'en est pas une.
+
+        Le changement reconstruit le client, ce qui prend une demi-seconde et PRESERVE le
+        cache de prompt (mesure : voir Worker.changer_effort). C'est ce qui le rend possible
+        a chaque tour ; si la reconstruction coutait le contexte, il faudrait s'en abstenir.
+        """
+        if not config.EFFORT_AUTO or self._effort_manuel:
+            return
+        # Un worker qui n'expose ni niveau ni moyen d'en changer n'a rien a ajuster. Le cas
+        # existe : les tests du tableau branchent un double qui ne joue que le strict
+        # necessaire, et l'ajustement ne doit pas etre ce qui les fait tomber.
+        avant = getattr(self.worker, "effort", None)
+        if not avant or not callable(getattr(self.worker, "changer_effort", None)):
+            return
+        if avant in complexite.JAMAIS_AUTO:
+            return
+        choix = complexite.evaluer(texte)
+        if choix.niveau == avant:
+            return
+        libelle = await self.worker.changer_effort(choix.niveau)
+        if not libelle:
+            return          # refuse : un tour tourne encore, on garde le niveau courant
+        self._voir("effort", cle=choix.niveau, niveau=choix.niveau,
+                   libelle=libelle, auto=True, pourquoi=choix.pourquoi,
+                   de=complexite.LIBELLES.get(avant, avant),
+                   vers=complexite.LIBELLES.get(choix.niveau, choix.niveau))
 
     async def poser_question(self, questions: list) -> str | None:
         """Claude a une question. On la dit, on attend la reponse, on la lui rend.
@@ -1506,7 +1545,12 @@ async def entrypoint(ctx: JobContext):
             cle = str(donnees.get("cle") or "")
             libelle = await worker.changer_effort(cle)
             if libelle:
-                tableau.publier("ordre", texte=f"effort réglé sur {libelle}")
+                # Choisi a la main : l'ajustement automatique se tait desormais. Une decision
+                # que la demande suivante defait n'en serait pas une.
+                agent._effort_manuel = True
+                tableau.publier("ordre",
+                                texte=f"effort réglé sur {libelle} — l'ajustement "
+                                      f"automatique est suspendu")
             elif worker.occupe:
                 # Refus explicite plutôt que clic sans effet : reconstruire le client en
                 # pleine tâche tuerait le travail en cours.

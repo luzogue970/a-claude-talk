@@ -1567,6 +1567,35 @@ dire(!diagLa(), 'la reconnexion la fait disparaitre');
 dire(coupeDepuis === 0, 'et remet l horloge de coupure a zero');
 echecs = 0;
 
+// ---- la bascule d effort se lit d un coup -------------------------------------------------
+titre('effort : voir que le modele change de regime, et pourquoi');
+emettre({ genre: 'effort', cle: 'high', niveau: 'high', libelle: 'élevé', auto: true,
+          de: 'moyen', vers: 'élevé', pourquoi: 'il faut chercher avant de savoir' });
+const ligneEffort = dernier;
+dire(/moyen/.test(ligneEffort.innerHTML) && /élevé/.test(ligneEffort.innerHTML),
+     'la ligne dit d ou l on vient et ou l on va');
+dire(/il faut chercher/.test(ligneEffort.innerHTML),
+     'et POURQUOI — « élevé » seul passerait pour un caprice');
+dire(/class="bascule"/.test(ligneEffort.innerHTML), 'sous une forme compacte, sur une ligne');
+
+// Le selecteur suit, sinon il afficherait un niveau qui n est plus celui du tour.
+dire(document.getElementById('effort').value === 'high',
+     'le selecteur de l en-tete se cale sur le niveau retenu');
+
+// Et le bandeau de travail porte le niveau en tete : c est lui qui explique un tour long.
+emettre({ genre: 'travail', actif: true });
+emettre({ genre: 'jetons', contexte: 26000, sortie: 0, echanges: 1, recu: true });
+dire(/élevé/.test(document.getElementById('cogite-mesure').textContent),
+     'le bandeau dit a quel regime tourne le tour : '
+     + document.getElementById('cogite-mesure').textContent);
+emettre({ genre: 'travail', actif: false });
+
+// Un reglage fait a la main n a pas de « de → vers » : il ne raconte rien, il applique.
+emettre({ genre: 'effort', cle: 'low', niveau: 'low', libelle: 'minimal — réponse immédiate' });
+dire(!/class="bascule"/.test(dernier.innerHTML),
+     'un reglage manuel s affiche simplement, sans mise en scene');
+toutClore('fin du cas');
+
 // ---- ce que le bandeau raconte : des chiffres, pas des mots -------------------------------
 titre('cogitation : mesurer plutot que meubler');
 const mesure = document.getElementById('cogite-mesure');

@@ -170,7 +170,16 @@ EFFORTS = {
 # Jamais par defaut, et ce n'est pas de la prudence de principe : un tour ultracode lance des
 # agents en parallele et peut couter dix fois un tour normal. Ça se demande.
 ULTRACODE = "ultracode"
-WORKER_EFFORT = os.environ.get("VOIX_WORKER_EFFORT", "xhigh")
+# « medium » au demarrage, et non plus « xhigh ». Un niveau fige haut pour toute une session
+# depense sur « corrige la faute de frappe » les jetons qui manqueront a « diagnostique ce
+# bug ». L'effort s'ajuste desormais a chaque demande (voir complexite.py) ; cette valeur
+# n'est que le point de depart, celui du premier message.
+WORKER_EFFORT = os.environ.get("VOIX_WORKER_EFFORT", "medium")
+
+# Regler l'effort a la main et s'y tenir. L'ajustement automatique rend la main des qu'on
+# choisit un niveau soi-meme — c'est un choix, il doit tenir — mais on peut aussi le couper
+# une fois pour toutes.
+EFFORT_AUTO = os.environ.get("VOIX_EFFORT_AUTO", "1") not in ("0", "non", "false")
 
 
 def effort_sdk(niveau: str) -> str:
