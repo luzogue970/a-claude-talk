@@ -303,6 +303,17 @@ globalThis.FormData = function () { this.champs = []; this.append = (n, v, f) =>
 globalThis.requetes = [];
 globalThis.reponseAudio = { ok: true, status: 200, corps: { texte: "ok" } };
 globalThis.audioEchoue = false;
+// Quand il est vrai, l envoi ne repond pas tout de suite : le test a le temps d appuyer sur
+// annuler, comme on le fait vraiment.
+globalThis.audioLent = false;
+globalThis.AbortController = function () {
+  const self = this;
+  this.signal = { aborted: false, ecouteurs: [] };
+  this.abort = () => {
+    self.signal.aborted = true;
+    self.signal.ecouteurs.forEach((f) => f());
+  };
+};
 // La synthese Azure, servie par /parler. Le drapeau azureMarche a false simule l absence de
 // cle ou un service injoignable : la page doit se rabattre sur la voix du navigateur.
 globalThis.azureMarche = true;
@@ -323,6 +334,20 @@ globalThis.fetch = (url, opts) => {
   }
   if (String(url).endsWith("/audio") && globalThis.audioEchoue) {
     return Promise.reject(new Error("reseau coupe"));
+  }
+  if (String(url).endsWith("/audio") && globalThis.audioLent) {
+    const sig = opts && opts.signal;
+    return new Promise((resoudre, rejeter) => {
+      const fin = setTimeout(() => resoudre({
+        ok: true, status: 200, redirected: false,
+        headers: { get: () => "application/json; charset=utf-8" },
+        json: () => Promise.resolve(globalThis.reponseAudio.corps),
+      }), 200);
+      if (sig) sig.ecouteurs.push(() => {
+        clearTimeout(fin);
+        const e = new Error("abandon"); e.name = "AbortError"; rejeter(e);
+      });
+    });
   }
   const r = globalThis.reponseAudio;
   // Une reponse a des en-tetes et sait si elle a ete redirigee : c est ainsi que la page

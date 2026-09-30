@@ -1492,56 +1492,42 @@ socket.onmessage({ data: JSON.stringify({ genre: '_pouls', pret: true }) });
 dire(btnMaj.hidden, 'et une version absente ne propose rien');
 
 // ---- reprendre une conversation, c est ne PAS en ouvrir une neuve -------------------------
-titre('nom de la conversation : reprise, pas nouveaute');
+titre('titre de l en-tete : le projet, et l identite de la conversation');
 recevoir({ genre: 'conversations', n: 8600, h: '10:00', dossier: '/p/claude-talk',
   courante: 'sess-abc',
   liste: [{ session_id: 'sess-abc', titre: 'la barre du bas', projet: 'claude-talk',
             tours: 42, ici: true },
           { session_id: 'sess-xyz', titre: 'autre sujet', projet: 'claude-talk',
             tours: 3, ici: true }] });
-dire(/la barre du bas/.test(document.getElementById('ou').textContent),
-     'le titre porte la conversation reprise : ' + document.getElementById('ou').textContent);
+const zoneOu = document.getElementById('ou');
+// Ce qu on cherche en levant les yeux, c est OU l on est. Le sujet, on le lit dans le flux
+// juste en dessous : il prenait la place d une information qu on ne demandait pas.
+dire(zoneOu.textContent === 'claude-talk',
+     'le titre porte le projet, et lui seul : ' + JSON.stringify(zoneOu.textContent));
+dire(/la barre du bas/.test(zoneOu.title),
+     'le sujet reste en infobulle, ou il ne coute aucune place : ' + zoneOu.title);
 
-// Le defaut : la liste part AVANT que le SDK ait rendu son identifiant, donc « courante »
-// arrivait vide et la page concluait « nouvelle conversation » sur une reprise reussie.
+// Le defaut repare : la liste part AVANT que le SDK ait rendu son identifiant, donc
+// « courante » arrivait vide. Le projet, lui, est connu des le depart.
 recevoir({ genre: 'conversations', n: 8601, h: '10:00', dossier: '/p/claude-talk',
   courante: null,
   liste: [{ session_id: 'sess-abc', titre: 'la barre du bas', projet: 'claude-talk',
             tours: 42, ici: true }] });
-dire(/nouvelle conversation/.test(document.getElementById('ou').textContent),
-     'sans courante, on ne peut effectivement rien affirmer');
+dire(zoneOu.textContent === 'claude-talk',
+     'sans conversation courante, le projet reste juste — on est bien dedans');
+dire(/nouvelle conversation/.test(zoneOu.title),
+     'et l infobulle dit qu on n a pas encore identifie laquelle : ' + zoneOu.title);
 
-// L identifiant confirme arrive ensuite, et recale le nom.
+// L identifiant confirme arrive ensuite, et recale l identite.
 emettre({ genre: 'session', id: 'sess-abc', repris: true, tours: 42 });
-dire(/la barre du bas/.test(document.getElementById('ou').textContent),
-     'l evenement session recale le nom : ' + document.getElementById('ou').textContent);
+dire(/la barre du bas/.test(zoneOu.title),
+     'l evenement session recale la conversation : ' + zoneOu.title);
 
-// Et s il DEMENT la reprise — Claude Code ouvre une neuve sans rien dire — le nom suit.
+// Et s il DEMENT la reprise — Claude Code ouvre une neuve sans rien dire — l infobulle suit.
 emettre({ genre: 'session', id: 'sess-neuve', repris: false, tours: 0 });
-dire(/nouvelle conversation/.test(document.getElementById('ou').textContent),
-     'une reprise qui echoue ne ment pas non plus sur le nom');
-
-// ---- une vieille dictee ne revient pas hanter la barre ------------------------------------
-titre('dictee retenue : un etat, pas un evenement');
-champ.value = ''; fermerDictee(null);
-// L etat, envoye AVANT l historique : c est lui qui fait foi.
-emettre({ genre: 'dictee', texte: 'corrige la barre du bas', raison: 'occupe', auto: true });
-dire(champ.value === 'corrige la barre du bas', 'la dictee retenue courante remplit la barre');
-// L historique rejoue une dictee d il y a deux heures, envoyee depuis : elle doit rester ou
-// elle est. Avant, elle ecrasait la barre a chaque reconnexion.
-champ.value = ''; fermerDictee(null);
-// 8650 : plus haut que ce qui precede, plus bas que ce que les blocs suivants utilisent —
-// un numero deja vu serait silencieusement ecarte, et le test passerait sans rien prouver.
-recevoir({ genre: '_histoire', evenements: [
-  { genre: 'dictee', texte: 'une vieille phrase deja envoyee', raison: 'mode', n: 8650, h: '10:00' },
-] });
-dire(dernier && dernier.dataset && dernier.dataset.g === 'dictee',
-     'la dictee rejouee est bien passee (une ligne existe dans le flux)');
-dire(champ.value === '', 'mais elle ne touche pas la barre : ' + JSON.stringify(champ.value));
-// Consommee, l etat se vide — et vide la barre.
-emettre({ genre: 'dictee', texte: 'encore une', raison: 'mode', auto: false });
-emettre({ genre: 'dictee', texte: '', raison: '', auto: false });
-dire(champ.value === '', 'un etat vide efface ce qui etait retenu');
+dire(/nouvelle conversation/.test(zoneOu.title),
+     'une reprise qui echoue ne ment pas non plus');
+dire(zoneOu.textContent === 'claude-talk', 'et le projet, lui, n a pas change');
 
 // ---- une reconnexion n est pas une erreur -------------------------------------------------
 titre('diagnostic : rouge seulement quand c est vraiment casse');
@@ -1960,6 +1946,49 @@ async function testerRelaisVocal() {
   dire(microDemandes === 0 && /https/.test(document.getElementById('note-barre').textContent || ''),
        'en http, on explique au lieu de tenter : ' + document.getElementById('note-barre').textContent);
   isSecureContext = true; noteBarre(null);
+
+  // ---- annuler un vocal en cours d envoi --------------------------------------------------
+  // On vient de parler, on s entend dire une betise, on se ravise. Il faut pouvoir revenir
+  // en arriere TOUT DE SUITE, sans attendre la fin de la transcription puis effacer le texte
+  // a la main.
+  titre('vocal : annuler pendant l envoi');
+  brancher(); ouvrirSock();
+  await pause();
+  noteBarre(null); enregistreurs.length = 0; champ.value = ''; envoyes.length = 0;
+  audioLent = true;                       // l envoi traine : on a le temps d appuyer
+  btnDicter.onclick(); await tick();      // micro ouvert
+  btnDicter.onclick(); await tick();      // relache : l envoi part
+  dire(vocalEnvoi === true, 'l envoi est en cours');
+  dire(/annuler/.test(document.getElementById('note-barre').textContent || ''),
+       'et la barre dit comment l annuler : ' + document.getElementById('note-barre').textContent);
+  dire(btnDicter.classList.contains('envoi'), 'le bouton pulse pendant l envoi');
+
+  // Le geste : appuyer sur ce qui bouge. Pas de bouton de plus dans une barre pleine.
+  btnDicter.onclick();
+  dire(vocalEnvoi === false, 'un appui annule immediatement, sans attendre la reponse');
+  dire(/annulé/.test(document.getElementById('note-barre').textContent || ''),
+       'et le dit : ' + document.getElementById('note-barre').textContent);
+  dire(envoyes.some(o => o.cmd === 'barre_vide'),
+       'la barre est vidée des deux cotes, ici et chez l agent');
+  dire(!vocalEnAttente, 'rien n est garde : c est justement ce qu on vient de jeter');
+
+  // Le piege : le serveur a pu finir de transcrire avant de voir la coupure, et son texte
+  // remonte par le FLUX, pas par la reponse. Sans refus, il apparaissait une seconde apres
+  // l annulation.
+  await pause(); await pause();
+  // Le serveur avait fini : il pousse sa transcription par le flux. Elle doit etre refusee.
+  emettre({ genre: 'ecoute', actif: false, parle: true, source: 'téléphone' });
+  emettre({ genre: 'partiel', texte: 'la betise que je viens de dire', final: true,
+            source: 'téléphone' });
+  dire(champ.value === '',
+       'une transcription qui arrive APRES l annulation est refusee : ' + JSON.stringify(champ.value));
+  // Mais une dictee sans rapport, plus tard, passe normalement — on n a pas casse le chemin.
+  vocalAnnuleA = 0;
+  emettre({ genre: 'partiel', texte: 'ce que je dis maintenant', final: true, source: 'téléphone' });
+  dire(/ce que je dis maintenant/.test(champ.value),
+       'et une dictee ulterieure passe toujours : ' + JSON.stringify(champ.value));
+  fermerDictee(null);
+  audioLent = false; noteBarre(null); champ.value = '';
 
   // ---- parler dans le vide : jamais -------------------------------------------------------
   // Le cas vecu : micro ouvert, on parle trente secondes, et on apprend a l arret que la

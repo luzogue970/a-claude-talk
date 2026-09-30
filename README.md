@@ -476,6 +476,34 @@ téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il r
 écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
 cours comprise.
 
+**Annuler un vocal pendant son envoi.** On vient de parler, on s'entend dire une bêtise, on
+se ravise — il faut pouvoir revenir en arrière tout de suite, sans attendre la fin de la
+transcription puis effacer le texte à la main. Pendant l'envoi, le bouton micro pulse en
+ambre : **appuyer dessus annule**. Pas de bouton supplémentaire dans une barre déjà pleine,
+et appuyer sur ce qui bouge pour l'arrêter est le geste qu'on fait sans y penser.
+
+L'annulation abandonne la requête, vide la barre **des deux côtés** — ici et chez l'agent, qui
+garde sa propre dictée retenue — et surtout **refuse le résultat même s'il arrive**. Le
+serveur a pu finir de transcrire avant de voir la coupure, et son texte remonte alors par le
+flux d'événements, pas par la réponse HTTP : abandonner la requête ne suffit donc pas à
+l'arrêter. Une transcription venue du téléphone dans les dix secondes suivant une annulation
+est écartée ; au-delà, c'est forcément autre chose, on a reparlé depuis.
+
+**Le titre ne porte que le projet.** Il a porté le sujet un temps — « claude-talk · bouton
+suivre » — et l'usage a tranché : ce qu'on cherche en levant les yeux, c'est *dans quelle
+conversation on se trouve*, pas de quoi elle parle. Ça, on le lit dans le flux juste en
+dessous. Le sujet prenait la place d'une information qu'on ne demandait pas, sur un écran de
+téléphone. Il reste dans l'infobulle et dans la liste des conversations, où il sert à choisir
+entre plusieurs.
+
+**Une pulsation qui délave n'est pas une pulsation.** `pulse` fait varier l'opacité de 35 à
+100 %. Sur un état dont toute l'information tient dans sa **couleur**, ça la rend
+méconnaissable : l'ambre virait au gris bleuté, et l'on revenait exactement au défaut qu'on
+voulait corriger. Les états de liaison pulsent donc un **halo** — l'œil est attiré, la teinte
+intacte. *Réserve :* vérifié pour la reprise, qui est bien ambre ; l'état « déconnecté » reste
+bleu au banc de rendu sans que la cause soit identifiée, alors que sa règle est en tout point
+semblable à celle qui fonctionne.
+
 **Le titre s'affiche en entier, quoi qu'il arrive.** C'est lui qu'on doit pouvoir lire :
 tronqué, « claude-talk · enr… » ne dit plus rien. Il ne rétrécit donc plus, et c'est l'état de
 la liaison qui cède la place — jusqu'à n'être plus que son point coloré, qui reste

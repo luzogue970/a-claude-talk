@@ -1436,6 +1436,13 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 #travail.fige{border-color:var(--bord);color:var(--faible)}
 #travail.fige::before{animation:none;opacity:.5}
 #etat.vif{animation:pulse 1.4s ease-in-out infinite}
+/* Les etats de liaison pulsent AUTREMENT. « pulse » fait varier l'opacite de 35 a 100 % : sur
+   un etat dont toute l'information tient dans sa couleur, ça la delave au point de la rendre
+   meconnaissable — l'ambre et le rouge viraient au gris bleute, et l'on revenait au defaut
+   qu'on voulait corriger. Le halo, lui, attire l'oeil sans toucher a la teinte. */
+#etat.e-reprise.vif, #etat.e-perdu.vif{animation:halo 1.6s ease-in-out infinite;opacity:1}
+@keyframes halo{0%,100%{box-shadow:0 0 0 0 currentColor}
+                50%{box-shadow:0 0 0 3px color-mix(in srgb, currentColor 22%, transparent)}}
 /* Ni rouge ni alarmant : ce n'est pas un probleme, c'est une proposition. Assez visible
    pour qu'on le remarque en developpant, assez discret pour qu'on l'ignore sans effort. */
 #version{color:#6b7684;font-size:11px;white-space:nowrap;cursor:pointer;
@@ -3586,6 +3593,14 @@ function recevoir(e, etat = false) {
       majTravail();
       return;
     }
+    // Une transcription qui arrive JUSTE apres une annulation appartient au vocal qu'on
+    // vient de jeter : le serveur avait fini avant de voir la coupure. Elle remonte par le
+    // flux, pas par la reponse HTTP, donc abandonner la requete ne suffit pas a l'arreter.
+    // Dix secondes : au-dela, c'est forcement autre chose — on a reparle depuis.
+    if (e.genre === "partiel" && e.source === "téléphone"
+        && vocalAnnuleA && Date.now() - vocalAnnuleA < 10000) {
+      return;
+    }
     if (e.genre === "partiel") {
       // `final` doit être transmis : une transcription finale ne remplace pas la précédente,
       // elle s'ajoute derrière. Le passer en dur à `false` faisait disparaître le début de
@@ -3832,15 +3847,14 @@ function majConvs() {
   const nom = c ? (c.titre || c.projet || "sans nom") : "nouvelle conversation";
   btnConvs.innerHTML = `<span class="rond"></span><b>${ech(nom)}</b>`
     + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "");
-  // Sur telephone, le titre repond a deux questions d'un coup : OU suis-je (le projet) et
-  // SUR QUOI (le sujet). Le projet seul ne distingue pas deux conversations ouvertes au meme
-  // endroit ; le sujet seul ne dit pas de quel projet il s'agit quand on en tient trois.
-  // « claude-talk · bouton suivre » repond aux deux en une ligne — et c'est une ligne qu'on
-  // ne veut pas voir deborder, d'ou un sujet tenu a deux ou trois mots par sa generation.
+  // Le PROJET, et lui seul. Le sujet y a figure un temps — « claude-talk · bouton suivre » —
+  // et l'usage a tranche : ce qu'on cherche en levant les yeux, c'est dans quelle
+  // conversation on se trouve, pas de quoi elle parle. Ça, on le lit dans le flux, qui est
+  // juste en dessous. Le sujet prenait la place d'une information qu'on ne demandait pas, et
+  // il la prenait sur un ecran de telephone. Il reste dans l'infobulle et dans la liste des
+  // conversations, ou il sert a choisir entre plusieurs.
   const dossier = (c && c.projet) || convDossier || "";
-  const projet = String(dossier).replace(/\/+$/, "").split("/").pop();
-  const sujet = c ? (c.titre || "") : "nouvelle conversation";
-  ou.textContent = [projet, sujet].filter(Boolean).join(" · ") || nom;
+  ou.textContent = String(dossier).replace(/\/+$/, "").split("/").pop() || nom;
   ou.hidden = false;
   ou.title = nom;
   btnConvs.title = c
@@ -4329,6 +4343,10 @@ let vocalEnCours = false, vocalEnvoi = false, veilleLiaisonVocal = null;
 // puisse faire. Il repart tout seul au retour de la liaison.
 let vocalEnAttente = null;   // { blob, type, quand, secondes }
 let vocalInterrompu = "";    // la raison d'un arret subi, a dire avec l'echec qui suit
+let envoiEnCours = null;     // de quoi abandonner la requete en vol
+// Quand on a annule. Sert de fenetre de refus : une transcription qui arrive JUSTE apres,
+// par le flux, appartient au vocal qu'on vient de jeter et ne doit pas remplir la barre.
+let vocalAnnuleA = 0;
 
 // Peut-on envoyer, maintenant ? La question se pose AVANT d'ouvrir le micro et PENDANT qu'il
 // enregistre — pas seulement au moment d'envoyer, qui est trop tard : la parole est deja
@@ -4460,10 +4478,33 @@ function arreterVocal() {
   catch (_) { libererMicro(); vocalEnCours = false; majBoutonDictee(); }
 }
 
+// Annuler, tout de suite. La requete est abandonnee, et surtout le resultat est REFUSE
+// meme s'il arrive : le serveur a pu finir de transcrire avant de voir la coupure, et son
+// texte remonte alors par le flux d'evenements, pas par la reponse. Sans ce refus, on
+// annulait et le texte apparaissait quand meme une seconde plus tard.
+function annulerVocal() {
+  if (!vocalEnvoi) return;
+  vocalAnnuleA = Date.now();
+  if (envoiEnCours) { try { envoiEnCours.abort(); } catch (_) {} }
+  envoiEnCours = null;
+  vocalEnvoi = false;
+  vocalEnAttente = null;
+  vocalInterrompu = "";
+  majBoutonDictee();
+  // La barre est vidée des deux cotes : ici, et chez l'agent, qui garde sa propre dictee
+  // retenue. La vider d'un seul cote la faisait revenir a la reconnexion suivante.
+  fermerDictee(null);
+  envoyerCmd({ cmd: "barre_vide" });
+  noteBarre("vocal annulé — rien n'a été envoyé à Claude");
+}
+
 async function envoyerVocal(blob, type) {
   vocalEnvoi = true;
+  vocalAnnuleA = 0;
   majBoutonDictee();
-  noteBarre("envoi au PC pour transcription…");
+  noteBarre("envoi au PC pour transcription… — appuie sur le micro pour annuler");
+  const controle = typeof AbortController === "function" ? new AbortController() : null;
+  envoiEnCours = controle;
   try {
     const corps = new FormData();
     const ext = /mp4|m4a|aac/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg"
@@ -4472,7 +4513,9 @@ async function envoyerVocal(blob, type) {
     // Relatif au chemin de la page, comme les images : derriere un proxy, l'absolu viserait
     // la racine du proxy.
     const r = await fetch(location.pathname.replace(/\/$/, "") + "/audio",
-                          { method: "POST", body: corps });
+                          { method: "POST", body: corps,
+                            signal: controle ? controle.signal : undefined });
+    if (vocalAnnuleA) return;          // annule pendant l'aller-retour : on ne rend rien
     // Le socle redirige vers sa page de connexion quand la session est tombee. fetch SUIT la
     // redirection et rend un 200 avec du HTML : pris pour un succes, c'etait un vocal qui
     // partait dans le vide sans un mot. Verifie en rejouant la chaine sans cookie.
@@ -4492,6 +4535,9 @@ async function envoyerVocal(blob, type) {
     noteBarre(`transcrit par ${d.moteur || "le PC"}`
               + (d.secondes ? ` — ${d.secondes} s de parole` : ""));
   } catch (e) {
+    // Annule volontairement : ce n'est pas un echec, et il n'y a rien a garder — c'est
+    // precisement ce qu'on vient de jeter.
+    if (vocalAnnuleA || (e && e.name === "AbortError")) return;
     // On ne jette RIEN. Quelqu'un vient de parler : reperdre ça parce que le reseau a
     // hoquete serait le pire service a lui rendre. L'enregistrement attend, et repart seul
     // des que la liaison revient.
@@ -4504,6 +4550,7 @@ async function envoyerVocal(blob, type) {
     noteBarre(cause + " — arrête de parler. Ce que tu as dit est GARDÉ : il repartira "
               + "à la reconnexion, ou appuie sur le micro pour réessayer.", true);
   } finally {
+    envoiEnCours = null;
     vocalEnvoi = false;
     majBoutonDictee();
   }
@@ -4525,7 +4572,12 @@ async function renvoyerVocalEnAttente() {
 
 function basculerDicteeIci() {
   if (vocalEnCours) { arreterVocal(); return; }
-  if (vocalEnvoi) return;    // l'envoi precedent n'est pas fini : un second appui n'aiderait pas
+  // L'envoi est en cours : cet appui l'ANNULE. On vient de parler, on s'entend dire une
+  // betise ou on se ravise — et il faut pouvoir revenir en arriere tout de suite, sans
+  // attendre la fin de la transcription puis effacer le texte a la main. Le bouton pulse
+  // deja en ambre a ce moment-la : appuyer sur ce qui bouge pour l'arreter est le geste
+  // qu'on fait sans y penser, et il evite d'ajouter un bouton a une barre pleine.
+  if (vocalEnvoi) { annulerVocal(); return; }
   // Un enregistrement garde attend son tour : le geste sert a le renvoyer, pas a en empiler
   // un second par-dessus.
   if (vocalEnAttente) { renvoyerVocalEnAttente(); return; }
