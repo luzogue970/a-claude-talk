@@ -237,6 +237,24 @@ setTimeout(async () => {
   // c'est precisement ce qui l'a laissee invisible si longtemps — au repos, tout allait bien.
   debutTravail = Date.now() - 185000;
   majTravail();
+  // Un debrief tel qu'il arrive VRAIMENT : en morceaux successifs. Le stub de test_front.js
+  // ne parse pas le contenu initial d'une balise, donc il ne pouvait pas voir que
+  // l'accumulation ecrasait le corps entier — boutons compris — ni que le libelle des
+  // boutons se recollait dans le message. Ici, c'est un vrai navigateur qui repond.
+  [["Le bouton est de retour. ", true], ["Le texte reste entier. ", true],
+   ["Et rien ne s'y recolle.", true]].forEach(([t], i) => {
+    recevoir({ n: 900 + i, genre: "voix", texte: t, id: "M1", suite: true, h: "14:31:0" + i });
+  });
+  recevoir({ n: 910, genre: "parole_fin", id: "M1", h: "14:31:04" });
+  recevoir({ n: 911, genre: "voix", texte: "D'accord, j'y vais.", h: "14:31:05" });
+  const voixRendues = [...document.querySelectorAll(".ev.g-voix")].slice(-2);
+  releve.messages = voixRendues.map((l) => {
+    const zone = l.querySelector(".lecture");
+    const propos = l.querySelector(".propos");
+    return { bouton: zone ? zone.textContent.trim() : "",
+             texte: propos ? propos.textContent : "(pas de .propos)" };
+  });
+
   releve.entete = document.querySelector("header").offsetHeight;
   releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
                     modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct"),
@@ -299,9 +317,22 @@ let ok = true;
 const dire = (bon, texte) => { ok = ok && bon; console.log(`  ${bon ? "OK  " : "ECHEC"} ${texte}`); };
 
 console.log("=== mise en page, mesuree dans Chrome ===");
+// Un message vert doit TOUJOURS pouvoir être écouté, qu'il arrive en un morceau ou en dix.
+const [enMorceaux, dUnSeulBloc] = r.messages || [];
+if (enMorceaux && dUnSeulBloc) {
+  dire(enMorceaux.bouton === "écouter",
+       `une réponse arrivée en trois morceaux garde son bouton (${enMorceaux.bouton || "AUCUN"})`);
+  dire(enMorceaux.texte === "Le bouton est de retour. Le texte reste entier. Et rien ne s'y recolle.",
+       `et son texte entier : ${JSON.stringify(enMorceaux.texte)}`);
+  dire(!/écouter/.test(enMorceaux.texte),
+       "sans que le libellé du bouton s'y soit recollé");
+  dire(dUnSeulBloc.bouton === "écouter",
+       `une réponse d'un seul morceau en a un aussi (${dUnSeulBloc.bouton || "AUCUN"})`);
+}
+
 dire(r.entete > 30, `l'en-tête est rendu (${r.entete} px)`);
-dire(r.lignes.length === EVENEMENTS.length,
-     `${r.lignes.length} lignes rendues sur ${EVENEMENTS.length}`);
+dire(r.lignes.length >= EVENEMENTS.length,
+     `${r.lignes.length} lignes rendues, au moins les ${EVENEMENTS.length} du jeu d'essai`);
 
 const avecCorps = r.lignes.filter(l => l.corpsLargeur >= 0);
 const pire = avecCorps.reduce((a, b) => (b.corpsLargeur < a.corpsLargeur ? b : a));

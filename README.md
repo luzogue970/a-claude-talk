@@ -440,6 +440,21 @@ flux — le seul qui voie la page grandir. Les rafales sont groupées par image,
 déclencherait deux cents mesures de mise en page pour un seul résultat. Vérifié dans un vrai
 navigateur : cent vingt messages rejoués, remonté en haut, le bouton est là.
 
+**Le texte qui s'accumule vit dans son propre élément.** C'était `corps.textContent +=
+texte`, et cette ligne faisait deux dégâts à chaque morceau reçu. Elle réécrit tout le
+contenu en texte pur, donc elle **détruit** les éléments déjà posés — le bouton « écouter » en
+premier. Et elle relit le `textContent` courant, qui contient le libellé de ces boutons : le
+mot « écouter » se recollait dans le message. Une réponse arrivée en un seul morceau y
+survivait ; une réponse arrivée en plusieurs — c'est-à-dire tous les débriefs — perdait son
+bouton dès le deuxième. D'où des messages verts sans aucun moyen de les écouter, sans règle
+apparente.
+
+Le texte a maintenant son enveloppe, les boutons vivent à côté d'elle, et allonger l'un
+n'efface plus l'autre. Le talon de `test_front.js` ne parse pas le contenu initial d'une
+balise : il ne *pouvait* pas voir ce défaut, et c'est cette lacune qui l'a laissé passer. La
+garantie est donc posée dans `test_rendu.js`, qui tourne dans un vrai navigateur — bouton
+présent et texte entier, en un morceau comme en trois.
+
 **Écouter n'importe quelle réponse, sans exception.** Le bouton n'apparaissait que sur
 certaines : il était posé sur les lignes rejouées, et on comptait sur « relire » — qui arrive
 avec `parole_fin` — pour les lignes en direct. Or `parole_fin` ne suit que les **débriefs**,

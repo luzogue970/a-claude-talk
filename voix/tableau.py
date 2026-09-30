@@ -1292,6 +1292,10 @@ body{overflow-x:hidden}
 .t{color:#5a636e;font-size:11px;font-variant-numeric:tabular-nums;text-align:right}
 .badge{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
 .corps{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* L'enveloppe du texte qui s'accumule. Elle n'a pas d'allure propre — elle sert a ce que le
+   texte et les boutons soient deux choses distinctes, et qu'allonger l'un n'efface pas
+   l'autre. */
+.propos{white-space:pre-wrap}
 /* Survol : la ligne se detache. Dans un flux de deux cents lignes, suivre une ligne du
    regard sans repere est fatigant. */
 .ev{border-radius:6px;padding-left:6px;margin-left:-6px}
@@ -2268,10 +2272,21 @@ function ajouter(e) {
   const meme = dernier && dernier.dataset.g === e.genre
     && (e.genre !== "voix" || (e.id || null) === (dernier.idVoix || null));
   let nouvelle = false;
-  if (e.genre === "partiel" && meme) {
-    dernier.querySelector(".corps").textContent = e.texte;
-  } else if (AGREGE.has(e.genre) && meme && e.suite) {
-    dernier.querySelector(".corps").textContent += e.texte;
+  // Le texte qui s'accumule vit dans SON element, jamais dans le corps entier.
+  //
+  // C'etait « corps.textContent += e.texte », et cette ligne faisait deux degats a chaque
+  // morceau recu. Elle reecrit tout le contenu en texte pur, donc elle DETRUIT les elements
+  // deja poses — le bouton « écouter » en premier. Et elle relit le textContent courant, qui
+  // contient le libelle de ces boutons : le mot « écouter » se recollait dans le message.
+  //
+  // Une reponse arrivee en un seul morceau y survivait, une reponse arrivee en plusieurs —
+  // c'est-a-dire tous les debriefs — perdait son bouton des le deuxieme. D'ou des messages
+  // verts sans aucun moyen de les ecouter, sans regle apparente.
+  const propos = dernier && dernier.querySelector(".propos");
+  if (e.genre === "partiel" && meme && propos) {
+    propos.textContent = e.texte;
+  } else if (AGREGE.has(e.genre) && meme && e.suite && propos) {
+    propos.textContent += e.texte;
   } else {
     const ligne = document.createElement("div");
     ligne.className = `ev g-${e.genre}` + (e.passe ? " passe" : "")
@@ -2285,7 +2300,12 @@ function ajouter(e) {
     ligne.innerHTML = `<div class="t" title="${ecoule}">${ech(e.h || "")}</div>`
       + `<div class="badge">${LIB[e.genre] || e.genre}</div>`
       + `<div class="pip ${etatInitial(e)}"></div>`
-      + `<div class="corps">${corps(e)}</div>`;
+      + `<div class="corps">`
+      // Les genres qui s'accumulent recoivent une enveloppe pour leur texte : c'est elle
+      // qu'on allonge, et les boutons vivent a cote d'elle plutot que dedans.
+      + (AGREGE.has(e.genre) || e.genre === "partiel"
+         ? `<span class="propos">${corps(e)}</span>` : corps(e))
+      + `</div>`;
     if (e.genre === "voix") ligne.idVoix = e.id || null;
     flux.appendChild(ligne);
     dernier = ligne;

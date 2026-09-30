@@ -1774,6 +1774,32 @@ async function testerLecture() {
        'relire la seconde envoie son texte a elle seule');
   couperLectureLocale();
 
+  // ---- une reponse en plusieurs morceaux garde son bouton -----------------------------------
+  titre('un message vert sans bouton : le defaut le plus tenace');
+  // Un debrief arrive TOUJOURS en plusieurs morceaux. L accumulation reecrivait le corps
+  // entier en texte pur : elle effacait les boutons deja poses, et recollait leur libelle
+  // dans le message. Une reponse d un seul morceau y survivait, les autres non — d ou des
+  // messages verts sans moyen de les ecouter, sans regle apparente.
+  emettre({ genre: 'voix', texte: 'Premier morceau. ', id: 'M1', suite: true });
+  const ligneM = dernier;
+  dire(!!ligneM.zoneEcoute, 'le premier morceau pose le bouton');
+  emettre({ genre: 'voix', texte: 'Deuxieme morceau. ', id: 'M1', suite: true });
+  emettre({ genre: 'voix', texte: 'Et le troisieme.', id: 'M1', suite: true });
+  dire(dernier === ligneM, 'les morceaux suivants rejoignent la meme ligne');
+  dire(!!ligneM.zoneEcoute && ligneM.zoneEcoute.children.length === 1,
+       'et le bouton est TOUJOURS la apres trois morceaux');
+  // Le texte s accumule dans SON element. Le talon ne lit pas le contenu initial d une
+  // balise, donc le premier morceau lui echappe : c est test_rendu.js, dans un vrai
+  // navigateur, qui verifie le texte entier — et c est precisement cette lacune qui avait
+  // laisse passer le defaut.
+  const lu = ligneM.querySelector('.propos').textContent;
+  dire(/Deuxieme morceau\. Et le troisieme\./.test(lu),
+       'les morceaux s accumulent dans leur propre element : ' + JSON.stringify(lu));
+  dire(!/écouter/.test(lu), 'et le libelle du bouton ne s y recolle pas');
+  // Ce qu on fait prononcer ne doit contenir que le message.
+  dire(!/écouter/.test(texteDeLigne(ligneM)) && /Et le troisieme/.test(texteDeLigne(ligneM)),
+       'ce qu on lit a voix haute est le message, entier et seul');
+
   // ---- la version, toujours visible ---------------------------------------------------------
   titre('version : toujours affichee, et juste');
   const badge = document.getElementById('version');
