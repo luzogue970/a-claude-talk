@@ -264,10 +264,16 @@ async def titrer(question: str, reponse: str) -> str:
         allowed_tools=[],
         thinking=ThinkingConfigDisabled(type="disabled"),
         system_prompt=(
-            "Tu donnes un titre court a une conversation de travail, en français. "
-            "Trois a six mots, sans article inutile, sans guillemets, sans point final. "
-            "Le SUJET, pas une reformulation de la demande : « refonte du parcours "
-            "d'inscription », pas « l'utilisateur demande de refondre ». "
+            "Tu donnes un titre a une conversation de travail, en français. "
+            # DEUX mots, et c'est une contrainte de place, pas de style. Ce titre s'affiche
+            # sur un telephone, a cote du nom du projet et de l'etat de la liaison, sur une
+            # seule ligne — celle qu'on ne veut pas voir deborder. Un titre de six mots y
+            # etait tronque au milieu, ce qui ne dit rien du tout : « refonte du parcours
+            # d'ins... ». Mieux vaut deux mots entiers que six mots coupes.
+            "DEUX mots, trois au maximum. Pas d'article, pas de guillemets, pas de point. "
+            "Le SUJET, reduit a son noyau : « parcours d'inscription », pas « refonte du "
+            "parcours d'inscription » ; « quota Azure », pas « gestion du quota Azure ». "
+            "Le verbe et l'intention sont inutiles : on sait deja qu'on travaille dessus. "
             "Reponds par le titre seul, rien d'autre."),
     ))
     try:
@@ -288,7 +294,48 @@ async def titrer(question: str, reponse: str) -> str:
             await client.disconnect()
         except Exception:
             pass
-    titre = " ".join("".join(morceaux).split())
-    # Un modele qui bavarde malgre la consigne ne doit pas remplir la liste d'un paragraphe.
-    titre = titre.strip(" .\"'«»").split("\n")[0]
-    return titre[:60]
+    return _nettoyer_titre("".join(morceaux))
+
+
+# Les entrees en matiere d'un modele qui repond a cote : il accuse reception au lieu de
+# titrer. Mesure — « Compris. Je vais titrer les conversations… » est sorti tel quel, et se
+# retrouvait dans la liste, tronque au milieu d'un mot.
+# Deux familles, et on ne les traite pas pareil. Le PREAMBULE precede le vrai titre et se
+# retire : « Voici : quota Azure » contient un titre parfait. L'ACCUSE de reception remplace
+# le titre et ne laisse rien : « Compris. Je vais titrer les conversations » n'en contient
+# aucun, et ce qui en serait tire serait faux.
+_PREAMBULE = re.compile(r"^\s*(voici|voil[àa]|titre)\s*[:\-–—]\s*", re.I)
+_ACCUSE = re.compile(
+    r"^\s*(compris|entendu|bien s[ûu]r|d'accord|ok|parfait|tr[èe]s bien|"
+    r"je vais|je propose|j'ai compris)\b", re.I)
+
+
+def _nettoyer_titre(brut: str) -> str:
+    """Le titre, ou rien. Rien vaut mieux qu'une phrase tronquee au milieu d'un mot.
+
+    Un titre est un nom, pas une reponse. On refuse donc ce qui ressemble a une prise de
+    parole, et on coupe sur les MOTS plutot que sur les caracteres : « parcours d'ins… » ne
+    dit rien, « parcours » dit quelque chose. Pas de titre du tout est un cas prevu — la
+    liste retombe sur le nom du projet."""
+    titre = " ".join((brut or "").split())
+    titre = titre.split("\n")[0].strip(" .\"'«»")
+    # Le preambule d'abord : sans ça, decouper sur la ponctuation garderait « Titre : » et
+    # jetterait le titre qui suit.
+    for _ in range(2):
+        apres = _PREAMBULE.sub("", titre).strip(" .\"'«»")
+        if apres == titre:
+            break
+        titre = apres
+    if not titre or _ACCUSE.match(titre):
+        return ""
+    # La premiere phrase seulement : un modele qui developpe met un point.
+    titre = re.split(r"(?<=[.!?:])\s", titre)[0].strip(" .\"'«»")
+    if not titre or _ACCUSE.match(titre):
+        return ""
+    mots = titre.split()
+    # Quatre mots est deja une indulgence sur une consigne qui en demande deux. Au-dela, ce
+    # n'est plus un titre mais une description, et elle ne tiendra pas sur la ligne.
+    if len(mots) > 4:
+        mots = mots[:4]
+    titre = " ".join(mots)
+    return titre[:40]

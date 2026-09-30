@@ -1446,7 +1446,16 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      compteurs) ne se repliaient pas. Chacun devient une rangee qui defile. */
   header { padding: calc(8px + env(safe-area-inset-top)) 12px 8px; gap: 6px 8px;
     background: #0e1116; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  header h1 { font-size: 15px; gap: 6px; min-width: 0; }
+  /* Le titre et l'etat partagent la PREMIERE ligne. L'etat avait la sienne, et une ligne
+     d'en-tete sur un telephone se paie en conversation visible. Le titre est le seul des
+     deux qui puisse retrecir — il a une ellipse pour ça — donc c'est lui qui cede la place,
+     jamais l'etat, qui est court et qu'on doit pouvoir lire en entier. */
+  /* « flex: 1 1 0 » et non « auto » : avec une base automatique, le titre DEMANDE la largeur
+     de son texte, et un en-tete qui se replie prefere passer a la ligne plutot que de
+     rabouter — l'etat se retrouvait dessous des que le sujet s'allongeait. Une base nulle ne
+     demande rien : le titre prend ce qui reste une fois l'etat place, et son ellipse fait le
+     reste. */
+  header h1 { font-size: 15px; gap: 6px; min-width: 0; flex: 1 1 0; order: 0; }
   header h1 .marque { width: 19px; height: 19px; }
   /* La marque dessinee suffit a dire quelle application c'est. Le mot, lui, occupait la
      place du seul texte qui change d'un onglet a l'autre. */
@@ -1454,7 +1463,8 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   #ou { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; font-weight: 600; }
   #retour { width: 40px; height: 40px; font-size: 18px; }
-  #etat { order: 1; font-size: 12px; }
+  #etat { order: 1; font-size: 11.5px; flex: 0 0 auto; max-width: 50%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
   .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px; }
@@ -3784,9 +3794,15 @@ function majConvs() {
   const nom = c ? (c.titre || c.projet || "sans nom") : "nouvelle conversation";
   btnConvs.innerHTML = `<span class="rond"></span><b>${ech(nom)}</b>`
     + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "");
-  // Le meme `nom`, pose au meme instant : deux endroits qui l'affichent, une seule source.
-  // Le recalculer ailleurs aurait fini par donner deux noms differents pour une conversation.
-  ou.textContent = nom;
+  // Sur telephone, le titre repond a deux questions d'un coup : OU suis-je (le projet) et
+  // SUR QUOI (le sujet). Le projet seul ne distingue pas deux conversations ouvertes au meme
+  // endroit ; le sujet seul ne dit pas de quel projet il s'agit quand on en tient trois.
+  // « claude-talk · bouton suivre » repond aux deux en une ligne — et c'est une ligne qu'on
+  // ne veut pas voir deborder, d'ou un sujet tenu a deux ou trois mots par sa generation.
+  const dossier = (c && c.projet) || convDossier || "";
+  const projet = String(dossier).replace(/\/+$/, "").split("/").pop();
+  const sujet = c ? (c.titre || "") : "nouvelle conversation";
+  ou.textContent = [projet, sujet].filter(Boolean).join(" · ") || nom;
   ou.hidden = false;
   ou.title = nom;
   btnConvs.title = c

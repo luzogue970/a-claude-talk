@@ -476,6 +476,28 @@ téléphone, c'est le doigt qui décide, ce réglage ne s'applique à rien. Il r
 écran, où il a tout son sens. Résultat mesuré : **315 px**, dans tous les cas, lecture en
 cours comprise.
 
+**Le titre dit où l'on est, en une ligne.** Sur téléphone, il répond à deux questions d'un
+coup — *où* suis-je et *sur quoi* — et il s'écrit `claude-talk · bouton suivre`. Le projet
+seul ne distingue pas deux conversations ouvertes au même endroit ; le sujet seul ne dit pas
+de quel projet il s'agit quand on en tient trois.
+
+Le sujet est donc tenu court à la source : le modèle qui le génère reçoit une consigne de
+**deux mots, trois au maximum**, et c'est une contrainte de place, pas de style — un titre de
+six mots était tronqué au milieu (« refonte du parcours d'ins… »), ce qui ne dit rien. Mieux
+vaut deux mots entiers. Le nettoyage distingue deux familles de bavardage : un **préambule**
+se retire, parce que « Voici : quota Azure » contient un titre parfait ; un **accusé de
+réception** ne laisse rien, parce que « Compris. Je vais titrer les conversations » n'en
+contient aucun — et pas de titre du tout vaut mieux qu'un faux, la liste retombant sur le nom
+du projet. La coupe se fait sur les mots, jamais au milieu de l'un d'eux.
+
+**L'état de la liaison partage la ligne du titre.** Il avait la sienne, et une ligne
+d'en-tête sur un téléphone se paie en conversation visible — trente pixels. Le titre est le
+seul des deux qui puisse rétrécir, il a une ellipse pour ça : c'est donc lui qui cède la
+place, jamais l'état, qu'on doit pouvoir lire en entier. Le détail qui fait marcher la chose :
+`flex: 1 1 0` et non `auto`. Avec une base automatique, le titre *demande* la largeur de son
+texte, et un en-tête qui se replie préfère passer à la ligne plutôt que de raboter — l'état
+se retrouvait dessous dès que le sujet s'allongeait. Une base nulle ne demande rien.
+
 **Ne jamais laisser parler dans le vide.** Le cas vécu : micro ouvert, on parle trente
 secondes, et on apprend à l'arrêt que la liaison était tombée depuis longtemps. La parole est
 perdue, le temps et l'énergie avec. L'enregistrement ne surveillait rien — il découvrait
