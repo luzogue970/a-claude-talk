@@ -997,7 +997,14 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 #en-attente .quoi{color:var(--voix);white-space:nowrap;flex:none}
 #cogitation .marque{color:var(--pensee)}
-#mot{font-weight:600;letter-spacing:.01em}
+/* La mesure devant, le mot derriere. La hierarchie visuelle DIT lequel des deux informe. */
+#cogite-mesure{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;
+  color:var(--texte)}
+#cogite-mesure.attente{color:var(--faible)}
+#cogite-mesure.recu{color:var(--voix)}
+#mot{font-weight:400;letter-spacing:.01em;font-size:10.5px;color:#5a636e;opacity:.75;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+@media (max-width: 420px){ #mot{display:none} }
 .points i{font-style:normal;animation:clignote 1.4s ease-in-out infinite}
 .points i:nth-child(2){animation-delay:.18s}
 .points i:nth-child(3){animation-delay:.36s}
@@ -1653,8 +1660,17 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
        qu'avec des textes assez longs — donc au pire moment. Empilés, ils ne peuvent plus se
        recouvrir quelle que soit leur taille. -->
   <div id="pile-barre">
+    <!-- Ce bandeau disait « Synaptisage », « Tergiversation », « Décorticage » : des mots
+         tirés au sort toutes les deux secondes et demie, sans le moindre rapport avec ce qui
+         se passait. Ils avaient l'apparence d'une information — on les lisait comme un état
+         — et c'est pire que rien : on croit savoir. Ce qui compte tient désormais la
+         première place, et c'est mesuré : le message est-il ARRIVÉ chez Claude, depuis
+         combien de temps travaille-t-il, et combien de jetons ça consomme. Le mot reste,
+         minuscule et en retrait, parce qu'il fait une jolie preuve de vie animée — mais il
+         ne prétend plus rien dire. -->
     <div id="cogitation" hidden>
       <span class="spin"></span>
+      <span id="cogite-mesure">envoyé…</span>
       <span id="mot"></span><span class="points"><i>.</i><i>.</i><i>.</i></span>
     </div>
     <div id="en-attente" hidden></div>
@@ -2614,22 +2630,63 @@ function motSuivant() {
 
 const zoneCogite = document.getElementById("cogitation");
 const zoneMot = document.getElementById("mot");
-let rouleau = null;
+let rouleau = null, battementMesure = null;
 
 // Visible tant que quelque chose tourne vraiment : un tour de travail en cours, ou une
 // action non résolue. Le minuteur ne vit que pendant ce temps — laisser tourner un
 // setInterval sur une page au repos, c'est ce qui avait fini par coûter 1,5 Go de mémoire.
+// Ce que le tour a consomme, tel que le serveur le mesure. Remis a zero au DEBUT d'un tour
+// et pas a sa fin : le bilan reste lisible apres coup, et le tour suivant repart proprement.
+let jetonsTour = 0, echangesTour = 0, recuParClaude = false;
+
+function motDesJetons(n) {
+  if (!n) return "";
+  return n < 10000 ? `${n} jetons`
+       : `${(n / 1000).toFixed(n < 100000 ? 1 : 0).replace(".", ",")} k jetons`;
+}
+
+// La ligne qui remplace les mots tires au sort. Trois etats, et chacun repond a une question
+// qu'on se pose vraiment en regardant l'ecran.
+function majMesureCogitation() {
+  const el = document.getElementById("cogite-mesure");
+  if (!el) return;
+  const s = debutTravail != null ? Math.round((Date.now() - debutTravail) / 1000) : 0;
+  const duree = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  // Avant toute reponse de l'API : le message est parti, on attend. C'est le trou que rien
+  // ne comblait, et pendant lequel on se demandait si quelque chose etait parti du tout.
+  if (!recuParClaude) {
+    el.textContent = debutTravail != null ? `envoyé · ${duree}` : "envoyé…";
+    el.className = "attente";
+    return;
+  }
+  const bouts = [duree];
+  if (jetonsTour) bouts.push(motDesJetons(jetonsTour));
+  // Le nombre d'allers-retours du modele : c'est lui qui explique un tour long sans texte a
+  // l'ecran — Claude lit, appelle un outil, relit. Au-dela de un, il vaut d'etre dit.
+  if (echangesTour > 1) bouts.push(`${echangesTour} échanges`);
+  el.textContent = bouts.join(" · ");
+  el.className = "recu";
+}
+
 function majCogitation() {
   // Liaison coupee : on ne peut rien affirmer, donc on n'affirme rien. Le bandeau ne dit que
   // « la machine est vivante » — c'est precisement l'information qu'on a perdue.
   const occupe = !liaisonPerdue && (debutTravail != null || encours.size > 0);
   if (occupe && rouleau == null) {
     zoneMot.textContent = motSuivant();
+    majMesureCogitation();
     zoneCogite.hidden = false;
-    rouleau = setInterval(() => { zoneMot.textContent = motSuivant(); }, 2600);
+    // La mesure bat a la seconde, le mot toutes les deux secondes et demie : l'un informe,
+    // l'autre occupe l'oeil.
+    rouleau = setInterval(() => {
+      zoneMot.textContent = motSuivant();
+    }, 2600);
+    battementMesure = setInterval(majMesureCogitation, 1000);
   } else if (!occupe && rouleau != null) {
     clearInterval(rouleau);
+    clearInterval(battementMesure);
     rouleau = null;
+    battementMesure = null;
     zoneCogite.hidden = true;
   }
 }
@@ -3418,6 +3475,9 @@ function recevoir(e, etat = false) {
       majMicro();
     }
     if (e.genre === "travail") {
+      // Un tour qui s'ouvre repart a zero : le compteur du tour precedent n'a plus cours, et
+      // « reçu » doit redevenir faux, sinon le tour suivant naitrait deja confirme.
+      if (e.actif && debutTravail == null) { jetonsTour = 0; echangesTour = 0; recuParClaude = false; }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
       if (e.actif && !minuteur) minuteur = setInterval(majTravail, 1000);
@@ -3469,6 +3529,15 @@ function recevoir(e, etat = false) {
       histoAjouter(e.texte || "");
       viderDictee();
       noteBarre(null);
+    }
+    // Les jetons du tour, mesures par le serveur. `recu` est le premier signe que l'API a
+    // repondu : c'est LA reponse a « est-ce que mon message est arrive ? ».
+    if (e.genre === "jetons") {
+      jetonsTour = Number(e.total) || 0;
+      echangesTour = Number(e.echanges) || 0;
+      if (e.recu) recuParClaude = true;
+      majMesureCogitation();
+      return;
     }
     if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }
     if (e.genre === "ecoute") {

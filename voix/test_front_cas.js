@@ -1545,6 +1545,46 @@ dire(!diagLa(), 'la reconnexion la fait disparaitre');
 dire(coupeDepuis === 0, 'et remet l horloge de coupure a zero');
 echecs = 0;
 
+// ---- ce que le bandeau raconte : des chiffres, pas des mots -------------------------------
+titre('cogitation : mesurer plutot que meubler');
+const mesure = document.getElementById('cogite-mesure');
+const motDeco = document.getElementById('mot');
+toutClore('remise a zero');
+emettre({ genre: 'travail', actif: false });
+
+// 1. Le message part. Entre cet instant et la premiere reponse de l API, il n y avait
+//    RIEN — et c est precisement la qu on se demande si quelque chose est parti.
+emettre({ genre: 'travail', actif: true });
+dire(!document.getElementById('cogitation').hidden, 'le bandeau s ouvre des que le tour commence');
+dire(/envoyé/.test(mesure.textContent), 'et il dit « envoyé » tant que Claude n a pas repondu : ' + mesure.textContent);
+dire(mesure.className === 'attente', 'dans le ton de l attente, pas de la confirmation');
+
+// 2. L API repond : « message_start » est la PREUVE que le message est arrive.
+emettre({ genre: 'jetons', total: 24000, entree: 24000, sortie: 0, echanges: 1, recu: true });
+dire(/reçu|jetons/.test(mesure.textContent) && mesure.className === 'recu',
+     'la premiere reponse de l API bascule le bandeau en « reçu » : ' + mesure.textContent);
+dire(/24,0 k jetons/.test(mesure.textContent), 'avec les jetons REELS, lisibles : ' + mesure.textContent);
+
+// 3. Ça consomme, et ça se voit monter.
+emettre({ genre: 'jetons', total: 31500, entree: 24000, sortie: 7500, echanges: 3 });
+dire(/31,5 k jetons/.test(mesure.textContent), 'le compteur suit la consommation : ' + mesure.textContent);
+dire(/3 échanges/.test(mesure.textContent),
+     'et le nombre d allers-retours explique un tour long et muet : ' + mesure.textContent);
+
+// 4. Les mots tires au sort existent encore, mais ils ne pretendent plus informer.
+dire(motDeco.textContent.length > 0, 'le mot decoratif est toujours la');
+const styleMot = document.getElementById('mot');
+dire(styleMot !== mesure, 'mais il est distinct de la mesure, qui tient la premiere place');
+
+// 5. Un tour qui se termine puis un autre qui commence : le compteur repart de zero, et
+//    « reçu » redevient faux — sinon le tour suivant naitrait deja confirme.
+emettre({ genre: 'travail', actif: false });
+emettre({ genre: 'travail', actif: true });
+dire(/envoyé/.test(mesure.textContent) && mesure.className === 'attente',
+     'le tour suivant repart en attente : ' + mesure.textContent);
+emettre({ genre: 'travail', actif: false });
+toutClore('fin du cas');
+
 // ---- une commande qui ne part pas doit le dire -------------------------------------------
 titre('liaison morte : un appui ne doit pas disparaitre en silence');
 const sockAvant = socket;

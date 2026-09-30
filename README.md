@@ -425,6 +425,26 @@ L'enquête a aussi levé un défaut sans rapport : la **dictée retenue** était
 revenait remplir la barre à la reconnexion. C'est un *état* : seule la dernière compte, et
 elle est vide une fois consommée.
 
+**« Est-ce que mon message est parti ? »** Entre l'envoi et la première pensée affichée, il
+peut s'écouler plusieurs secondes de silence complet — et rien n'y distinguait « ça monte »
+de « c'est perdu ». Le bandeau au-dessus de la barre répond maintenant, et il le fait avec
+des chiffres mesurés : « envoyé · 3 s » tant que l'API n'a pas répondu, puis « 12 s · 58,8 k
+jetons · 3 échanges » dès qu'elle répond. Le basculement n'est pas cosmétique : il vient de
+`message_start`, le premier événement que l'API émet sur un tour, donc la **preuve** que le
+message est arrivé. Mesuré en session réelle, il tombe moins d'une seconde après l'envoi.
+
+Les jetons sont cumulés sur le tour — `message_delta` clôt chaque réponse du modèle et porte
+sa consommation réelle, un tour avec des outils en enchaîne plusieurs — et jamais estimés. Le
+nombre d'allers-retours est dit aussi : c'est lui qui explique un tour long et muet, où Claude
+lit, appelle un outil, relit.
+
+Ce bandeau affichait jusqu'ici « Synaptisage », « Tergiversation », « Décorticage » : des mots
+tirés au sort toutes les deux secondes et demie, sans le moindre rapport avec ce qui se
+passait. Ils avaient l'**apparence** d'une information — on les lisait comme un état — et
+c'est pire que rien, puisqu'on croit savoir. Le mot reste, minuscule et en retrait, parce
+qu'il fait une preuve de vie animée ; il ne tient plus la place de ce qui informe, et
+disparaît complètement sur écran étroit.
+
 **Depuis le téléphone : l'adresse compte.** Le micro n'existe qu'en HTTPS — en HTTP, Safari
 retire `mediaDevices` tout entier, sans erreur, et rien de ce qui précède ne peut marcher.
 L'adresse à ouvrir, et à mettre sur l'écran d'accueil, est celle du socle **par son nom

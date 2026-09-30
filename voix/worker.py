@@ -175,6 +175,12 @@ class Journal:
     cout_usd: float | None = None
     duree_s: float | None = None
     jetons: int | None = None
+    # Le detail, cumule au fil du tour et publie en direct. `jetons` reste le total que le
+    # SDK donne a la fin, qui fait foi pour le bilan ; ceux-ci servent a MONTRER que ça
+    # avance pendant que ça avance.
+    jetons_entree: int = 0
+    jetons_sortie: int = 0
+    echanges: int = 0          # combien de fois le modele a repris la parole dans ce tour
     # --- comment le tour s'est termine -------------------------------------------------
     # Le SDK le DIT, dans le message de resultat, et on le jetait : seuls le cout, la duree
     # et les jetons etaient lus. Un tour coupe a la limite de tours, arrete par une erreur
@@ -531,7 +537,35 @@ class Worker:
 
     def _delta(self, message: StreamEvent):
         event = message.event if isinstance(message.event, dict) else {}
-        if event.get("type") != "content_block_delta":
+        genre = event.get("type")
+
+        # Les jetons, au fil du tour. Deux evenements les portent, et ils ne disent pas la
+        # meme chose :
+        #
+        # « message_start » ouvre CHAQUE reponse du modele — et c'est la premiere preuve
+        # qu'un message est arrive chez Claude. Jusqu'ici, entre l'envoi et la premiere
+        # pensee affichee, il pouvait s'ecouler plusieurs secondes de silence total pendant
+        # lesquelles rien ne distinguait « ça monte » de « c'est perdu ».
+        #
+        # « message_delta » clot la reponse et porte sa consommation reelle. Un tour avec des
+        # outils en enchaine plusieurs : on CUMULE, sinon le compteur repartirait de zero a
+        # chaque aller-retour.
+        if genre == "message_start":
+            usage = (event.get("message") or {}).get("usage") or {}
+            self.journal.jetons_entree += (
+                int(usage.get("input_tokens") or 0)
+                + int(usage.get("cache_read_input_tokens") or 0)
+                + int(usage.get("cache_creation_input_tokens") or 0))
+            self.journal.echanges += 1
+            self._publier_jetons(recu=True)
+            return
+        if genre == "message_delta":
+            usage = event.get("usage") or {}
+            self.journal.jetons_sortie += int(usage.get("output_tokens") or 0)
+            self._publier_jetons()
+            return
+
+        if genre != "content_block_delta":
             return
         delta = event.get("delta") or {}
         # Un delta vide n'apporte rien et coute une place dans la memoire de la page : mesure
@@ -544,6 +578,19 @@ class Worker:
             bout = delta.get("text") or ""
             if bout:
                 self._voir("texte", texte=bout, suite=True)
+
+    def _publier_jetons(self, recu: bool = False):
+        """Ce que le tour a consomme jusqu'ici. Des chiffres mesures, jamais estimes.
+
+        `recu` marque le tout premier signe de vie de l'API sur ce tour : la page s'en sert
+        pour remplacer « envoyé » par « reçu », ce qui est la question qu'on se pose en
+        regardant l'ecran apres avoir parle."""
+        self._voir("jetons",
+                   entree=self.journal.jetons_entree,
+                   sortie=self.journal.jetons_sortie,
+                   total=self.journal.jetons_entree + self.journal.jetons_sortie,
+                   echanges=self.journal.echanges,
+                   recu=recu or None)
 
     async def envoyer(self, texte: str):
         """Queued server-side if a turn is already running, so he can speak mid-work."""

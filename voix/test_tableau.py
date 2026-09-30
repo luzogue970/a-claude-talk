@@ -751,6 +751,12 @@ def tout_genre_affiche_a_un_filtre():
         # changement de conversation. Il n'est deliberement pas dans ETATS non plus — le
         # rejouer a la reconnexion effacerait ce qu'on vient de recharger.
         "vider",
+        # « jetons » est une MESURE du tour en cours, publiee plusieurs fois par tour et lue
+        # par le seul bandeau au-dessus de la barre. En faire des lignes de flux noierait la
+        # conversation sous des chiffres, et le bilan de fin de tour dit deja le total. Hors
+        # d'ETATS volontairement : un compteur rejoue a la reconnexion afficherait la
+        # consommation d'un tour termine comme si elle etait en cours.
+        "jetons",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
