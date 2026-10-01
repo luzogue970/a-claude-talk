@@ -2067,8 +2067,15 @@ async function testerRelaisVocal() {
   // et c est ce que la version precedente ne faisait jamais.
   microDemandes = 0; microAccorde = true; enregistreurs.length = 0; requetes.length = 0;
   noteBarre(null); champ.value = '';
-  btnDicter.onclick(); await tick();
+  DELAI_SESSION_AUDIO = 0;        // l ordre se verifie, le repit ne se dort pas
+  lecteur.src = 'https://exemple/une-reponse.mp3';   // une lecture tenait la session audio
+  // `pause()` et pas `tick()` : l ouverture du micro attend desormais que la session audio
+  // d iOS soit rendue avant de la reclamer. Sans ce repit, le micro ouvert par-dessus une
+  // lecture rend un flux parfaitement valide et parfaitement MUET.
+  btnDicter.onclick(); await pause();
   dire(microDemandes === 1, 'un appui reclame le micro pour de vrai');
+  dire(lecteur.src === '', 'et la lecture a rendu la session audio AVANT le micro : '
+       + 'sinon, sur iOS, le micro capte du silence sans rien signaler');
   dire(enregistreurs.length === 1 && enregistreurs[0].etat === 'recording', 'et l enregistrement demarre');
   dire(btnDicter.getAttribute('aria-pressed') === 'true', 'le bouton le montre');
   dire(/j.écoute/.test(document.getElementById('note-barre').textContent || ''),
@@ -2095,15 +2102,77 @@ async function testerRelaisVocal() {
   dire(!document.getElementById('compte').hidden, 'et le decompte avant envoi s arme, comme au PC');
   arreterCompte(); fermerDictee(null); champ.value = '';
 
-  // Le PC n a rien compris : on le dit, et le bouton ne reste pas bloque.
+  // Le PC a REPONDU qu il n a rien compris. Ce n est pas une panne de liaison : le renvoyer
+  // donnerait exactement le meme verdict. On ne le garde donc pas — et surtout le micro reste
+  // LIBRE. Garde, il mettait le bouton en mode « renvoyer » : l appui suivant relancait le
+  // vieux vocal au lieu d en commencer un neuf, donc on croyait enregistrer et rien ne
+  // partait. C est le symptome exact qu on a vu a l ecran.
   reponseAudio = { ok: false, status: 422, corps: { erreur: 'rien compris dans l enregistrement' } };
   requetes.length = 0; noteBarre(null);
-  btnDicter.onclick(); await tick();
+  btnDicter.onclick(); await pause();
   btnDicter.onclick(); await pause();
   dire(/rien compris/.test(document.getElementById('note-barre').textContent || ''),
        'un echec de transcription se lit dans la barre : ' + document.getElementById('note-barre').textContent);
   dire(!btnDicter.classList.contains('envoi'), 'et le bouton n est pas reste en « envoi »');
-  dire(!!vocalEnAttente, 'et l enregistrement est garde plutot que jete');
+  dire(!vocalEnAttente && !btnDicter.classList.contains('garde'),
+       'un refus DEFINITIF ne garde rien : le micro est libre pour un nouvel enregistrement');
+  dire(/recommencer/.test(document.getElementById('note-barre').textContent || ''),
+       'et la barre nomme le geste suivant : ' + document.getElementById('note-barre').textContent);
+
+  // LE defaut que l'utilisateur voit : le micro est la, il enregistre, et il ne capte RIEN.
+  // iOS n'a qu'une session audio par page — tant qu'une lecture la tient, le micro ouvert
+  // par-dessus rend un flux valide et muet, sans la moindre erreur. On parlait trente
+  // secondes et le PC repondait « rien compris ». Maintenant on ECOUTE ce qu'on enregistre.
+  reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
+  requetes.length = 0; noteBarre(null); vibrations.length = 0;
+  niveauMicro = 0;                       // le micro ne rend que du silence numerique
+  DELAI_NIVEAU_MS = 5; MESURES_MIN = 3; DELAI_SILENCE_MS = 40;
+  btnDicter.onclick(); await pause();
+  await new Promise(r => setTimeout(r, 90));
+  dire(/ne capte rien/.test(document.getElementById('note-barre').textContent || ''),
+       'on est prevenu PENDANT qu on parle, pas apres : '
+       + document.getElementById('note-barre').textContent);
+  dire(vibrations.length > 0, 'et autrement que par un texte : on ne regarde pas l ecran');
+  btnDicter.onclick(); await pause();
+  dire(requetes.length === 0,
+       'un enregistrement entierement muet ne part pas : le PC repondrait « rien compris »');
+  dire(/rien n.a été capté/.test(document.getElementById('note-barre').textContent || ''),
+       'et la cause est nommee : ' + document.getElementById('note-barre').textContent);
+  dire(!vocalEnAttente, 'rien n est garde : le renvoyer donnerait le meme silence');
+
+  // Mais on ne jette RIEN sur une presomption : trop peu de mesures, on envoie quand meme.
+  requetes.length = 0; noteBarre(null);
+  DELAI_NIVEAU_MS = 5000; MESURES_MIN = 5;      // aucune mesure n aura le temps de tomber
+  btnDicter.onclick(); await pause();
+  btnDicter.onclick(); await pause();
+  dire(requetes.length === 1,
+       'un enregistrement trop court pour avoir ete observe part quand meme : on ne jette '
+       + 'pas de la parole sur une presomption');
+  niveauMicro = 40; DELAI_NIVEAU_MS = 100; MESURES_MIN = 5; DELAI_SILENCE_MS = 3000;
+
+  // Le micro deja pris par une autre application : la piste existe mais elle est muette.
+  // Le dire AVANT de laisser parler vaut mieux que de le decouvrir a l arrivee.
+  microMuet = true; noteBarre(null); requetes.length = 0;
+  btnDicter.onclick(); await pause();
+  microMuet = false;
+  dire(/occupé par une autre application/.test(document.getElementById('note-barre').textContent || ''),
+       'un micro deja muet est refuse tout de suite : '
+       + document.getElementById('note-barre').textContent);
+  dire(btnDicter.getAttribute('aria-pressed') === 'false',
+       'et aucun enregistrement ne demarre pour rien');
+
+  // Une coupure de TRANSPORT, elle, garde tout : quelqu un vient de parler, et reperdre ça
+  // parce que le reseau a hoquete serait le pire service a lui rendre.
+  reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
+  audioEchoue = true; noteBarre(null);
+  btnDicter.onclick(); await pause();
+  btnDicter.onclick(); await pause();
+  audioEchoue = false;
+  dire(!!vocalEnAttente && btnDicter.classList.contains('garde'),
+       'un reseau qui lache garde l enregistrement, lui, et le bouton le porte');
+  dire(/GARDÉ/.test(document.getElementById('note-barre').textContent || ''),
+       'et le dit : ' + document.getElementById('note-barre').textContent);
+  vocalEnAttente = null; majBoutonDictee();
   vocalEnAttente = null; majBoutonDictee();   // le cas suivant part d une ardoise propre
   reponseAudio = { ok: true, status: 200, corps: { texte: 'ok' } };
 

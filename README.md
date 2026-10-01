@@ -405,6 +405,37 @@ y prennent leur session HTTP, et une requête arrivant par la route web n'en hé
 forcément. Vérifié contre Deepgram dans le pire cas — serveur démarré depuis un contexte
 vide — le piège est réel hors contexte et disparaît dedans.
 
+**Le micro qui enregistre du silence, et comment on l'apprend maintenant.** C'était le défaut
+le plus coûteux du relais vocal : on appuie, on parle trente secondes, et le PC répond « rien
+compris ». La cause est une particularité d'iOS — **une seule session audio par page**. Tant
+qu'un élément `<audio>` tient cette session en lecture, le micro ouvert par-dessus rend un
+flux parfaitement valide et parfaitement **muet**. Rien n'est signalé : l'enregistrement se
+déroule, le fichier a la bonne taille. Autrement dit, écouter une réponse puis dicter —
+l'enchaînement le plus naturel de l'application — suffisait à perdre la phrase suivante.
+
+Trois corrections, et elles se complètent :
+
+- **La lecture rend la session audio AVANT qu'on demande le micro.** L'intention était déjà
+  écrite, mais la coupure venait *après* `getUserMedia`, donc après le moment où elle servait.
+  On vide aussi la source de l'élément : une simple pause garde la session en catégorie
+  lecture. Puis une image de répit, parce qu'iOS la rend de façon asynchrone.
+- **On écoute ce qu'on enregistre, pendant qu'on l'enregistre.** Un micro mort rend exactement
+  le point milieu, échantillon après échantillon : une mesure d'amplitude toutes les 100 ms
+  suffit à le voir. Passé trois secondes sans rien, la page le dit **et vibre** — on est en
+  train de parler, donc on ne regarde pas l'écran. Un enregistrement muet d'un bout à l'autre
+  ne part même pas : le PC répondrait « rien compris » sans dire quoi faire. Mais rien n'est
+  jeté sur une présomption : sans au moins une demi-seconde d'observation, on envoie quand
+  même. Et un micro rendu **déjà muet** par le système — une autre application le tient — est
+  refusé tout de suite, avant de laisser parler pour rien.
+- **Un refus du serveur n'est plus traité comme une coupure réseau.** « Rien compris »,
+  « trop court », « illisible » sont des verdicts : le renvoyer donnerait exactement le même.
+  La page gardait pourtant l'enregistrement en promettant qu'« il repartira à la
+  reconnexion » — un mensonge, et pire, le bouton micro passait en mode *renvoyer* : l'appui
+  suivant relançait le vieux vocal au lieu d'en commencer un neuf. On croyait enregistrer, et
+  rien ne partait. Les codes 400, 413, 415 et 422 sont donc définitifs : rien n'est gardé, le
+  micro reste libre, et la barre nomme le geste suivant. Une vraie coupure de transport, elle,
+  garde tout — quelqu'un vient de parler.
+
 **Une action dit ce qu'elle fait, pas par quel mot elle commence.** Le flux affichait
 « Bash cd », « Grep def », « Bash cd » : on voyait que ça travaillait, jamais sur quoi — et le
 bilan parlé du tour disait la même chose à voix haute. Deux causes, et la seconde explique la

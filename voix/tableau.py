@@ -4551,6 +4551,24 @@ function arreterAudio() {
   if (lecteurFin) { const f = lecteurFin; lecteurFin = null; f("coupe"); }
 }
 
+// Rendre la session audio du systeme, pas seulement mettre la lecture en pause.
+//
+// Un element <audio> en pause avec une source chargee garde la session d'iOS en categorie
+// « lecture ». Le micro ouvert par-dessus rend alors un flux silencieux, sans la moindre
+// erreur. On vide donc la source pour de bon. Le DEBLOCAGE, lui, survit : l'autorisation de
+// jouer accordee a cet element dans un geste utilisateur ne se perd pas quand on vide `src`.
+function libererSessionAudio() {
+  if (!lecteur) return;
+  try { lecteur.onended = null; lecteur.onerror = null; lecteur.pause(); } catch (_) {}
+  // Les deux formes : `src = ""` marche partout, `removeAttribute` est ce que Safari veut
+  // vraiment pour rendre la session. Chacune dans son try : la premiere ne doit pas emporter
+  // la seconde si l'element n'en veut pas.
+  try { lecteur.src = ""; } catch (_) {}
+  try { lecteur.removeAttribute("src"); } catch (_) {}
+  try { if (lecteur.load) lecteur.load(); } catch (_) {}
+  try { speechSynthesis.cancel(); } catch (_) {}
+}
+
 // Joue une adresse dans l'element debloque. Rend "ok" a la fin, "erreur" si l'element ou le
 // reseau refusent, "coupe" si quelqu'un a arrete entre-temps.
 function jouer(src) {
@@ -4695,6 +4713,8 @@ const peutEnregistrerIci = !!(navigator.mediaDevices && navigator.mediaDevices.g
 const VOCAL_MAX_MS = 90000;
 let enregistreur = null, fluxMicro = null, morceauxAudio = [], minuterieVocal = null;
 let vocalEnCours = false, vocalEnvoi = false, veilleLiaisonVocal = null;
+let debutVocal = 0;   // quand l'enregistrement en cours a commence
+let DELAI_SESSION_AUDIO = 60;   // le repit laisse a iOS pour rendre sa session audio
 // L'enregistrement qui n'a pas pu partir. Il est GARDE : quelqu'un vient de parler trente
 // secondes, et jeter ça parce que le reseau a hoquete est la pire chose que cette page
 // puisse faire. Il repart tout seul au retour de la liaison.
@@ -4755,9 +4775,119 @@ function libererMicro() {
   enregistreur = null;
   clearTimeout(minuterieVocal);
   minuterieVocal = null;
+  arreterMesureNiveau();
+}
+
+// --- entendre qu'on n'entend rien ---------------------------------------------------------
+//
+// Le defaut qu'on repare : un micro peut rendre un flux parfaitement valide et parfaitement
+// MUET — session audio prise par la lecture, micro saisi par une autre application, page
+// revenue de veille. Rien ne le signale : l'enregistrement se deroule, le fichier a la bonne
+// taille, et c'est le PC qui annonce « rien compris » une fois la phrase finie. On parle
+// trente secondes pour rien, et on l'apprend trop tard.
+//
+// On ecoute donc ce qu'on enregistre, pendant qu'on l'enregistre. Une mesure d'amplitude
+// suffit : un micro mort rend exactement le point milieu, echantillon apres echantillon.
+let ctxNiveau = null, analyseurNiveau = null, tamponNiveau = null;
+let niveauVu = 0;             // l'amplitude maximale observee depuis le debut
+let silencePrevenu = false;
+// Sait-on mesurer, sur CET appareil ? Sans la reponse, un navigateur sans AudioContext
+// verrait tous ses enregistrements declares muets : l'absence de mesure n'est pas un silence.
+let mesureNiveauDispo = false;
+// Combien de mesures on a reellement prises. Sans ce compte, un enregistrement trop court
+// pour avoir ete observe passerait pour muet et serait jete — on jetterait de la parole sur
+// une presomption, ce qui est exactement ce qu'on cherche a ne plus faire.
+let mesuresNiveau = 0;
+let minuterieNiveau = null;
+// Cent millisecondes : assez fin pour attraper une syllabe, assez large pour ne rien couter.
+let DELAI_NIVEAU_MS = 100;
+// Une demi-seconde d'observation avant d'oser conclure au silence.
+let MESURES_MIN = 5;
+// 3 : au-dessus du bruit de fond numerique, bien en dessous d'un souffle. Mesure sur un micro
+// de telephone, parler meme tout bas depasse 15.
+let SEUIL_NIVEAU = 3;
+// 3 s : le temps de poser sa voix. Prevenir au bout d'une seconde se declencherait sur
+// quelqu'un qui reflechit avant de parler, ce qui est le cas le plus normal du monde.
+let DELAI_SILENCE_MS = 3000;
+
+function demarrerMesureNiveau(flux) {
+  niveauVu = 0;
+  mesuresNiveau = 0;
+  silencePrevenu = false;
+  mesureNiveauDispo = false;
+  const AC = (typeof AudioContext === "function" && AudioContext)
+          || (typeof webkitAudioContext === "function" && webkitAudioContext);
+  if (!AC) return;                       // pas de mesure possible : on n'empeche rien
+  try {
+    ctxNiveau = new AC();
+    if (ctxNiveau.resume) ctxNiveau.resume();
+    analyseurNiveau = ctxNiveau.createAnalyser();
+    analyseurNiveau.fftSize = 512;
+    tamponNiveau = new Uint8Array(analyseurNiveau.fftSize);
+    ctxNiveau.createMediaStreamSource(flux).connect(analyseurNiveau);
+    mesureNiveauDispo = true;
+    // Un intervalle a part, et plus serre que la veille de liaison : la question « est-ce
+    // que ça entre » se pose en continu, pas toutes les demi-secondes.
+    clearInterval(minuterieNiveau);
+    minuterieNiveau = setInterval(surveillerNiveau, DELAI_NIVEAU_MS);
+  } catch (_) { arreterMesureNiveau(); mesureNiveauDispo = false; }
+}
+
+function arreterMesureNiveau() {
+  clearInterval(minuterieNiveau);
+  minuterieNiveau = null;
+  if (ctxNiveau) { try { ctxNiveau.close(); } catch (_) {} }
+  ctxNiveau = null; analyseurNiveau = null; tamponNiveau = null;
+}
+
+// A-t-on observe assez longtemps pour affirmer que rien n'est entre ?
+function micromuet() {
+  return mesureNiveauDispo && mesuresNiveau >= MESURES_MIN && niveauVu < SEUIL_NIVEAU;
+}
+
+// Mesurer, et le DIRE pendant qu'il est encore temps d'agir. On ne coupe pas — quelqu'un peut
+// parler bas, ou n'avoir pas encore commence — mais se taire pendant qu'une phrase se perd
+// est precisement ce qu'on reproche a la version precedente.
+function surveillerNiveau() {
+  niveauInstantane();
+  if (!vocalEnCours || silencePrevenu) return;
+  if (!micromuet() || Date.now() - debutVocal <= DELAI_SILENCE_MS) return;
+  silencePrevenu = true;
+  alerterFort();
+  noteBarre("le micro ne capte rien — vérifie qu'aucune autre application ne l'utilise, "
+            + "appuie pour arrêter et réessayer", true);
+}
+
+// L'amplitude du dernier instant, 0 si on ne sait pas mesurer.
+function niveauInstantane() {
+  if (!analyseurNiveau || !tamponNiveau) return 0;
+  try { analyseurNiveau.getByteTimeDomainData(tamponNiveau); } catch (_) { return 0; }
+  let pic = 0;
+  for (let i = 0; i < tamponNiveau.length; i++) {
+    const ecart = Math.abs(tamponNiveau[i] - 128);
+    if (ecart > pic) pic = ecart;
+  }
+  mesuresNiveau++;
+  if (pic > niveauVu) niveauVu = pic;
+  return pic;
 }
 
 async function demarrerVocal() {
+  // La lecture s'arrete AVANT qu'on demande le micro, et c'est tout sauf un detail d'ordre.
+  //
+  // iOS n'a qu'UNE session audio par page. Tant qu'un element <audio> tient la session en
+  // lecture, le micro qu'on ouvre par-dessus rend un flux valide... et SILENCIEUX. Le
+  // navigateur ne signale rien : l'enregistrement se deroule normalement, le fichier a la
+  // bonne taille, et c'est le PC qui annonce « rien compris » trente secondes plus tard.
+  // L'intention etait deja ecrite ici — mais la coupure venait APRES getUserMedia, donc
+  // apres le moment ou elle servait. Ecouter une reponse puis dicter suffisait a perdre la
+  // phrase, ce qui est exactement l'enchainement le plus naturel de l'application.
+  couperLectureLocale();
+  libererSessionAudio();
+  // Une image de repit : iOS rend la session audio de facon asynchrone, et demander le micro
+  // dans la foulee immediate retombe parfois sur l'ancienne categorie. `let`, comme les
+  // autres delais de ce fichier : un test ne doit pas avoir a dormir pour verifier l'ordre.
+  await new Promise(r => setTimeout(r, DELAI_SESSION_AUDIO));
   let flux;
   try {
     // C'est CET appel qui fait apparaitre la demande d'autorisation. Et s'il est refuse, on
@@ -4772,9 +4902,17 @@ async function demarrerVocal() {
   }
   fluxMicro = flux;
   morceauxAudio = [];
-  // Une lecture Azure en cours et un micro qui s'ouvre se disputent la session audio d'iOS :
-  // le micro pouvait capter du silence. On coupe la lecture d'abord.
-  couperLectureLocale();
+  // Une piste deja muette ou finie ne donnera jamais de son : c'est l'etat dans lequel iOS
+  // rend le micro quand une autre application l'a pris, ou quand la page revient de veille.
+  // Le dire MAINTENANT vaut mieux que de laisser parler pour rien.
+  const pistes = (flux.getAudioTracks && flux.getAudioTracks()) || [];
+  if (pistes.length && pistes.every(t => t.muted || t.readyState === "ended")) {
+    libererMicro();
+    alerterFort();
+    noteBarre("le micro est occupé par une autre application — ferme-la, ou coupe la lecture "
+              + "en cours, puis réessaie", true);
+    return;
+  }
   const mime = mimeVocal();
   try {
     enregistreur = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
@@ -4787,10 +4925,24 @@ async function demarrerVocal() {
   enregistreur.onstop = () => {
     const type = (enregistreur && enregistreur.mimeType) || mime || "audio/webm";
     const blob = new Blob(morceauxAudio, { type });
+    // Une derniere mesure AVANT de fermer le contexte : sur un enregistrement court, c'est
+    // peut-etre la seule qu'on aura eue.
+    niveauInstantane();
+    const muetMesure = micromuet();
     libererMicro();
     vocalEnCours = false;
     majBoutonDictee();
     if (!blob.size) { noteBarre("enregistrement vide — rien n'a été capté", true); return; }
+    // Silencieux d'un bout a l'autre : inutile de l'envoyer. Le PC repondrait « rien compris »
+    // apres plusieurs secondes de transcription, et ce message-la ne dit pas quoi faire. On
+    // nomme la cause ici, tout de suite, et la parole n'est pas gardee pour une reconnexion
+    // qui ne changerait rien.
+    if (muetMesure) {
+      alerterFort();
+      noteBarre("rien n'a été capté : le micro est resté muet pendant tout l'enregistrement. "
+                + "Une autre application le tenait peut-être — réessaie", true);
+      return;
+    }
     envoyerVocal(blob, type);
   };
   enregistreur.onerror = ev => {
@@ -4801,6 +4953,8 @@ async function demarrerVocal() {
   // tout arrivait en un seul bloc a l'arret. Et ça dit, seconde apres seconde, que ça
   // enregistre vraiment.
   enregistreur.start(1000);
+  demarrerMesureNiveau(flux);
+  debutVocal = Date.now();
   vocalEnCours = true;
   majBoutonDictee();
   noteBarre("j'écoute (" + (enregistreur.mimeType || mime || "format par défaut")
@@ -4897,7 +5051,17 @@ async function envoyerVocal(blob, type) {
                       + "puis réessaie");
     }
     const d = await r.json().catch(() => ({}));
-    if (!r.ok || d.erreur) throw new Error(d.erreur || `envoi refusé (${r.status})`);
+    if (!r.ok || d.erreur) {
+      const refus = new Error(d.erreur || `envoi refusé (${r.status})`);
+      // Le serveur a REPONDU. Ces codes-la disent que l'enregistrement lui-meme ne convient
+      // pas — vide, trop court, trop lourd, illisible, rien compris — et le renvoyer donnerait
+      // exactement le meme verdict. On marque donc le refus comme definitif : le garder en
+      // promettant qu'« il repartira a la reconnexion » etait un mensonge, et pire, il laissait
+      // le bouton micro en mode « renvoyer ». L'appui suivant relancait le vieux vocal au lieu
+      // d'en commencer un neuf — on croyait enregistrer, et rien ne partait.
+      refus.definitif = [400, 413, 415, 422].indexOf(r.status) >= 0;
+      throw refus;
+    }
     // Le texte n'est PAS pris ici : il arrive par le flux d'evenements, comme une dictee du
     // PC, et c'est ce chemin-la qui remplit la barre et arme le decompte. Deux sources pour
     // un meme texte finiraient par l'ecrire deux fois. Mais on DIT que ça a marche, et par
@@ -4910,15 +5074,25 @@ async function envoyerVocal(blob, type) {
     // Annule volontairement : ce n'est pas un echec, et il n'y a rien a garder — c'est
     // precisement ce qu'on vient de jeter.
     if (vocalAnnuleA || (e && e.name === "AbortError")) return;
-    // On ne jette RIEN. Quelqu'un vient de parler : reperdre ça parce que le reseau a
-    // hoquete serait le pire service a lui rendre. L'enregistrement attend, et repart seul
-    // des que la liaison revient.
-    vocalEnAttente = { blob, type, quand: Date.now() };
-    alerterFort();
-    // Un seul message, qui dit la cause ET ce qu'il advient de la parole. Quand l'arret a ete
-    // subi, sa raison passe devant : elle explique pourquoi on s'est fait couper.
     const cause = vocalInterrompu || ((e && e.message) || String(e));
     vocalInterrompu = "";
+    alerterFort();
+    if (e && e.definitif) {
+      // Refus definitif : rien a garder, rien a reessayer a l'identique. Le micro reste
+      // LIBRE, pour que l'appui suivant soit un nouvel enregistrement et pas la relance du
+      // precedent.
+      vocalEnAttente = null;
+      majBoutonDictee();
+      noteBarre(cause + " — rien n'a été envoyé à Claude. Appuie sur le micro pour "
+                + "recommencer.", true);
+      return;
+    }
+    // Un echec de TRANSPORT, lui, ne jette RIEN. Quelqu'un vient de parler : reperdre ça
+    // parce que le reseau a hoquete serait le pire service a lui rendre. L'enregistrement
+    // attend, et repart seul des que la liaison revient.
+    vocalEnAttente = { blob, type, quand: Date.now() };
+    // Un seul message, qui dit la cause ET ce qu'il advient de la parole. Quand l'arret a ete
+    // subi, sa raison passe devant : elle explique pourquoi on s'est fait couper.
     noteBarre(cause + " — arrête de parler. Ce que tu as dit est GARDÉ : il repartira "
               + "à la reconnexion, ou appuie sur le micro pour réessayer.", true);
   } finally {

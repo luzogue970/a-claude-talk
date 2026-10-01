@@ -253,6 +253,25 @@ globalThis.declencher = (nom, ev) => {
 globalThis.vibrations = [];
 globalThis.microDemandes = 0;
 globalThis.microAccorde = true;
+// Les deux façons dont un micro peut etre la sans rien capter — et c est le defaut le plus
+// couteux de tout le relais vocal : on parle trente secondes et on l apprend a l arrivee.
+globalThis.microMuet = false;     // la piste existe mais elle est coupee
+globalThis.microFini = false;     // la piste est morte (retour de veille)
+// Le niveau que le micro « entend », sur l echelle de getByteTimeDomainData (128 = silence).
+globalThis.niveauMicro = 40;
+globalThis.AudioContext = function () {
+  const self = this;
+  this.close = () => {};
+  this.resume = () => {};
+  this.createMediaStreamSource = () => ({ connect: () => {} });
+  this.createAnalyser = () => ({
+    fftSize: 512,
+    getByteTimeDomainData: (tampon) => {
+      for (let i = 0; i < tampon.length; i++) tampon[i] = 128;
+      if (globalThis.niveauMicro) tampon[0] = 128 + globalThis.niveauMicro;
+    },
+  });
+};
 globalThis.navigator = {
   onLine: true,
   vibrate: (motif) => { globalThis.vibrations.push(motif); return true; },
@@ -263,7 +282,11 @@ globalThis.navigator = {
         const e = new Error("refus"); e.name = "NotAllowedError";
         return Promise.reject(e);
       }
-      return Promise.resolve({ getTracks: () => [{ stop() {} }] });
+      // Une piste porte son etat : iOS rend un micro deja « muted » quand une autre
+      // application le tient, et c est exactement le cas qu on veut pouvoir reproduire.
+      const piste = { stop() {}, muted: !!globalThis.microMuet,
+                      readyState: globalThis.microFini ? "ended" : "live" };
+      return Promise.resolve({ getTracks: () => [piste], getAudioTracks: () => [piste] });
     },
   },
 };
@@ -401,6 +424,11 @@ globalThis.Audio = function (src) {
   this.src = src || "";
   this.ended = false;
   this.pause = () => {};
+  // Rendre la session audio : sur iOS, un element en pause avec une source chargee garde la
+  // categorie « lecture », et le micro ouvert par-dessus capte du silence. Le talon doit donc
+  // savoir se vider, sinon le test ne verrait pas la difference.
+  this.removeAttribute = (n) => { if (n === "src") self.src = ""; };
+  this.load = () => {};
   this.play = () => {
     // Ce qu on joue est le src DU MOMENT : l element est reutilise, son src change.
     globalThis.joues.push(self.src);

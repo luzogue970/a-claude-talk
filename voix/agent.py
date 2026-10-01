@@ -1615,6 +1615,25 @@ async def entrypoint(ctx: JobContext):
                 return {"erreur": "aucun moteur ne sait transcrire un fichier : ajoute une clé "
                                   "Deepgram ou Gladia", "secondes": secondes}
             if not texte:
+                # Muet, ou simplement incompris ? Les deux se corrigent differemment — l'un
+                # demande de liberer le micro, l'autre de reparler plus pres — et « rien
+                # compris » les confondait. Un micro mort rend du zero, echantillon apres
+                # echantillon : la mesure coute un parcours de tableau et tranche la question.
+                try:
+                    import array
+                    ech = array.array("h")
+                    ech.frombytes(pcm[:len(pcm) // 2 * 2])
+                    pic = max((abs(v) for v in ech), default=0)
+                except Exception:
+                    pic = -1
+                # 300 sur 32768, soit environ 1 % : en dessous, meme un souffle manque.
+                if 0 <= pic < 300:
+                    tableau.publier("log", niveau="WARNING", source="vocal",
+                                    texte=f"enregistrement muet ({secondes} s, pic {pic}) — "
+                                          "le micro du téléphone n'a rien capté")
+                    return {"erreur": "l'enregistrement est muet : le micro n'a rien capté. "
+                                      "Une autre application le tenait peut-être",
+                            "moteur": qui, "secondes": secondes, "muet": True}
                 tableau.publier("log", niveau="WARNING", source="vocal",
                                 texte=f"rien compris dans un enregistrement de {secondes} s"
                                       + (f" ({qui})" if qui else ""))
