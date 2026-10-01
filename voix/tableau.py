@@ -2492,6 +2492,12 @@ function ajouter(e) {
 // L'etat du micro appartient au serveur : le bouton demande, il n'agit pas. Sinon la page
 // pourrait afficher « coupe » alors que le flux audio tourne toujours.
 let socket = null, microActif = true, reconnexionPrevue = false;
+// Ce que la machine repond en HTTP quand la WebSocket n'aboutit pas : null = pas encore su,
+// true = elle repond donc l'agent est la, false = plus rien du tout. Declare ICI et pas pres
+// de la fonction qui le remplit : `envoyerCmd` s'en sert, et une variable `let` lue avant sa
+// ligne de declaration leve une erreur au lieu de valoir undefined.
+let serveurRepond = null;
+let diagEnCours = false;
 let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il en est ?
 
 // Sur telephone, la console du navigateur est inaccessible : une socket qui refuse de
@@ -2590,7 +2596,12 @@ function envoyerCmd(ordre) {
   // « jointes » aussi : ce n'est pas une action, c'est la page qui declare ce qu'elle tient.
   // L'annoncer ecraserait la note du message qu'on vient justement d'envoyer.
   if (ordre.cmd !== "texte" && ordre.cmd !== "jointes") {
-    noteBarre("liaison perdue — l'action partira dès que la connexion revient", true);
+    // Quand on SAIT que la machine ne repond plus, le dire ainsi : « l'action partira des
+    // que la connexion revient » laisse croire qu'elle revient toute seule, alors que c'est
+    // un agent arrete, et que le geste qui repare est de le relancer.
+    noteBarre(serveurRepond === false
+      ? "l'agent est arrêté — relance-le (« vv »), l'action partira ensuite"
+      : "liaison perdue — l'action partira dès que la connexion revient", true);
   }
   reconnecter();          // ne pas attendre le prochain clic pour s'en apercevoir
   return false;
@@ -4874,6 +4885,15 @@ let dernierPouls = 0;      // Date.now() du dernier signe de vie du serveur
 let serveur = null;        // le dernier _pouls recu, tel quel
 let causeCoupure = "";     // ce qu'on sait de la derniere fermeture
 let minuterieRebranche = null, minuterieCompte = null, prochaineTentative = 0;
+let minuterieOuverture = null;   // le garde-temps d'une socket qui n'aboutit pas
+
+// Combien de temps on laisse une socket neuve aboutir avant de la declarer morte-nee.
+// Huit secondes : un handshake WebSocket local se compte en millisecondes, et meme un reseau
+// mobile mediocre reste tres en dessous. Au-dela, ce n'est pas de la lenteur — c'est une
+// connexion qui n'arrivera jamais, et l'attendre revient a ne plus jamais se rebrancher.
+// `let` et non `const`, comme DELAI_SONDE : un test qui devrait attendre huit secondes ne
+// serait jamais ecrit, donc le comportement ne serait jamais verifie.
+let DELAI_OUVERTURE = 8000;
 
 // 0,8 s puis on s'ecarte, jusqu'a 20 s. Reessayer toutes les 1,2 s pendant qu'un portable est
 // hors couverture ne reconnecte rien et vide la batterie ; l'ecart laisse aussi le temps a un
@@ -4917,7 +4937,13 @@ function direLiaison() {
   // ici est pris au titre de la conversation, qui partage cette ligne. Le detail complet
   // (cause, numero d'essai, ce qui va se passer) est dans la barre de saisie juste en
   // dessous, et dans l'infobulle : rien n'est perdu, tout est ailleurs.
-  el.textContent = perdu
+  // Trois etats, pas deux. « l'agent est arrete » n'est pas « deconnecte » : le premier se
+  // repare en relancant `vv`, le second en attendant le reseau. Les confondre faisait fixer
+  // un ecran qui disait « reconnexion… » pendant que plus personne n'ecoutait a l'autre bout.
+  const arrete = perdu && serveurRepond === false;
+  el.textContent = arrete
+    ? (reste ? `agent arrêté · ${reste} s` : "agent arrêté")
+    : perdu
     ? (reste ? `déconnecté · ${reste} s` : "déconnecté")
     : (reste > 1 ? `reconnexion · ${reste} s` : "reconnexion…");
   el.className = (perdu ? "e-perdu" : "e-reprise") + " vif";
@@ -4927,14 +4953,29 @@ function direLiaison() {
   // perdu. La cause, le numero d'essai et ce qui va se passer tiennent dans la barre de
   // saisie, qui est vide a ce moment-la et sous les yeux.
   const pourquoi = causeCoupure ? ` — ${causeCoupure}` : "";
-  champ.placeholder = perdu
+  champ.placeholder = arrete
+    ? `l'agent ne répond plus depuis ${depuis} s — il s'est arrêté ou la machine dort. `
+      + "Relance-le (« vv »), la page le retrouvera toute seule"
+    : perdu && serveurRepond === true
+    ? `déconnecté depuis ${depuis} s${pourquoi} · essai ${essai} — la machine répond, c'est `
+      + "le flux qui ne s'établit pas ; ce que tu écris partira dès le retour"
+    : perdu
     ? `déconnecté depuis ${depuis} s${pourquoi} · essai ${essai} — l'agent tourne peut-être `
       + "encore ; ce que tu écris partira à la reconnexion"
     : `reconnexion${reste > 1 ? ` dans ${reste} s` : "…"}${pourquoi} · essai ${essai} — `
       + "rien n'est perdu, ce que tu écris partira dès le retour";
-  el.title = (causeCoupure ? causeCoupure + ". " : "") + motDuServeur();
-  // Sur telephone il n'y a pas d'infobulle : un appui sur l'etat la remplace.
-  el.onclick = () => noteBarre(el.title, true);
+  el.title = (causeCoupure ? causeCoupure + ". " : "")
+    + (serveurRepond === false ? "la machine ne répond plus en HTTP non plus. "
+       : serveurRepond === true ? "la machine répond en HTTP : l'agent est là. " : "")
+    + motDuServeur();
+  // Sur telephone il n'y a pas d'infobulle : un appui sur l'etat la remplace. Et il REESSAYE
+  // tout de suite — c'est le geste qu'on fait quand on regarde un compte a rebours en se
+  // demandant s'il sert a quelque chose, et le faire attendre vingt secondes de plus pour
+  // rien etait la pire reponse possible.
+  el.onclick = () => {
+    noteBarre(el.title, true);
+    rebrancherMaintenant("essai demandé à la main", true);
+  };
   majDiagnostic();
 }
 
@@ -4943,8 +4984,38 @@ function arreterRebranche() {
   if (minuterieCompte) { clearInterval(minuterieCompte); minuterieCompte = null; }
 }
 
+// L'agent est-il encore la, ou est-ce le reseau ?
+//
+// La page ne pouvait pas repondre a cette question, et c'est elle qu'on se pose vraiment
+// devant un « reconnexion… » qui dure. Une WebSocket qui n'aboutit pas ne distingue pas
+// « l'agent s'est arrete » de « mon telephone n'a plus de reseau » — et les deux demandent
+// des gestes opposes : relancer `vv` d'un cote, attendre de l'autre. On pose donc la question
+// en HTTP, qui repond meme quand la WebSocket ne s'etablit pas.
+//
+// Le resultat ne sert qu'a DIRE : les tentatives continuent dans tous les cas, parce qu'un
+// agent relance doit etre retrouve sans qu'on ait a recharger la page.
+function diagnostiquerPanne() {
+  if (diagEnCours || typeof fetch !== "function") return;
+  diagEnCours = true;
+  const fin = () => { diagEnCours = false; direLiaison(); };
+  // `cache: no-store` : une reponse mise en cache par le navigateur dirait « ca repond »
+  // alors que plus rien n'ecoute. On veut un vrai aller-retour, ou rien.
+  // `/etat.json` plutot que la page : deux cents octets au lieu de deux cents kilo-octets,
+  // et c'est une route que seul CE serveur sert — un portail captif qui repondrait 200 a
+  // tout ne nous ferait pas croire que l'agent va bien.
+  fetch((location.pathname || "").replace(/\/$/, "") + "/etat.json?sante=" + Date.now(),
+        { cache: "no-store" })
+    .then(r => { if (!r || !r.ok) throw new Error("refus"); return r; })
+    .then(() => { serveurRepond = true; fin(); })
+    .catch(() => { serveurRepond = false; fin(); });
+}
+
 function programmerRebranche() {
   arreterRebranche();
+  // Au bout de quelques essais, on arrete de dire « reconnexion » sans savoir : on demande
+  // au serveur s'il est la. Pas avant : une coupure de deux secondes se repare toute seule,
+  // et un diagnostic a chaque aller-retour serait du bruit.
+  if (echecs >= 3) diagnostiquerPanne();
   const delai = attenteRebranche();
   prochaineTentative = Date.now() + delai;
   reconnexionPrevue = true;
@@ -5023,6 +5094,41 @@ function sonder(pourquoi) {
   }, DELAI_SONDE);
 }
 
+// La surveillance continue, page OUVERTE sous les yeux.
+//
+// `perimee()` existait deja, mais rien ne la consultait tant qu'on ne revenait pas sur la
+// page : la seule sonde partait de `visibilitychange`. Une socket zombie — toujours OPEN,
+// plus rien qui circule — restait donc invisible exactement dans le cas ou l'on regarde
+// l'ecran en attendant une reponse. On attend, la page a l'air vivante, et rien n'arrive.
+//
+// Toutes les quinze secondes : le serveur bat toutes les 25 s, donc ce rythme repere une
+// liaison morte dans la minute sans rien couter.
+let DELAI_VEILLE = 15000;
+let veilleLiaison = null;
+function surveillerLiaison() {
+  if (veilleLiaison) clearInterval(veilleLiaison);
+  veilleLiaison = setInterval(() => {
+    // Page cachee : ne rien faire. Les minuteries y sont bridees de toute facon, et le retour
+    // declenche sa propre verification.
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (!socket) { rebrancherMaintenant("aucune liaison", true); return; }
+    // Une socket restee en CONNECTING sans garde-temps actif : filet de secours.
+    if (socket.readyState === 0 && !minuterieOuverture) {
+      rebrancherMaintenant("connexion jamais aboutie", true);
+      return;
+    }
+    if (socket.readyState === 1 && perimee()) {
+      rebrancherMaintenant("plus aucun signe du serveur", true);
+      return;
+    }
+    // Fermee, et personne n'a reprogramme : le cas ne devrait pas arriver, et c'est
+    // precisement pour ca qu'il merite un filet — une page morte ne se repare pas toute seule.
+    if (socket.readyState === 3 && !minuterieRebranche && !reconnexionPrevue) {
+      rebrancherMaintenant("liaison fermée sans reprise programmée", true);
+    }
+  }, DELAI_VEILLE);
+}
+
 if (typeof addEventListener === "function") {
   // Le retour sur la page. C'est LE cas du telephone : l'onglet a ete gele, la socket coupee
   // en silence, et sans ce gestionnaire la page attendait le prochain reveil de minuterie —
@@ -5050,14 +5156,49 @@ function brancher() {
   // L'URL se construit a partir du chemin de la page, pas en absolu : servie derriere un
   // proxy (« /talk/ »), un « /flux » absolu viserait le mauvais serveur. Et wss:// suit
   // automatiquement si la page est servie en https.
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
-    + location.host + (location.pathname || "").replace(/\/$/, "") + "/flux");
+  let ws;
+  try {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+      + location.host + (location.pathname || "").replace(/\/$/, "") + "/flux");
+  } catch (e) {
+    // Le constructeur PEUT jeter — contexte mixte, trop de sockets ouvertes, URL que le
+    // navigateur refuse. L'exception traversait brancher() et personne ne la rattrapait :
+    // plus de minuterie, plus de socket, donc plus jamais de tentative. La page restait sur
+    // « reconnexion… » pour toujours, et seul un retour sur l'application la reveillait.
+    causeCoupure = "connexion impossible à ouvrir — " + ((e && e.message) || e);
+    echecs++;
+    programmerRebranche();
+    return;
+  }
   socket = ws;
   __diagSocket(ws);
+  // Le garde-temps d'OUVERTURE, et c'est le defaut principal qu'il repare.
+  //
+  // Une socket peut rester en CONNECTING indefiniment : le navigateur a lance le handshake,
+  // les paquets partent dans le vide — reseau mobile qui bascule du wifi a la 4G, passerelle
+  // qui avale la connexion sans la refuser — et il n'emet NI `open` NI `close`. Or tout le
+  // rebranchement de cette page est accroche a `onclose`. Sans fermeture, rien ne reprogramme
+  // rien : l'etat reste fige sur « reconnexion… », et il le reste jusqu'a ce qu'on quitte
+  // l'application et qu'on y revienne — le retour, lui, declenche `visibilitychange`, qui
+  // force une nouvelle socket. C'est exactement le symptome vecu sur telephone.
+  //
+  // Passe ce delai, on ne CROIT plus la socket : on la jette et on reprogramme.
+  clearTimeout(minuterieOuverture);
+  minuterieOuverture = setTimeout(() => {
+    minuterieOuverture = null;
+    if (socket !== ws || ws.readyState !== 0) return;
+    try { ws.onopen = null; ws.onclose = null; ws.close(); } catch (_) {}
+    causeCoupure = "le serveur n'a pas répondu à l'ouverture";
+    echecs++;
+    programmerRebranche();
+  }, DELAI_OUVERTURE);
   // Le bouton suit l'état réel de la liaison : proposer « envoyer » sur une socket morte
   // ferait disparaître le message sans rien dire.
   ws.onopen = () => {
+    clearTimeout(minuterieOuverture);
+    minuterieOuverture = null;
     echecs = 0;
+    serveurRepond = null;
     causeCoupure = "";
     coupeDepuis = 0;
     retirerDiag();
@@ -5155,6 +5296,8 @@ function brancher() {
     // Une socket périmée qui se referme après qu'une nouvelle est en place ne doit ni
     // relancer un branchement, ni faire clignoter l'état.
     if (socket !== ws) return;
+    clearTimeout(minuterieOuverture);
+    minuterieOuverture = null;
     majEnvoyer();
     arreterCompte();
     toutClore("connexion perdue");
@@ -5208,6 +5351,7 @@ if (__entete && typeof addEventListener === "function") {
 }
 
 brancher();
+surveillerLiaison();
 
 // --- « suivre » : le bouton qui ramene en bas ---------------------------------------------
 //

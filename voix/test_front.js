@@ -322,8 +322,17 @@ globalThis.AbortController = function () {
 // La synthese Azure, servie par /parler. Le drapeau azureMarche a false simule l absence de
 // cle ou un service injoignable : la page doit se rabattre sur la voix du navigateur.
 globalThis.azureMarche = true;
+// La sonde de sante : la page demande au serveur HTTP s il est encore la quand la WebSocket
+// n aboutit pas. C est ce qui distingue « l agent est arrete » de « je n ai plus de reseau ».
+globalThis.santeHS = false;
 globalThis.fetch = (url, opts) => {
   globalThis.requetes.push({ url, opts });
+  if (String(url).indexOf("sante=") >= 0) {
+    return globalThis.santeHS
+      ? Promise.reject(new Error("injoignable"))
+      : Promise.resolve({ ok: true, status: 200, redirected: false,
+                          headers: { get: () => "text/html" } });
+  }
   // endsWith et pas une expression reguliere : ce stub vit dans un template literal, ou
   // chaque antislash est mange une fois de plus — /\/parler$/ y devenait un commentaire.
   if (String(url).endsWith("/parler/preparer") || String(url).endsWith("/parler")) {

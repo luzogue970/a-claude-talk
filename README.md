@@ -297,6 +297,37 @@ Le serveur envoie donc un **pouls toutes les 25 s** — sous les 30 s à partir 
 proxy coupe une liaison qu'il croit morte, et du trafic applicatif *visible*, pas seulement un
 ping de protocole. Passé 70 s sans rien, la page rebranche même si le navigateur n'a rien dit.
 
+**La connexion qui n'aboutit jamais.** C'était le plus coûteux, et le plus invisible : la page
+restait sur « reconnexion… » indéfiniment, et rien ne la réveillait tant qu'on ne quittait pas
+l'application pour y revenir. Une socket peut rester en `CONNECTING` sans fin — le handshake
+est parti, les paquets tombent dans le vide (bascule wifi/4G, passerelle qui avale la
+connexion) — et le navigateur n'émet **ni `open` ni `close`**. Or tout le rebranchement de
+cette page était accroché à `onclose` : sans fermeture, rien ne reprogrammait rien. Seul le
+retour sur l'application sauvait la mise, parce qu'il déclenche `visibilitychange`, qui force
+une socket neuve — c'est très exactement le symptôme vécu. Une tentative a maintenant un
+**garde-temps de 8 s** : passé ce délai elle est jetée, comptée comme un échec, et une autre
+part. Le constructeur `WebSocket` qui *jette* (contexte mixte, trop de sockets) est rattrapé de
+la même façon — l'exception traversait `brancher()` et tuait toute reprise future.
+
+**Rien ne surveillait la liaison tant qu'on restait sur la page.** `perimee()` existait, mais
+la seule sonde partait de `visibilitychange` : une socket zombie restait donc invisible
+exactement dans le cas où l'on fixe l'écran en attendant une réponse. Une veille tourne
+désormais toutes les 15 s tant que la page est visible, et remplace la socket dès qu'elle est
+muette, bloquée en connexion, ou fermée sans reprise programmée.
+
+**« Reconnexion… » ne dit pas si quelqu'un écoute encore.** La question qu'on se pose vraiment
+devant un compte à rebours qui dure est : *l'agent est-il mort, ou est-ce mon réseau ?* — et
+les deux demandent des gestes opposés. Après trois échecs, la page interroge `/etat.json` en
+HTTP, qui répond même quand la WebSocket ne s'établit pas. Trois états au lieu de deux :
+« reconnexion… », « déconnecté » (la machine répond, c'est le flux qui ne passe pas), et
+**« agent arrêté »** — là, la barre nomme le geste qui répare, relancer `vv`, au lieu de
+promettre un retour qui ne viendra pas. Les commandes passées dans cet état le disent
+pareillement, plutôt que d'annoncer un départ « dès que la connexion revient ».
+
+**Un appui sur l'état réessaie.** C'est le geste qu'on fait devant un compte à rebours en se
+demandant s'il sert à quelque chose ; attendre vingt secondes de plus était la pire réponse
+possible. L'appui affiche le détail *et* relance une tentative immédiatement.
+
 **« déconnecté » tout court.** Ni pourquoi, ni depuis quand, ni si quelque chose est tenté.
 L'état porte maintenant la tentative en cours et son compte à rebours ; l'infobulle porte le
 code de fermeture traduit et ce que le serveur disait de lui-même en dernier (agent prêt ou

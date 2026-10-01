@@ -1481,6 +1481,109 @@ dire(!/coupure/.test(etatEl.title || ''),
 dire(/agent prêt|signe du serveur/.test(etatEl.title || ''),
      'et dit ce que le serveur raconte de lui-meme');
 
+// ---- la connexion qui n aboutit jamais ----------------------------------------------------
+// LE defaut du telephone, et le plus couteux parce qu il ne se voit pas : une socket peut
+// rester en CONNECTING indefiniment — le navigateur a lance le handshake, les paquets partent
+// dans le vide (bascule wifi/4G, passerelle qui avale la connexion) — et il n emet NI `open`
+// NI `close`. Or tout le rebranchement est accroche a `onclose`. Sans fermeture, rien ne
+// reprogramme rien : « reconnexion… » reste a l ecran pour toujours, et seul le fait de
+// quitter l application et d y revenir reveille la page.
+async function testerLiaisonQuiNAboutitPas() {
+  const pause = (ms) => new Promise(r => setTimeout(r, ms));
+  const etatEl = document.getElementById('etat');
+  titre('liaison : une tentative qui n aboutit pas doit en relancer une autre');
+
+  const gardeOuverture = DELAI_OUVERTURE, gardeVeille = DELAI_VEILLE;
+  const attentes = ATTENTES.slice();
+  for (let i = 0; i < ATTENTES.length; i++) ATTENTES[i] = 20;   // pas d attente reelle ici
+  DELAI_OUVERTURE = 30;
+  document.visibilityState = 'visible';
+  navigator.onLine = true;
+  globalThis.santeHS = false;
+
+  sockets.length = 0; echecs = 0; serveurRepond = null;
+  brancher();
+  dire(sockets.length === 1 && sockets[0].readyState === 0,
+       'la tentative part et reste en cours de connexion');
+  await pause(120);
+  dire(sockets.length > 1,
+       'une socket qui n aboutit pas est jetee et une autre est tentee ('
+       + sockets.length + ' tentatives)');
+  dire(echecs > 0, 'et ca compte comme un echec, donc les tentatives vont s espacer');
+  dire(/ouverture|réponse/.test(etatEl.title || ''),
+       'la cause est dite : ' + etatEl.title);
+
+  // Le diagnostic : apres quelques essais, on demande au serveur HTTP s il est la. Repondre
+  // « reconnexion » sans savoir laisse fixer un ecran pendant que plus personne n ecoute.
+  globalThis.santeHS = true;
+  requetes.length = 0;
+  echecs = 4; serveurRepond = null; coupeDepuis = Date.now() - 60000;
+  programmerRebranche();
+  dire(requetes.some(r => String(r.url).indexOf('sante=') >= 0),
+       'apres plusieurs echecs, la page demande au serveur HTTP s il repond encore');
+  await pause(5);
+  dire(serveurRepond === false, 'et retient que la machine ne repond plus du tout');
+  dire(/agent arrêté/.test(etatEl.textContent),
+       'l etat le DIT au lieu de promettre une reconnexion : ' + etatEl.textContent);
+  dire(/vv/.test(champ.placeholder),
+       'et la barre nomme le geste qui repare : ' + champ.placeholder);
+
+  // La machine repond mais le flux ne s etablit pas : ce n est pas la meme panne, ni le meme
+  // geste. Confondre les deux envoie relancer un agent qui tourne tres bien.
+  globalThis.santeHS = false;
+  serveurRepond = null; diagEnCours = false;
+  diagnostiquerPanne();
+  await pause(5);
+  dire(serveurRepond === true && !/agent arrêté/.test(etatEl.textContent),
+       'une machine qui repond en HTTP ne se dit pas « arretee » : ' + etatEl.textContent);
+  dire(/flux/.test(champ.placeholder), 'et la barre dit ou est le probleme : ' + champ.placeholder);
+
+  // Un appui sur l etat REESSAYE. C est le geste qu on fait devant un compte a rebours en se
+  // demandant s il sert a quelque chose ; le faire attendre vingt secondes de plus pour rien
+  // etait la pire reponse possible.
+  const avantAppui = sockets.length;
+  etatEl.onclick();
+  dire(sockets.length === avantAppui + 1, 'appuyer sur l etat relance une tentative tout de suite');
+
+  // Le constructeur qui JETTE — contexte mixte, trop de sockets. L exception traversait
+  // brancher() : plus de minuterie, plus de socket, donc plus jamais de tentative.
+  const vraiWS = globalThis.WebSocket;
+  globalThis.WebSocket = function () { throw new Error('refus du navigateur'); };
+  globalThis.WebSocket.OPEN = 1;
+  echecs = 0;
+  brancher();
+  globalThis.WebSocket = vraiWS;
+  dire(reconnexionPrevue === true && echecs === 1,
+       'une ouverture qui jette ne tue pas la page : une tentative reste programmee');
+  dire(/refus du navigateur/.test(etatEl.title || ''),
+       'et on sait pourquoi : ' + etatEl.title);
+
+  // La surveillance continue, page ouverte sous les yeux. `perimee()` existait mais rien ne
+  // la consultait tant qu on ne revenait pas sur la page : une socket zombie restait donc
+  // invisible exactement dans le cas ou l on regarde l ecran en attendant une reponse.
+  arreterRebranche();
+  sockets.length = 0;
+  brancher();
+  const z = sockets[sockets.length - 1];
+  z.readyState = 1; socket.readyState = 1; if (socket.onopen) socket.onopen();
+  dernierPouls = Date.now() - 120000;        // plus un signe depuis deux minutes
+  DELAI_VEILLE = 20;
+  surveillerLiaison();
+  await pause(60);
+  dire(sockets.length > 1,
+       'une socket muette est remplacee SANS qu on ait a quitter la page ('
+       + sockets.length + ' tentatives)');
+
+  DELAI_VEILLE = gardeVeille; DELAI_OUVERTURE = gardeOuverture;
+  for (let i = 0; i < attentes.length; i++) ATTENTES[i] = attentes[i];
+  if (veilleLiaison) { clearInterval(veilleLiaison); veilleLiaison = null; }
+  arreterRebranche();
+  echecs = 0; serveurRepond = null; coupeDepuis = 0; causeCoupure = '';
+  sockets.length = 0; brancher();
+  const fin = sockets[sockets.length - 1];
+  fin.readyState = 1; socket.readyState = 1; if (socket.onopen) socket.onopen();
+}
+
 // ---- une page qui se sait perimee ---------------------------------------------------------
 titre('version : developper l application depuis l application');
 const btnMaj = document.getElementById('maj-page');
@@ -2372,6 +2475,7 @@ setTimeout(() => {
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
       .then(testerPiecesJointes)
+      .then(testerLiaisonQuiNAboutitPas)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
