@@ -100,9 +100,24 @@ const LISTES = [
     ] },
 ];
 
+const MARKDOWN = "**Trois choses** ont bouge, et la troisieme explique les deux autres :\n\n"
+  + "- le garde-temps d'ouverture, qui manquait\n"
+  + "- la veille de liaison, toutes les 15 s\n"
+  + "- le diagnostic `etat.json`, qui distingue un agent arrete d'un reseau coupe\n\n"
+  + "## Ce qui reste\n\n"
+  + "Rien de bloquant. Le detail tient dans une ligne de commande un peu longue :\n\n"
+  + "```\n"
+  + "git log --oneline --graph --decorate --all --since='2 weeks ago' -- voix/tableau.py\n"
+  + "```\n\n"
+  + "Voir aussi le [journal](https://example.org/journal) si besoin.";
+
 const EVENEMENTS = [
   { n: 11, genre: "toi",    texte: LONG, passe: true,  h: "14:30:00", t: 1 },
-  { n: 12, genre: "texte",  texte: LONG, passe: true,  h: "14:30:01", t: 2 },
+  // La reponse ECRITE, telle qu'elle arrive vraiment maintenant : mise en forme. C'est le
+  // seul endroit ou l'on peut verifier qu'une liste et un bloc de code tiennent dans la
+  // colonne du flux au lieu d'elargir la page — un `pre` ne se replie pas tout seul, et sur
+  // un ecran de telephone un debordement lateral cache la moitie du texte.
+  { n: 12, genre: "texte",  texte: MARKDOWN, passe: true,  h: "14:30:01", t: 2 },
   { n: 13, genre: "tour",   actions: 5, texte: "Bash ls, Bash cat", passe: true, h: "14:30:02", t: 3 },
   { n: 14, genre: "toi",    texte: LONG, h: "14:30:03", t: 4 },
   { n: 15, genre: "outil",  nom: "Read", cible: "config.py", id: "x1", h: "14:30:04", t: 5 },
@@ -213,6 +228,10 @@ setTimeout(async () => {
     const corps = l.querySelector(".corps");
     releve.lignes.push({
       genre: l.dataset.g,
+      // Ce que le markdown a produit, pour affirmer dessus : une liste rendue, un bloc de
+      // code, et surtout leur largeur reelle dans la colonne.
+      balises: [...l.querySelectorAll("strong,ul,li,h4,pre,code,a")].map(x => x.tagName).join(","),
+      largeurMax: Math.max(0, ...[...l.querySelectorAll("*")].map(x => Math.ceil(x.getBoundingClientRect().right))),
       passe: l.className.split(" ").includes("passe"),
       hauteur: l.offsetHeight,
       colonnes: cs(l).gridTemplateColumns,
@@ -343,6 +362,18 @@ dire(pire.corpsLargeur > 400,
 const haute = r.lignes.reduce((a, b) => (b.hauteur > a.hauteur ? b : a));
 dire(haute.hauteur < 300,
      `aucune ligne anormalement haute — la plus haute : ${haute.hauteur} px (${haute.genre})`);
+
+// La reponse ECRITE est mise en forme, et elle tient dans la colonne. Un `pre` ne se replie
+// pas tout seul : sans `overflow-x` sur lui, une ligne de commande un peu longue elargit la
+// page entiere, et sur un telephone la moitie du texte passe derriere un defilement lateral
+// qu'on ne pense pas a chercher.
+const ecrit = r.lignes.find(l => l.genre === "texte");
+dire(!!ecrit && /STRONG/.test(ecrit.balises) && /UL/.test(ecrit.balises)
+     && /PRE/.test(ecrit.balises) && /H4/.test(ecrit.balises),
+     `la réponse écrite porte sa mise en forme (${ecrit ? ecrit.balises : "ligne absente"})`);
+dire(!!ecrit && ecrit.largeurMax <= r.page.largeur,
+     `et rien n'en déborde : ${ecrit ? ecrit.largeurMax : "?"} px pour une page de `
+     + `${r.page.largeur} px`);
 
 // quatre colonnes, et la derniere prend la place restante
 const cols = r.lignes[0].colonnes.split(/\s+/);

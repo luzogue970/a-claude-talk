@@ -48,6 +48,9 @@ Le fond, non negociable :
 - Les chemins, noms de symboles, commandes et blocs de code ne se prononcent pas :
   remplace-les par ce qu'ils sont ("le module d'authentification", "le script de lecture").
 - Un tableau devient des phrases qui en portent le sens, jamais une lecture de cellules.
+- La reponse ecrite est MISE EN FORME — gras, puces, titres, blocs de code. Ce sont des
+  reperes pour l'oeil, pas des mots : ne prononce jamais un marqueur, et transforme une liste
+  en phrase qui enchaine. Un titre dit de quoi on parle, il ne se lit pas comme une annonce.
 - Les termes anglais restent en anglais, la voix est multilingue.
 - Ecris le francais avec ses accents.
 

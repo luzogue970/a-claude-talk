@@ -938,6 +938,27 @@ C'est **indépendant de l'état du micro** : micro coupé plus clavier donne un 
 entièrement silencieux. La page n'affiche pas le message elle-même — c'est le serveur qui
 republie `toi`, sinon un envoi refusé laisserait à l'écran un message jamais reçu.
 
+### Le message posté cinq fois
+
+Un message encore « en vol » est renvoyé à la reconnexion. Le critère était : *si son écho
+n'est pas revenu dans le rejeu, c'est qu'il n'est jamais arrivé*. Il est faux — l'écho `toi`
+n'est publié qu'au moment où l'agent **consomme** le message, ce qui peut arriver plusieurs
+minutes plus tard s'il travaille. Un message écrit pendant un tour long repartait donc une
+fois par réveil du téléphone, et la même phrase arrivait cinq fois.
+
+« Est-ce que le serveur l'a reçu » et « est-ce que l'agent l'a traité » sont deux questions
+différentes ; on posait la seconde en croyant poser la première. Chaque message porte
+maintenant un **jeton** : le serveur accuse réception dès qu'il le tient, et la page le retire
+de sa file sur cet accusé plutôt que sur l'écho.
+
+Le renvoi reste, parce qu'il protège un vrai cas — un message tapé juste avant une mise en
+veille. Mais il repart **sous le même jeton**, et le serveur garde les trois cents derniers :
+un doublon est ignoré, et **quand même accusé**. Cette seconde moitié compte autant que la
+première — un doublon ignoré en silence laisserait la page croire que rien n'est arrivé, donc
+le renvoyer encore : on aurait déplacé la boucle au lieu de la casser. Le jeton part aussi sur
+le disque de l'appareil avec le message, sans quoi un onglet tué par iOS reviendrait avec un
+jeton neuf et le doublon rentrerait par la porte qu'on vient de fermer.
+
 ### Joindre une photo, et ce qui arrive quand elle ne part pas
 
 Le bouton trombone dépose la photo sur la machine et n'envoie que son **chemin** : Claude Code

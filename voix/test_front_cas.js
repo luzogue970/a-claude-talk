@@ -1481,6 +1481,60 @@ dire(!/coupure/.test(etatEl.title || ''),
 dire(/agent prêt|signe du serveur/.test(etatEl.title || ''),
      'et dit ce que le serveur raconte de lui-meme');
 
+// ---- la reponse ecrite se lit, la reponse parlee s ecoute ---------------------------------
+// Le defaut : l ecrit etait contraint a la prose continue, sans markdown, pour que la
+// synthese vocale sonne juste. Or la synthese ne lit pas ce texte — un second modele en
+// fabrique une version parlee. On payait donc une contrainte orale sur le seul contenu qui
+// se lit avec les yeux : un bloc gris sans relief, sur un telephone, au milieu d un flux.
+titre('reponse ecrite : du markdown rendu, pas un pave');
+dire(md('**gras**') === '<p><strong>gras</strong></p>', 'le gras est du gras : ' + md('**gras**'));
+dire(/<em>/.test(md('un mot *en italique* ici')), 'l italique aussi');
+dire(md('- un\n- deux') === '<ul><li>un</li><li>deux</li></ul>', 'une liste est une liste');
+dire(/<ol><li>premier/.test(md('1. premier\n2. second')), 'une liste numerotee garde son ordre');
+dire(/<h4>Titre<\/h4>/.test(md('## Titre')),
+     'les titres tiennent dans le flux : toujours h4, jamais une banniere plus grosse que l en-tete');
+dire(/<code>fichier\.py<\/code>/.test(md('vois `fichier.py`')), 'le code reste du code');
+dire(/<pre><code>const a = 1 &lt; 2;<\/code><\/pre>/.test(md('```\nconst a = 1 < 2;\n```')),
+     'un bloc de code est rendu ET echappe');
+dire(/<blockquote>/.test(md('> cite')), 'une citation se distingue');
+dire(md('a\nb') === '<p>a<br>b</p>',
+     'un retour a la ligne simple reste une coupe : elle porte du sens sur un ecran etroit');
+dire(md('un\n\ndeux') === '<p>un</p><p>deux</p>', 'une ligne vide separe deux paragraphes');
+
+// La securite, et elle n est pas theorique : ce texte vient d un modele qui vient de lire
+// des fichiers et des pages web. On echappe D ABORD, on balise ensuite — rien de ce qui
+// arrive ne peut devenir une balise.
+dire(!/<script>/.test(md('<script>alert(1)</script>')),
+     'une balise dans la reponse reste du texte : ' + md('<script>alert(1)</script>'));
+dire(!/<img/.test(md('<img src=x onerror=alert(1)>')), 'une image piegee aussi');
+dire(/href="https:\/\/x\.fr"/.test(md('[lien](https://x.fr)')), 'un vrai lien est cliquable');
+dire(!/href/.test(md('[piege](javascript:alert(1))')),
+     'un lien javascript: redevient du texte — on tape au doigt sans reflechir : '
+     + md('[piege](javascript:alert(1))'));
+dire(md('code avec `a ** b` dedans') === '<p>code avec <code>a ** b</code> dedans</p>',
+     'ce qui est dans du code n est plus interprete : ' + md('code avec `a ** b` dedans'));
+
+// Ce qui arrive en MORCEAUX. Une liste a moitie arrivee n est pas du markdown valide : on
+// garde le brut et on re-rend l ensemble, au lieu d empiler des fragments rendus.
+async function testerEcritEnMorceaux() {
+  titre('reponse ecrite : les morceaux se re-rendent, ils ne s empilent pas');
+  flux.children.length = 0; dernier = null; enRejeu = true;
+  actifs.add('texte');
+  ajouter({ genre: 'texte', n: 9100, h: '10:00', texte: '**voila** ce que j ai fait :\n' });
+  ajouter({ genre: 'texte', n: 9101, h: '10:00', texte: '- un point\n', suite: true });
+  ajouter({ genre: 'texte', n: 9102, h: '10:00', texte: '- un autre', suite: true });
+  const ligneTexte = flux.children[flux.children.length - 1];
+  dire(flux.children.length === 1, 'les morceaux restent une seule ligne');
+  dire(ligneTexte.brutMd === '**voila** ce que j ai fait :\n- un point\n- un autre',
+       'le texte brut est conserve entier, pour pouvoir re-rendre');
+  await new Promise(r => setTimeout(r, 30));
+  const rendu = ligneTexte.querySelector('.propos').innerHTML;
+  dire(/<strong>voila<\/strong>/.test(rendu)
+       && /<ul><li>un point<\/li><li>un autre<\/li><\/ul>/.test(rendu),
+       'et le rendu porte le gras ET la liste complete : ' + rendu);
+  enRejeu = false;
+}
+
 // ---- la connexion qui n aboutit jamais ----------------------------------------------------
 // LE defaut du telephone, et le plus couteux parce qu il ne se voit pas : une socket peut
 // rester en CONNECTING indefiniment — le navigateur a lance le handshake, les paquets partent
@@ -2459,6 +2513,38 @@ setTimeout(() => {
     dire(/renvoyé/.test(noteRenvoi.textContent || ''),
          'et on le dit plutot que de le refaire en douce : ' + noteRenvoi.textContent);
 
+    // 2 bis. Le defaut qui a motive tout ça : l'echo « toi » n'arrive qu'au moment ou
+    //    l'agent CONSOMME le message. Pendant un tour long il ne vient pas, et chaque
+    //    reconnexion reposait le meme message — cinq fois la meme phrase. L'accuse de
+    //    RECEPTION, lui, revient dans la seconde et repond a la bonne question.
+    const jetonRenvoi = envoyes.filter(o => o.cmd === 'texte').slice(-1)[0];
+    dire(!!(jetonRenvoi && jetonRenvoi.jeton),
+         'un message porte un jeton : le serveur peut dire « je l ai deja »');
+    socket.onmessage({ data: JSON.stringify({ genre: '_recu', jeton: jetonRenvoi.jeton }) });
+    dire(!enVol.some(m => m.jeton === jetonRenvoi.jeton),
+         'l accuse de reception le retire de la file, sans attendre que Claude le traite');
+    envoyes.length = 0;
+    fermerSock(1006);
+    brancher(); ouvrirSock();
+    socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 5, pret: true }) });
+    dire(!envoyes.some(o => o.cmd === 'texte' && o.texte === 'lance les tests'),
+         'et une reconnexion ne le reposte plus — c est la boucle qui envoyait cinq fois');
+
+    // Un message accuse par RIEN reste en vol, et repart sous le MEME jeton : le serveur
+    // reconnaitra un doublon au lieu d en creer un.
+    envoyes.length = 0;
+    champ.value = 'troisieme message';
+    composer.onsubmit({ preventDefault() {} });
+    const jetonTrois = envoyes.filter(o => o.cmd === 'texte').slice(-1)[0].jeton;
+    fermerSock(1006);
+    envoyes.length = 0;
+    brancher(); ouvrirSock();
+    socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 6, pret: true }) });
+    const renvoye = envoyes.find(o => o.cmd === 'texte' && o.texte === 'troisieme message');
+    dire(!!renvoye && renvoye.jeton === jetonTrois,
+         'un message jamais accuse repart sous le meme jeton, donc sans jamais faire de double');
+    socket.onmessage({ data: JSON.stringify({ genre: '_recu', jeton: jetonTrois }) });
+
     // 3. Celui dont l'echo est revenu pendant le rejeu ne doit PAS repartir : ce serait le
     //    poster deux fois, ce qui est pire que de le perdre.
     champ.value = 'deuxieme message';
@@ -2475,6 +2561,7 @@ setTimeout(() => {
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
       .then(testerPiecesJointes)
+      .then(testerEcritEnMorceaux)
       .then(testerLiaisonQuiNAboutitPas)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {

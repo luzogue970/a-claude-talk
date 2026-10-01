@@ -391,12 +391,29 @@ class Worker:
         """Ce qu'on ajoute au prompt systeme de Claude Code."""
         return self._CONSIGNES + (self.ULTRACODE if config.est_ultracode(niveau) else "")
 
+    # La consigne d'ecriture, et le changement qui compte : la reponse finale est LUE A
+    # L'ECRAN, pas prononcee. Elle l'etait avant — contrainte a la prose continue, sans
+    # markdown, pour que la synthese vocale sonne juste. Mais la synthese ne lit pas ce
+    # texte : un second modele, le porte-parole, en fabrique une version parlee a partir de
+    # lui. On payait donc le prix d'une contrainte orale sur le seul contenu qui se lit avec
+    # les yeux — un bloc gris sans relief, sur un telephone, au milieu d'un flux. Chacun son
+    # metier : l'ecrit se met en forme, le porte-parole parle.
     _CONSIGNES = (
-                    "Tes réponses finales sont lues à voix haute par une synthèse vocale. "
-                    "Écris-les en prose continue : pas de markdown, pas de liste, pas de tableau, "
-                    "pas de bloc de code, pas de chemin de fichier complet. Deux à quatre phrases, "
-                    "sauf demande explicite. Écris le français avec ses accents. "
-                    "Le détail technique reste dans tes outils et tes fichiers, pas dans la réponse parlée."
+                    "Tes réponses finales s'affichent à l'écran et se LISENT. Mets-les en forme "
+                    "comme une réponse normale : gras pour ce qui compte, listes à puces quand il "
+                    "y a plusieurs points, titres si la réponse a des parties, code entre accents "
+                    "graves. L'écran est souvent celui d'un téléphone : des phrases courtes, des "
+                    "paragraphes de deux ou trois lignes, pas de tableau large. "
+                    "Écris le français avec ses accents."
+                    "\n\n"
+                    "Reste BREF — l'équivalent de deux à quatre phrases pour un tour ordinaire, "
+                    "plus seulement si on te demande un développement. La mise en forme sert la "
+                    "lecture, elle n'autorise pas le rapport : une réponse en huit sections pour "
+                    "une question simple est aussi pénible à lire qu'un pavé."
+                    "\n\n"
+                    "Tu n'as pas à écrire pour la voix : une autre instance relit ton tour et en "
+                    "fabrique la version parlée, qui est dite séparément. N'ajoute donc aucun "
+                    "résumé oral, et ne t'interdis rien de ce qui rend un texte lisible."
                     "\n\n"
                     "Cette conversation est orale : quelqu'un attend en écoutant. Va au bout de "
                     "ce qu'on te demande, mais rends la parole dès que tu as de quoi la rendre. "

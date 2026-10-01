@@ -107,6 +107,19 @@ class Tableau:
         # de la session — panneau de configuration compris.
         self._n = 0
         self._images = 0
+        # Les jetons des commandes deja traitees, du plus vieux au plus recent.
+        #
+        # Pourquoi cette memoire existe : la page renvoie, a chaque reconnexion, les messages
+        # qu'elle croit perdus. Son critere etait « l'echo n'est pas revenu dans le rejeu »,
+        # et il est faux — l'echo « toi » n'est publie qu'au moment ou l'agent CONSOMME le
+        # message, ce qui peut arriver plusieurs minutes plus tard s'il travaille. Un message
+        # envoye pendant un tour long etait donc reposte a chaque reveil du telephone, et la
+        # meme phrase arrivait cinq fois. Avec un jeton, la question se tranche : « est-ce que
+        # je l'ai deja ? » — pas « est-ce que l'agent l'a deja fini ? ».
+        #
+        # Trois cents : largement plus qu'une rafale de reconnexions, et assez peu pour que la
+        # memoire reste negligeable. Au-dela, un jeton si vieux ne sera plus jamais renvoye.
+        self._jetons_vus: "OrderedDict[str, bool]" = OrderedDict()
         # Les enregistrements deja synthetises, du plus vieux au plus recent. Relire une
         # reponse est un geste qu'on refait, et chaque relecture coute du credit Azure.
         self._voix_cache: "OrderedDict[str, tuple[bytes, bool]]" = OrderedDict()
@@ -649,6 +662,23 @@ class Tableau:
                     nom = ordre.pop("cmd", None)
                     if not nom:
                         continue
+                    # Le jeton n'appartient pas a la commande : il appartient a la LIAISON.
+                    # On le retire avant de passer l'ordre a l'agent, qui n'a pas a le
+                    # connaitre.
+                    jeton = ordre.pop("jeton", None)
+                    if jeton:
+                        # Accuser AVANT d'executer, et toujours — y compris pour un doublon.
+                        # C'est l'accuse qui retire le message de la file « en vol » de la
+                        # page ; le refuser a un doublon laisserait la page le renvoyer
+                        # indefiniment, ce qui est exactement le defaut qu'on corrige.
+                        await file.put(json.dumps({"genre": "_recu", "jeton": jeton}))
+                        if jeton in self._jetons_vus:
+                            log.info("commande « %s » deja traitee (jeton %s), ignoree",
+                                     nom, jeton)
+                            continue
+                        self._jetons_vus[jeton] = True
+                        while len(self._jetons_vus) > 300:
+                            self._jetons_vus.popitem(last=False)
                     if nom == "ping":
                         # Pas une commande : une question sur la liaison elle-meme. Une page
                         # qui revient d'une mise en veille ne peut PAS se fier a l'etat que
@@ -1351,7 +1381,31 @@ body{overflow-x:hidden}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
 .g-voix .badge{color:var(--voix)} .g-voix .corps{color:#c6f0cf}
 .g-pensee .badge{color:var(--pensee)} .g-pensee .corps{color:#c3a6f5;font-size:13px}
-.g-texte .badge{color:#7d8590} .g-texte .corps{color:#b6bec8}
+.g-texte .badge{color:#7d8590}
+/* La reponse ECRITE : c'est elle qu'on lit, donc elle a le contraste et la mise en forme
+   d'une reponse de modele, pas la grisaille d'une ligne technique. `white-space:normal`
+   parce que le markdown est desormais rendu en HTML : garder `pre-wrap` doublerait chaque
+   saut de ligne du source avec la marge des paragraphes. */
+.g-texte .corps{color:var(--texte);white-space:normal;line-height:1.5}
+.g-texte .corps p{margin:0 0 .55em}
+.g-texte .corps p:last-child{margin-bottom:0}
+.g-texte .corps h4{margin:.7em 0 .3em;font-size:14px;color:#e6edf3;font-weight:600}
+.g-texte .corps h4:first-child{margin-top:0}
+.g-texte .corps strong{color:#f0f6fc;font-weight:650}
+.g-texte .corps em{color:#dbe3ec}
+/* Les listes gardent leurs puces mais pas le retrait par defaut du navigateur : quarante
+   pixels de marge sur un ecran de telephone, c'est un cinquieme de la largeur utile. */
+.g-texte .corps ul,.g-texte .corps ol{margin:.2em 0 .6em;padding-left:1.25em}
+.g-texte .corps li{margin:.15em 0}
+.g-texte .corps code{background:#1d2430;border:1px solid var(--bord);border-radius:4px;
+  padding:0 4px;font-size:12.5px;color:#c9d6e4}
+.g-texte .corps pre{background:#11161d;border:1px solid var(--bord);border-radius:6px;
+  padding:8px 10px;margin:.4em 0 .6em;overflow-x:auto}
+.g-texte .corps pre code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.45}
+.g-texte .corps blockquote{margin:.3em 0;padding-left:.7em;border-left:2px solid var(--bord);
+  color:var(--faible)}
+.g-texte .corps hr{border:0;border-top:1px solid var(--bord);margin:.6em 0}
+.g-texte .corps a{color:var(--toi)}
 .g-outil .badge{color:var(--outil)}
 /* L'action tient sur une ligne et une seule : elle partage l'ecran avec la conversation. */
 .g-outil .corps{display:flex;align-items:baseline;gap:8px;white-space:normal}
@@ -1901,7 +1955,7 @@ const GROUPES = [
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
     { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
-    { g: "texte",    lib: "écrit",     quoi: "ce qu'il écrit, avant réécriture pour la voix" },
+    { g: "texte",    lib: "écrit",     quoi: "sa réponse écrite, mise en forme — c'est celle qu'on lit" },
     { g: "outil",    lib: "outil",     quoi: "chaque action : lecture, édition, commande" },
     { g: "resultat", lib: "résultat",  quoi: "la sortie des outils — souvent longue", cache: true },
     { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
@@ -2086,6 +2140,93 @@ setInterval(() => { if (quota.length) majCompteurs(); }, 30000);
 
 const ech = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+// --- rendre le markdown de la reponse ecrite ----------------------------------------------
+//
+// Pourquoi c'est ici et pas dans une bibliotheque : la page est servie par un serveur local
+// sans acces reseau garanti, et tirer un paquet de 40 ko pour du gras et des puces serait
+// payer cher une chose qu'on fait en cinquante lignes. Ce qui est couvert est ce que Claude
+// ecrit reellement : gras, italique, code, listes, titres, citations, blocs de code, liens.
+//
+// Le principe de sécurité tient en un mot : on ECHAPPE D'ABORD, on balise ensuite. Rien de
+// ce qui vient du modele ne peut donc devenir une balise ; seules les balises que CE code
+// pose existent. Les liens sont filtres sur leur schema — un `javascript:` redevient du
+// texte, parce qu'un lien de la conversation se tape au doigt sans reflechir.
+function mdEnLigne(t) {
+  return ech(t)
+    // Le code en premier : ce qu'il contient ne doit plus etre interprete ensuite. Sans ca
+    // un `**` cite dans du code deviendrait du gras, et le code mentirait.
+    .replace(/`([^`\n]+)`/g, (m, c) => "\u0000c" + c.replace(/\*/g, "\u0001") + "\u0000")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/(^|[^_\w])_([^_\n]+)_/g, "$1<em>$2</em>")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, texte, url) =>
+      /^https?:\/\//i.test(url)
+        ? `<a href="${url.replace(/"/g, "%22")}" target="_blank" rel="noreferrer">${texte}</a>`
+        : `${texte} (${url})`)
+    .replace(/\u0001/g, "*")
+    .replace(/\u0000c([^\u0000]*)\u0000/g, "<code>$1</code>");
+}
+
+function md(src) {
+  const lignes = String(src ?? "").split("\n");
+  const sortie = [];
+  let para = [], liste = null, bloc = null;
+  const viderPara = () => {
+    if (!para.length) return;
+    // Un retour a la ligne simple reste un retour a la ligne. Le markdown strict le mange,
+    // et ce n'est pas ce qu'on veut ici : une reponse se lit sur un telephone, et la coupe
+    // voulue par l'auteur porte du sens.
+    sortie.push("<p>" + para.map(mdEnLigne).join("<br>") + "</p>");
+    para = [];
+  };
+  const viderListe = () => {
+    if (!liste) return;
+    sortie.push(`<${liste.type}>` + liste.items.map(i => "<li>" + mdEnLigne(i) + "</li>").join("")
+                + `</${liste.type}>`);
+    liste = null;
+  };
+  const vider = () => { viderPara(); viderListe(); };
+
+  for (const brute of lignes) {
+    const l = brute.replace(/\s+$/, "");
+    if (bloc !== null) {
+      if (/^```/.test(l.trim())) {
+        sortie.push("<pre><code>" + ech(bloc.join("\n")) + "</code></pre>");
+        bloc = null;
+      } else bloc.push(brute);
+      continue;
+    }
+    if (/^\s*```/.test(l)) { vider(); bloc = []; continue; }
+    if (!l.trim()) { vider(); continue; }
+    const titre = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (titre) {
+      vider();
+      // Toujours h4 : ces lignes vivent DANS un flux, pas dans un document. Un h1 du modele
+      // y ferait une banniere plus grosse que l'en-tete de la page.
+      sortie.push("<h4>" + mdEnLigne(titre[2]) + "</h4>");
+      continue;
+    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { vider(); sortie.push("<hr>"); continue; }
+    const puce = /^\s*[-*+]\s+(.*)$/.exec(l);
+    const num = /^\s*\d+[.)]\s+(.*)$/.exec(l);
+    if (puce || num) {
+      viderPara();
+      const type = puce ? "ul" : "ol";
+      if (liste && liste.type !== type) viderListe();
+      if (!liste) liste = { type, items: [] };
+      liste.items.push((puce || num)[1]);
+      continue;
+    }
+    const cite = /^\s*>\s?(.*)$/.exec(l);
+    if (cite) { vider(); sortie.push("<blockquote>" + mdEnLigne(cite[1]) + "</blockquote>"); continue; }
+    viderListe();
+    para.push(l);
+  }
+  if (bloc !== null) sortie.push("<pre><code>" + ech(bloc.join("\n")) + "</code></pre>");
+  vider();
+  return sortie.join("");
+}
+
 // La configuration n'est pas une ligne du flux : c'est l'en-tete de la session. Elle reste
 // en haut, non filtrable, parce qu'en bypassPermissions c'est le seul endroit qui dit
 // noir sur blanc que plus rien ne sera demande.
@@ -2227,6 +2368,13 @@ function corps(e) {
       return ech(e.texte);
     case "modele":
       return `${ech(e.libelle)}${e.temporaire ? " (juste pour ce tour)" : ""}`;
+    case "texte":
+      // La reponse ECRITE, rendue comme une reponse de modele : gras, listes, titres, code.
+      // C'est elle qu'on lit — la ligne « claude » juste en dessous est la version parlee,
+      // et les deux n'ont pas le meme metier. Tant que l'ecrit etait contraint a la prose
+      // continue pour que la synthese vocale sonne juste, lire une reponse a l'ecran revenait
+      // a lire un bloc sans relief, sur un telephone, dans un flux.
+      return md(e.texte);
     default:
       return ech(e.texte);
   }
@@ -2351,6 +2499,31 @@ let dernier = null;
 // Vrai pendant le rejeu de l'historique : les lignes du passé ne s'animent pas, sinon une
 // reconnexion déclencherait cinq cents animations simultanées.
 let enRejeu = false;
+
+// Re-rendre l'ecrit, au plus une fois par image. Un debrief arrive en centaines de morceaux ;
+// rendre le markdown a chaque morceau ferait des centaines de reconstructions de la meme
+// reponse, et ça se sent tout de suite sur un telephone.
+const __mdEnAttente = new Set();
+let __mdPrevu = false;
+function planifierMd(ligne) {
+  __mdEnAttente.add(ligne);
+  if (__mdPrevu) return;
+  __mdPrevu = true;
+  const faire = () => {
+    __mdPrevu = false;
+    for (const l of __mdEnAttente) {
+      const p = l.querySelector(".propos");
+      if (p) p.innerHTML = md(l.brutMd || "");
+    }
+    __mdEnAttente.clear();
+    if (typeof suivre !== "undefined" && suivre && typeof window !== "undefined") {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(faire);
+  else setTimeout(faire, 16);
+}
+
 function ajouter(e) {
   if (e.genre === "config") { carteConfig(e); return; }
   // Un résultat vide sert à clore l'indicateur de son outil, pas à remplir le flux d'une
@@ -2386,6 +2559,12 @@ function ajouter(e) {
   const propos = dernier && dernier.querySelector(".propos");
   if (e.genre === "partiel" && meme && propos) {
     propos.textContent = e.texte;
+  } else if (e.genre === "texte" && meme && e.suite && propos) {
+    // L'ecrit se rend en markdown, donc il ne s'ajoute pas morceau par morceau : une liste
+    // a moitie arrivee n'est pas du markdown valide. On garde le texte BRUT et on re-rend
+    // l'ensemble — groupe par image, sinon un long run paierait un rendu par jeton.
+    dernier.brutMd = (dernier.brutMd || "") + (e.texte || "");
+    planifierMd(dernier);
   } else if (AGREGE.has(e.genre) && meme && e.suite && propos) {
     propos.textContent += e.texte;
   } else {
@@ -2408,6 +2587,7 @@ function ajouter(e) {
          ? `<span class="propos">${corps(e)}</span>` : corps(e))
       + `</div>`;
     if (e.genre === "voix") ligne.idVoix = e.id || null;
+    if (e.genre === "texte") ligne.brutMd = e.texte || "";
     flux.appendChild(ligne);
     dernier = ligne;
     nouvelle = true;
@@ -2947,8 +3127,25 @@ function noteBarre(texte, collante = false) {
 // a l'ecran : la barre etait vide, le flux n'avait rien. Sur un lien lent, ou pendant que
 // l'agent finit de demarrer, ca dure des secondes — et on ne sait pas s'il est parti. On le
 // garde donc visible jusqu'a l'echo du serveur ; s'il echoue ou ne revient pas, on le rend.
-const enVol = [];   // { texte, quand }
+const enVol = [];   // { texte, quand, jeton }
 const ATTENTE_ACCUSE = 20000;
+
+// Le jeton d'un message : ce qui permet au serveur de repondre « je l'ai deja » plutot que
+// de le rejouer.
+//
+// Le defaut qu'il corrige, mesure : l'echo « toi » n'est publie qu'au moment ou l'agent
+// CONSOMME le message. Si Claude travaille, cet echo peut arriver plusieurs minutes plus
+// tard. Or la page renvoyait, a chaque reconnexion, tout ce dont l'echo n'etait pas revenu —
+// et sur un telephone les reconnexions sont nombreuses. Un message ecrit pendant un tour long
+// partait donc une fois par reveil, et la meme phrase arrivait cinq fois.
+//
+// « Est-ce que le serveur l'a reçu » et « est-ce que l'agent l'a traite » sont deux questions
+// differentes. On confondait la seconde avec la premiere ; le jeton permet de poser la bonne.
+let compteJetons = 0;
+function nouveauJeton() {
+  compteJetons += 1;
+  return `${Date.now().toString(36)}-${compteJetons}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 // Ecrits sur le disque de l'appareil a chaque changement. iOS tue un onglet en arriere-plan
 // sans prevenir : la page qui revient est NEUVE, et une liste tenue en memoire n'existe plus.
@@ -2957,7 +3154,11 @@ const ATTENTE_ACCUSE = 20000;
 // conversation vit sur son port.
 const CLE_EN_VOL = "voix.enVol";
 function persisterEnVol() {
-  try { localStorage.setItem(CLE_EN_VOL, JSON.stringify(enVol.map(m => ({ texte: m.texte, quand: m.quand })))); }
+  try { localStorage.setItem(CLE_EN_VOL, JSON.stringify(
+    // Le jeton part sur le disque avec le reste : sans lui, un onglet tue par iOS renverrait
+    // au retour un message sous un jeton NEUF, que le serveur ne reconnaitrait pas — et le
+    // doublon reviendrait par la porte qu'on vient de fermer.
+    enVol.map(m => ({ texte: m.texte, quand: m.quand, jeton: m.jeton })))); }
   catch (_) {}
 }
 function restaurerEnVol() {
@@ -2968,7 +3169,10 @@ function restaurerEnVol() {
   const recents = (Array.isArray(brut) ? brut : [])
     .filter(m => m && m.texte && Date.now() - (m.quand || 0) < 15 * 60000);
   for (const m of recents) {
-    if (!enVol.some(x => x.texte === m.texte)) enVol.push({ texte: m.texte, quand: m.quand, restaure: true });
+    if (!enVol.some(x => x.texte === m.texte)) {
+      enVol.push({ texte: m.texte, quand: m.quand, jeton: m.jeton || nouveauJeton(),
+                   restaure: true });
+    }
   }
   if (enVol.length) majEnVol();
   return recents.length;
@@ -3009,6 +3213,15 @@ function accuser(texte) {
   if (i >= 0) { enVol.splice(i, 1); majEnVol(); }
 }
 
+// L'accuse de RECEPTION, qui n'est pas l'echo. Il dit « le serveur tient ce message », pas
+// « l'agent l'a traite » — et c'est precisement la distinction qui manquait. Il arrive dans
+// la seconde, meme quand Claude travaille depuis dix minutes.
+function accuserJeton(jeton) {
+  if (!jeton) return;
+  const i = enVol.findIndex(m => m.jeton === jeton);
+  if (i >= 0) { enVol.splice(i, 1); majEnVol(); }
+}
+
 // Renvoyer ce qui n'est jamais arrive. Appele une seule fois par reconnexion, a la fin du
 // rejeu : avant, on ne saurait pas distinguer « perdu » de « pas encore rejoue », et on
 // posterait le message en double.
@@ -3016,7 +3229,10 @@ function renvoyerEnVol() {
   if (!enVol.length || !socket || socket.readyState !== WebSocket.OPEN) return 0;
   let renvoyes = 0;
   for (const m of enVol) {
-    try { socket.send(JSON.stringify({ cmd: "texte", texte: m.texte })); renvoyes++; m.quand = Date.now(); }
+    // Le MEME jeton qu'a l'envoi d'origine : c'est ce qui rend le renvoi inoffensif. Si le
+    // serveur l'avait deja, il l'ignore et se contente d'accuser ; sinon il le traite. Dans
+    // les deux cas le message existe une fois et une seule.
+    try { socket.send(JSON.stringify({ cmd: "texte", texte: m.texte, jeton: m.jeton })); renvoyes++; m.quand = Date.now(); }
     catch (_) { break; }
   }
   majEnVol();
@@ -3552,9 +3768,10 @@ composer.onsubmit = ev => {
   // se met en veille, l'agent redémarre. C'est exactement là qu'on ne veut pas perdre ce
   // qu'on vient d'écrire.
   histoAjouter(texte);
-  enVol.push({ texte, quand: Date.now() });
+  const jeton = nouveauJeton();
+  enVol.push({ texte, quand: Date.now(), jeton });
   majEnVol();
-  const parti = envoyerCmd({ cmd: "texte", texte });
+  const parti = envoyerCmd({ cmd: "texte", texte, jeton });
   // Une lecture est en cours : le message part mais ne sera traité qu'après. On le garde
   // visible en grisé plutôt que de laisser un vide de plusieurs secondes.
   if (parti && lectureEnCours) {
@@ -5244,6 +5461,7 @@ function brancher() {
     // une liaison silencieuse parce que rien ne se passe d'une liaison silencieuse parce
     // qu'elle est morte.
     dernierPouls = Date.now();
+    if (d.genre === "_recu") { accuserJeton(d.jeton); return; }
     if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version, d.libelle); return; }
     if (d.genre === "_bonjour") {
       serveur = d;

@@ -143,6 +143,61 @@ async def une_commande_avant_l_agent_attend():
         await t.arreter()
 
 
+async def un_message_renvoye_n_arrive_qu_une_fois():
+    """Le meme message renvoye sous le meme jeton ne doit etre traite qu'UNE fois.
+
+    Le cas vecu : on ecrit pendant que Claude travaille. L'echo « toi » n'est publie qu'au
+    moment ou l'agent CONSOMME le message — donc plusieurs minutes plus tard. Entre-temps le
+    telephone se met en veille et se rebranche, et la page renvoie tout ce dont l'echo n'est
+    pas revenu. La meme phrase arrivait cinq fois.
+
+    Ce test verifie les deux moities de la correction, et la seconde compte autant que la
+    premiere : le doublon est ignore, ET il est quand meme accuse. Un doublon ignore en
+    silence laisserait la page croire que son message n'est jamais arrive, donc le renvoyer
+    encore — on aurait deplace la boucle au lieu de la casser.
+    """
+    print("\n=== un message renvoye n'arrive qu'une fois ===")
+    recus = []
+
+    async def commande(nom, donnees):
+        recus.append(donnees.get("texte"))
+
+    t = Tableau(port=7899, ouvrir=False, on_commande=commande)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                await ws.receive()
+                ordre = {"cmd": "texte", "texte": "relance les tests", "jeton": "j-42"}
+                for _ in range(3):          # l'envoi, puis deux reconnexions
+                    await ws.send_str(json.dumps(ordre))
+                await asyncio.sleep(0.3)
+                # Un autre message, jeton different : lui doit passer. Sans cette moitie, un
+                # test vert prouverait seulement qu'on a cesse de traiter les commandes.
+                await ws.send_str(json.dumps(
+                    {"cmd": "texte", "texte": "et commite", "jeton": "j-43"}))
+                await asyncio.sleep(0.3)
+                accuses = []
+                while True:
+                    try:
+                        m = await asyncio.wait_for(ws.receive(), timeout=0.2)
+                    except asyncio.TimeoutError:
+                        break
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_recu":
+                        accuses.append(d.get("jeton"))
+        dire(recus == ["relance les tests", "et commite"],
+             f"trois envois du meme jeton donnent UN message : {recus}")
+        dire(accuses.count("j-42") == 3,
+             f"et chaque envoi est accuse, doublons compris ({accuses.count('j-42')}/3) — "
+             f"sinon la page le renverrait sans fin")
+        dire("j-43" in accuses, "un jeton neuf est accuse lui aussi")
+    finally:
+        await t.arreter()
+
+
 async def un_message_en_echec_est_nomme():
     """Quand la commande « texte » echoue, l'erreur porte le message : la page le rend."""
     print("\n=== un message en echec est nomme dans l'erreur ===")
@@ -951,6 +1006,7 @@ async def principal():
     await une_commande_avant_l_agent_attend()
     await la_reprise_dit_sur_quoi_on_retombe()
     await un_message_en_echec_est_nomme()
+    await un_message_renvoye_n_arrive_qu_une_fois()
     couper_le_micro_ne_depend_plus_de_l_activite()
     await une_dictee_retenue_ne_sort_pas_dans_le_flux()
     await la_retenue_d_un_tour_ne_vaut_que_pour_lui()
