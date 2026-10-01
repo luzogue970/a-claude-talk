@@ -39,6 +39,8 @@ SUITES = [
      "regroupement des transcrits d'une même conversation", False),
     ("micro", "test_micro_coupe.py", "py",
      "micro coupé = plus un octet vers le nuage (et la veille)", False),
+    ("sentinelle", "test_sentinelle.py", "py",
+     "l'oreille écoute vraiment : panne silencieuse de la reconnaissance, et reprise", False),
     ("fil", "test_fil.py", "py",
      "les moteurs se construisent depuis le fil de travail", False),
     ("pupitre", "test_pupitre.py", "py", "conversations parallèles : baux micro et parole", False),

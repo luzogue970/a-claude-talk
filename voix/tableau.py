@@ -4378,7 +4378,13 @@ let vocalAnnuleA = 0;
 // enregistre — pas seulement au moment d'envoyer, qui est trop tard : la parole est deja
 // dite, et le temps passe a la dire est perdu.
 function liaisonVivante() {
-  return !!(socket && socket.readyState === WebSocket.OPEN) && !liaisonPerdue;
+  // `readyState` MENT. C'est tout le probleme : un telephone qui se verrouille, un portable
+  // qui se met en veille, un reseau qui bascule — la socket est morte et le navigateur
+  // affiche toujours OPEN, parfois pendant des minutes. On ouvrait donc le micro, on parlait
+  // trente secondes, et on l'apprenait a l'arrivee. `perimee()` est la seule mesure qui ne
+  // depende pas de ce que le navigateur croit : le serveur envoie un pouls toutes les 25 s,
+  // son absence prolongee est un fait.
+  return !!(socket && socket.readyState === WebSocket.OPEN) && !liaisonPerdue && !perimee();
 }
 
 // Un signal qu'on ne peut pas manquer : on est en train de parler, donc on ne regarde pas
@@ -4474,9 +4480,18 @@ async function demarrerVocal() {
   // on appuyait, et on apprenait a ce moment-la que rien ne partirait. Une demi-seconde de
   // detection valait mieux que trente secondes de parole perdue.
   clearInterval(veilleLiaisonVocal);
+  let tics = 0;
   veilleLiaisonVocal = setInterval(() => {
     if (!vocalEnCours) return;
-    if (!liaisonVivante()) interrompreVocal("la liaison est tombée pendant que tu parlais");
+    if (!liaisonVivante()) {
+      interrompreVocal("la liaison est tombée pendant que tu parlais");
+      return;
+    }
+    // Toutes les cinq secondes, on ne se contente pas de regarder : on demande. Sans ça, une
+    // socket morte en silence pendant qu'on parle ne serait vue qu'au bout de 70 s d'absence
+    // de pouls — c'est-a-dire apres l'enregistrement, donc trop tard. Interroger coute une
+    // trame de quelques octets ; se taire coute la phrase entiere.
+    if (++tics % 10 === 0) sonder("vérification pendant que tu parles");
   }, 500);
 }
 
@@ -4616,6 +4631,12 @@ function basculerDicteeIci() {
               + "Réessaie dès que la connexion revient.", true);
     return;
   }
+  // La liaison a l'air bonne — mais « a l'air » ne suffit pas pour un geste qui engage une
+  // minute de parole. On POSE la question au serveur au moment ou l'on ouvre le micro. La
+  // reponse arrive en quelques centiemes ; si elle ne vient pas, la sonde rebranche, et la
+  // surveillance ci-dessous interrompt l'enregistrement dans la seconde qui suit. On perd
+  // deux secondes de parole au pire, au lieu de la totalite.
+  sonder("ouverture du micro");
   // Sans https, Safari refuse le micro — et il le refuse en silence, ce qui se lit comme
   // « la page est cassee ». On teste avant, et on le DIT.
   if (!globalThis.isSecureContext) {

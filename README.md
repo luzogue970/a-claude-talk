@@ -2009,6 +2009,78 @@ de la phrase list d'Azure.
 Note : les quotas STT et TTS sont **séparés**. Azure a continué à parler alors qu'il
 n'entendait plus rien.
 
+### La panne qui ne se signale pas : l'oreille qui s'arrête en silence
+
+Le repli ci-dessus rattrape les moteurs qui **échouent**. Il ne rattrape pas ceux qui
+s'arrêtent **proprement** — et c'est la panne qu'on vivait réellement : jamais au démarrage,
+toujours en milieu de session, après être parti et revenu. Le micro est ouvert, la page dit
+« j'écoute », on parle une minute, et rien n'arrive. Il faut relancer l'application.
+
+La cause est dans la boucle de reconnaissance de LiveKit (`_STTPipeline._stt_pump`), et elle
+est silencieuse par construction :
+
+```python
+except APIError:
+    ...   # recréer le flux après une pause
+# node ended without error (audio input closed): stop
+return
+```
+
+Une panne qui se signale est rattrapée ; une fin propre arrête la pompe **pour toujours**. Or
+une fin propre arrive sans que rien ne soit cassé : un fournisseur ferme sa WebSocket après
+une période sans audio — c'est-à-dire exactement pendant qu'on code en silence, micro coupé
+par la veille — et le `FallbackAdapter` lui-même sort de `_run` par un `return` dès que son
+flux principal se termine sans exception. Aucune erreur, aucun événement, une session en
+parfaite santé apparente : la pompe est morte, les trames continuent d'être poussées dans un
+canal que plus personne ne lit.
+
+`sentinelle.py` veille donc sur l'oreille elle-même, avec **deux contrôles**, parce qu'aucun
+des deux seul ne suffit :
+
+- **L'état de la pompe**, lu directement, toutes les 2 s. C'est le contrôle préventif : il
+  voit la panne *avant* qu'on ait parlé pour rien. Il touche à des attributs privés de
+  LiveKit — assumé, et c'est pourquoi une structure interne illisible vaut « pas de panne
+  constatée » plutôt qu'une exception.
+- **La parole sans transcription.** Le détecteur d'activité vocale tourne **en local** : il
+  ne dépend d'aucun réseau, d'aucun quota, d'aucune clé. Quand il dit « quelqu'un a parlé » et
+  qu'aucun texte n'arrive en 20 s — le double de ce que met le moteur le plus lent de la
+  chaîne — le constat est sans appel, quelle qu'en soit la cause. C'est le filet qui rattrape
+  les pannes qu'on n'a pas prévues.
+
+Réparer veut dire recréer la reconnaissance sur la session vivante : le repli rouvre un flux
+en réessayant **tous** les moteurs, y compris ceux qu'il avait marqués tombés. C'est
+l'équivalent exact de relancer l'application, sans la relancer.
+
+Et ça se **dit**, à l'écran et à voix haute — au moment où ça arrive, on parle, donc on ne
+regarde pas l'écran. Une réparation muette ferait croire qu'il n'y avait rien à corriger ; la
+seule chose pire que de parler dans le vide, c'est de ne pas savoir qu'on vient de le faire.
+Deux réparations ne se suivent pas à moins de 15 s : si la première n'a pas suffi, marteler
+n'empilerait que des flux à moitié ouverts chez le fournisseur. Et si la réparation échoue,
+c'est dit aussi — c'est le seul cas où relancer l'application reste nécessaire, et le savoir
+vaut mieux que d'insister au micro.
+
+`test_sentinelle.py` commence par **lire la source de LiveKit installée** pour prouver que la
+ligne fautive est bien là. Si une version future la corrige, le test devient rouge — et ce
+sera une bonne nouvelle : il faudra alors se demander si la sentinelle sert encore, plutôt que
+de la garder par habitude.
+
+### La socket qui dit « ouverte » en étant morte
+
+Même histoire côté page, par l'autre bout. Les trois protections du vocal — refuser d'ouvrir
+le micro sans liaison, interrompre si elle tombe pendant qu'on parle, garder ce qui a été dit
+— s'appuyaient toutes sur `socket.readyState`. Or **`readyState` ment** : un téléphone qui se
+verrouille, un portable en veille, un réseau qui bascule, et la socket est morte pendant que
+le navigateur affiche toujours `OPEN`, parfois des minutes. On ouvrait donc le micro dans
+exactement la situation que ces protections devaient couvrir.
+
+Deux corrections, et aucune ne demande de faire confiance au navigateur :
+
+- `perimee()` — plus de pouls depuis 70 s — entre dans la définition de « liaison vivante ».
+  Le pouls vient du serveur toutes les 25 s : son absence est un **fait**, pas une croyance.
+- On **pose la question** au serveur à l'ouverture du micro, puis toutes les 5 s pendant
+  qu'on parle. Une réponse ne ment pas. Une socket qui meurt en cours d'enregistrement est
+  donc vue en secondes — et non après coup, l'enregistrement fini et la phrase perdue.
+
 ## Ce qui reste à faire
 
 - **Chemin 100 % local** (`VOIX_STT=local`, `VOIX_TTS=local`) : `faster-whisper` pour le

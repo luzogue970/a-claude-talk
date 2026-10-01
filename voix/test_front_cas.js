@@ -2072,6 +2072,43 @@ async function testerRelaisVocal() {
   dire(!vocalEnAttente, 'une fois parti, il n attend plus');
   noteBarre(null);
 
+  // 4. La socket ZOMBIE — celle qui dit OPEN alors qu elle est morte. C est le cas qui
+  //    restait : on part, on revient, le telephone a tue la liaison sans que le navigateur
+  //    l admette, et `readyState` repond toujours OPEN. Les trois protections ci-dessus
+  //    s appuyaient dessus : elles laissaient donc parler dans le vide, precisement dans la
+  //    situation qu elles etaient censees couvrir.
+  brancher(); ouvrirSock();
+  noteBarre(null); enregistreurs.length = 0; vibrations.length = 0;
+  dire(socket.readyState === 1, 'la socket se declare ouverte');
+  dernierPouls = Date.now() - 120000;              // deux minutes sans le moindre pouls
+  dire(perimee() && !liaisonVivante(),
+       'mais sans pouls depuis deux minutes, elle est tenue pour morte malgre OPEN');
+  btnDicter.onclick(); await tick();
+  dire(enregistreurs.length === 0,
+       'le micro ne s ouvre pas sur une socket zombie — c est ça, ne pas parler dans le vide');
+
+  // 5. Et quand rien ne permet de conclure, on DEMANDE au serveur au lieu de le croire.
+  brancher(); ouvrirSock();
+  noteBarre(null); enregistreurs.length = 0; envoyes.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(enregistreurs.length === 1, 'liaison saine : le micro s ouvre');
+  dire(envoyes.some(o => o.cmd === 'ping'),
+       'et une verification part avec l ouverture, au lieu de faire confiance a readyState');
+  envoyes.length = 0;
+  // Un serveur qui repond : sans lui, la premiere sonde resterait sans reponse, la page
+  // rebrancherait — a juste titre — et l enregistrement s arreterait avant la seconde sonde.
+  // Ce qu on veut mesurer ici est le contraire : liaison SAINE, et verifiee quand meme.
+  const repond = setInterval(() => { dernierPouls = Date.now(); }, 200);
+  await new Promise(r => setTimeout(r, 5400));     // la sonde periodique bat toutes les 5 s
+  clearInterval(repond);
+  dire(envoyes.some(o => o.cmd === 'ping'),
+       'la verification se repete pendant qu on parle : une socket qui meurt en cours est vue '
+       + 'en secondes, pas apres l enregistrement');
+  dire(btnDicter.getAttribute('aria-pressed') === 'true',
+       'et tant que le serveur repond, elle ne derange rien : on parle toujours');
+  btnDicter.onclick(); await pause();              // relacher proprement
+  noteBarre(null);
+
 }
 
 // ---- une question de Claude attend, puis cesse d attendre --------------------------------
@@ -2191,11 +2228,16 @@ setTimeout(() => {
   titre('sonde sans reponse, et message renvoye');
 
   // 1. Sonde restee sans reponse : la liaison est morte, on rebranche.
+  const SONDE_REELLE = DELAI_SONDE;
   DELAI_SONDE = 1;
   dernierPouls = Date.now();
   const avantMuette = sockets.length;
   sonder('verification');
   setTimeout(() => {
+    // Rendre sa vraie valeur TOUT DE SUITE. Elle est globale, et les cas qui suivent sondent
+    // eux aussi — a 1 ms toute sonde echoue, et ils testeraient une page en reconnexion
+    // perpetuelle au lieu de ce qu ils annoncent.
+    DELAI_SONDE = SONDE_REELLE;
     dire(sockets.length === avantMuette + 1,
          'une sonde restee sans reponse fait rebrancher (' + sockets.length + ' sockets)');
     dire(/n a pas repondu|répondu/.test(etatEl.title || ''),

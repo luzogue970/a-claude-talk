@@ -51,6 +51,7 @@ except ImportError:   # paquet absent d'un venv reconstruit : on doit rester aud
 import consommation
 import moteurs_stt
 import pupitre
+import sentinelle
 import stt_local
 
 import complexite
@@ -1234,6 +1235,28 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(fermer)
 
+    # La veille sur l'oreille elle-meme. Separee de la veille du micro (qui coupe un micro
+    # oublie) : celle-ci ne coupe rien, elle verifie que ce qui est ouvert ecoute vraiment.
+    # Voir sentinelle.py pour la panne qu'elle rattrape — une pompe de reconnaissance qui
+    # s'arrete sans erreur et ne redemarre jamais, d'ou « il faut relancer l'application ».
+    def _alerte_oreille(texte: str, grave: bool = False):
+        tableau.publier("erreur" if grave else "log", niveau="WARNING", source="stt",
+                        texte=texte)
+        # Le dire a voix haute aussi : au moment ou ça arrive, on parle — donc on ne regarde
+        # pas l'ecran. C'est tout le probleme qu'on corrige.
+        if grave:
+            try:
+                session.say(texte, add_to_chat_ctx=False)
+            except Exception:
+                log.debug("annonce vocale de la sentinelle impossible", exc_info=True)
+
+    oreille = sentinelle.Sentinelle(
+        session,
+        micro_ouvert=lambda: bool(session.input.audio_enabled),
+        dire=_alerte_oreille,
+    )
+    agent.oreille = oreille
+
     # Everything the session hears or decides, mirrored to the page.
     @session.on("user_input_transcribed")
     def _entendu(ev):
@@ -1242,6 +1265,9 @@ async def entrypoint(ctx: JobContext):
         # qui est le seul endroit connaissant le texte consolidé du tour.
         # Les résultats intermédiaires arrivent entiers et grandissants : ils remplacent.
         tableau.publier("partiel", texte=ev.transcript, final=bool(ev.is_final))
+        # Preuve que la chaine entiere fonctionne — meme un partiel la donne, et c'est tant
+        # mieux : il arrive bien avant la finale, donc la sentinelle se tait plus tot.
+        oreille.transcrit()
         if ev.is_final:
             if not agent.noter_transcription(ev.transcript, True):
                 # Dire pourquoi plutot que de jeter en silence : c'est ce silence qui rendait
@@ -1271,12 +1297,18 @@ async def entrypoint(ctx: JobContext):
             # d'ignorer une transcription en retard, qui appartient au tour precedent.
             agent._dictee_ouverte = True
             agent._derniere_parole = time.monotonic()
+            # Le detecteur tourne en local : quand il dit « quelqu'un parle », c'est vrai sans
+            # dependre d'aucun reseau. C'est ce qui rend l'attente de transcription mesurable.
+            oreille.parole_commence()
             tableau.publier("ecoute", actif=False, parle=True)
         elif str(ev.old_state) == "speaking":
             # La transcription commence ici. Avec un moteur sans texte en direct, c'est la
             # SEULE chose qui se passe pendant plusieurs secondes : sans ce signal, la page
             # semble figée puis du texte apparaît sans explication.
             tableau.publier("transcrit", actif=True, direct=moteurs_stt.tete().direct)
+            # Et ici demarre le chronometre de la sentinelle : du texte doit arriver, sinon
+            # cette phrase-la est partie dans le vide et il faut le dire.
+            oreille.parole_finie()
             # Le silence commence ici, pas avant : c'est la seule transition qui compte.
             # Lu depuis la session, pas depuis la constante : après un réglage, la
             # constante ne dit plus la vérité et le décompte mentirait.
@@ -1537,6 +1569,7 @@ async def entrypoint(ctx: JobContext):
             agent._tour_vocal = True
             agent._derniere_parole = time.monotonic()
             tableau.publier("ecoute", actif=False, parle=True, source="téléphone")
+            oreille.transcrit()
             tableau.publier("partiel", texte=texte, final=True, source="téléphone", moteur=qui)
             agent.noter_transcription(texte, final=True)
             agent.ouvrir_fenetre()
@@ -1773,6 +1806,7 @@ async def entrypoint(ctx: JobContext):
     publier_conversations()
     asyncio.create_task(surveiller_pupitre())
     asyncio.create_task(veiller_micro())
+    oreille.demarrer()
     asyncio.create_task(suivre_conso())
     asyncio.create_task(agent.pomper_evenements())
     asyncio.create_task(quota.boucle())
