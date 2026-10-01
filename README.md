@@ -806,6 +806,39 @@ lignes apparaissaient sans qu'on sache si elles tournaient encore, avaient about
   machine n'est pas morte. Tirage par sac mélangé, donc les quarante passent avant qu'un
   seul revienne.
 
+### Deux réponses, deux métiers : celle qu'on lit, celle qu'on écoute
+
+Chaque tour produit **deux** lignes, et c'est délibéré : `écrit` est la réponse de Claude Code,
+`claude` est la version parlée qu'en tire le porte-parole. Elles n'ont pas le même travail à
+faire, et c'est la confusion entre les deux qui gâchait la lecture.
+
+La réponse écrite était contrainte à la **prose continue** — pas de markdown, pas de liste,
+pas de bloc de code — pour que la synthèse vocale sonne juste. Sauf que la synthèse ne lit
+jamais ce texte : un second modèle le relit et en fabrique la version orale. On payait donc le
+prix d'une contrainte orale sur le seul contenu qui se lit **avec les yeux** — un bloc gris
+sans relief, dans un flux, sur un téléphone. Chacun son métier : l'écrit se met en forme, le
+porte-parole parle.
+
+La page rend donc le markdown de la ligne `écrit` : gras, italique, listes à puces et
+numérotées, titres, citations, code en ligne et blocs de code, liens. Une cinquantaine de
+lignes plutôt qu'une bibliothèque — la page est servie en local, et tirer 40 ko pour du gras
+serait payer cher une chose simple.
+
+Trois choix qui se voient à l'usage :
+
+- **On échappe d'abord, on balise ensuite.** Rien de ce que le modèle produit ne peut devenir
+  une balise ; seules les balises posées par ce code existent. Les liens sont filtrés sur leur
+  schéma — un `javascript:` redevient du texte, parce qu'un lien dans la conversation se tape
+  au doigt sans réfléchir.
+- **Les titres sont toujours des `h4`.** Ces lignes vivent dans un flux, pas dans un document :
+  un `h1` du modèle y ferait une bannière plus grosse que l'en-tête de la page.
+- **Le texte brut est conservé, et re-rendu en entier.** Une réponse arrive en centaines de
+  morceaux, et une liste à moitié arrivée n'est pas du markdown valide. Le rendu est groupé par
+  image — le refaire à chaque morceau se sentirait tout de suite sur un téléphone.
+
+Un retour à la ligne simple reste une coupe, contrairement au markdown strict : sur un écran
+étroit, la coupe voulue par l'auteur porte du sens.
+
 ### L'en-tête, en zones
 
 Une seule rangée en `flex-wrap` se repliait n'importe comment : la pastille « parole » sautait
