@@ -11,6 +11,7 @@ WebSocket carrying a JSON event stream. No build step, no CDN, nothing leaves th
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import hashlib
@@ -608,7 +609,15 @@ class Tableau:
             "evenements": self._n,
         }
 
-    async def _ecrivain(self, ws, file: asyncio.Queue):
+    async def _ecrivain(self, ws, file: asyncio.Queue, rejeu_fini: asyncio.Event, plume):
+        # Attendre la fin du rejeu AVANT d'ecrire quoi que ce soit. Deux coroutines qui
+        # appellent send_str sur la meme WebSocket entrelacent leurs trames des que l'une
+        # cede la main sur un drain — et une trame entrelacee est un flux corrompu, que le
+        # navigateur sanctionne par une fermeture 1006 sans la moindre explication. Comme le
+        # rejeu est d'autant plus long que la conversation est vieille, le defaut se
+        # manifestait exactement la ou on le rapportait : en revenant sur une conversation
+        # deja longue, avec une reconnexion qui n'aboutit jamais.
+        await rejeu_fini.wait()
         while True:
             try:
                 charge = await asyncio.wait_for(file.get(), timeout=self.POULS)
@@ -618,39 +627,97 @@ class Tableau:
                 # ni creer une tache de plus par client.
                 charge = json.dumps(self._pouls(), ensure_ascii=False)
             try:
-                await ws.send_str(charge)
+                async with plume:
+                    await ws.send_str(charge)
             except Exception:
                 return
 
-    async def _flux(self, requete):
-        ws = web.WebSocketResponse(heartbeat=20)
-        await ws.prepare(requete)
-        file: asyncio.Queue = asyncio.Queue(maxsize=500)
-        self.clients[ws] = file
-        ecrivain = asyncio.create_task(self._ecrivain(ws, file))
+    async def _rejouer(self, ws, rejeu_fini: asyncio.Event, plume):
+        """Tout ce que la page doit savoir pour repartir — etat, histoire, mot de la fin.
+
+        Dans sa propre tache, parce que la boucle de lecture doit tourner PENDANT. Avant, le
+        rejeu precedait `async for message in ws` : tant qu'il durait, le serveur n'entendait
+        rien. Or la premiere chose qu'une page fait en revenant de veille est de sonder la
+        liaison, et elle jette la socket si la sonde reste sans reponse 2,5 s. Sur une longue
+        conversation, le rejeu depasse ce delai : la page jetait une socket parfaitement
+        saine, en rouvrait une, qui relancait un rejeu, qu'elle jetait encore. La boucle de
+        reconnexion sans fin etait la, et elle ne pouvait pas converger — plus la
+        conversation etait longue, plus elle etait certaine.
+        """
         try:
             # Par lots de 200 : une reprise complete fait plus de mille evenements, et une
             # trame WebSocket unique de plusieurs centaines de kilo-octets se heurte aux
             # limites du navigateur comme d'aiohttp. Le client les traite dans l'ordre.
             # L'etat d'abord : c'est ce qui rend la page utilisable. Le flux ensuite, et il
             # peut manquer sans que rien ne casse.
-            for charge in self.etat.values():
-                await ws.send_str(f'{{"genre": "_etat", "evenement": {charge}}}')
+            # Les etats d'un seul tenant : ils decrivent une photographie coherente, et un
+            # evenement glisse au milieu en montrerait une moitie.
+            async with plume:
+                for charge in list(self.etat.values()):
+                    await ws.send_str(f'{{"genre": "_etat", "evenement": {charge}}}')
 
             passe = list(self.histoire)
             for i in range(0, len(passe) or 1, 200):
-                await ws.send_str(json.dumps(
-                    {"genre": "_histoire", "evenements": passe[i:i + 200]},
-                    ensure_ascii=False, default=str,
-                ))
+                # Le verrou est repris A CHAQUE LOT, pas garde pour tout le rejeu : entre
+                # deux lots, une reponse de liaison peut passer. C'est ce qui permet a une
+                # page qui revient de veille d'obtenir sa preuve de vie sans attendre la fin
+                # d'un rejeu de trois mille lignes — l'attente qui la faisait jeter la socket.
+                async with plume:
+                    await ws.send_str(json.dumps(
+                        {"genre": "_histoire", "evenements": passe[i:i + 200]},
+                        ensure_ascii=False, default=str,
+                    ))
             # Le mot de la fin de la reprise. La page savait qu'elle etait rebranchee, elle ne
             # savait pas SUR QUOI : agent pret ou non, tour en cours ou non, combien de lignes
             # viennent d'etre rejouees. Rebrancher sur une session morte et rebrancher sur une
             # session qui travaille depuis dix minutes se ressemblaient trait pour trait.
-            await ws.send_str(json.dumps(
-                {**self._pouls(), "genre": "_bonjour", "rejoue": len(passe)},
-                ensure_ascii=False, default=str,
-            ))
+            async with plume:
+                await ws.send_str(json.dumps(
+                    {**self._pouls(), "genre": "_bonjour", "rejoue": len(passe)},
+                    ensure_ascii=False, default=str,
+                ))
+        except Exception as erreur:
+            # Un rejeu qui echoue en silence laissait une socket ouverte et muette : la page
+            # attend un « bonjour » qui ne viendra pas. On ferme, ce qui la fait rebrancher.
+            log.warning("rejeu interrompu : %s", erreur)
+            with contextlib.suppress(Exception):
+                await ws.close(code=1011, message=b"rejeu interrompu")
+        finally:
+            # Dans tous les cas : sans ca, l'ecrivain attendrait pour toujours et la page
+            # n'aurait plus un seul pouls.
+            rejeu_fini.set()
+
+    async def _flux(self, requete):
+        ws = web.WebSocketResponse(heartbeat=20)
+        await ws.prepare(requete)
+        file: asyncio.Queue = asyncio.Queue(maxsize=500)
+        self.clients[ws] = file
+        # Trois taches, et la separation compte : le rejeu ecrit, l'ecrivain ecrit APRES lui,
+        # et la lecture tourne tout du long. Les deux ecrivains sont sequentiels parce qu'on
+        # ne peut pas ecrire a deux sur une WebSocket ; la lecture, elle, ne doit jamais
+        # attendre, sinon une page qui sonde la liaison conclut qu'elle est morte.
+        rejeu_fini = asyncio.Event()
+        # Une seule plume pour cette socket. Deux coroutines qui appellent send_str dessus
+        # entrelacent leurs trames des qu'une cede la main sur un drain, et une trame
+        # entrelacee est un flux corrompu — que le navigateur sanctionne par une fermeture
+        # 1006 sans un mot d'explication, puis une reconnexion, puis la meme corruption.
+        plume = asyncio.Lock()
+        rejeu = asyncio.create_task(self._rejouer(ws, rejeu_fini, plume))
+        ecrivain = asyncio.create_task(self._ecrivain(ws, file, rejeu_fini, plume))
+
+        async def repondre(charge: str):
+            """Une reponse de LIAISON : elle double la file et le rejeu, et c'est voulu.
+
+            Un accuse ou une preuve de vie n'a de valeur que tout de suite. La faire
+            attendre la fin d'un rejeu, c'est repondre apres que la page a conclu que la
+            liaison etait morte.
+            """
+            try:
+                async with plume:
+                    await ws.send_str(charge)
+            except Exception:
+                pass
+        try:
             async for message in ws:
                 if message.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
@@ -671,7 +738,7 @@ class Tableau:
                         # C'est l'accuse qui retire le message de la file « en vol » de la
                         # page ; le refuser a un doublon laisserait la page le renvoyer
                         # indefiniment, ce qui est exactement le defaut qu'on corrige.
-                        await file.put(json.dumps({"genre": "_recu", "jeton": jeton}))
+                        await repondre(json.dumps({"genre": "_recu", "jeton": jeton}))
                         if jeton in self._jetons_vus:
                             log.info("commande « %s » deja traitee (jeton %s), ignoree",
                                      nom, jeton)
@@ -685,7 +752,7 @@ class Tableau:
                         # lui montre le navigateur — une socket tuee par le systeme reste
                         # « ouverte » cote JavaScript, et tout ce qu'on y ecrit part dans le
                         # vide sans la moindre erreur. Seule une reponse prouve la liaison.
-                        await file.put(json.dumps(self._pouls(), ensure_ascii=False))
+                        await repondre(json.dumps(self._pouls(), ensure_ascii=False))
                         continue
                     if not self._on_commande:
                         # L'agent finit de demarrer : on garde la commande pour lui.
@@ -693,6 +760,7 @@ class Tableau:
                         continue
                     await self._executer(nom, ordre)
         finally:
+            rejeu.cancel()
             ecrivain.cancel()
             self.clients.pop(ws, None)
         return ws
@@ -2694,7 +2762,11 @@ let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il
 // plusieurs echecs d'affilee ET une coupure qui dure. En bas, au-dessus de la barre, parce
 // qu'un diagnostic ne doit pas prendre la place de ce qu'on est en train de lire. Et en
 // ambre : c'est un avertissement, pas une panne — l'agent, lui, tourne probablement encore.
-const DIAG_APRES = 45000;   // au-dela, ce n'est plus un aller-retour
+// 25 s : au-dela, ce n'est plus un aller-retour. C'etait 45 s, et c'etait trop tard — la
+// question « est-ce que ça reconnecte vraiment, ou est-ce que je regarde une page morte ? »
+// se pose bien avant, et rester muet pendant trois quarts de minute est precisement ce qui
+// la rend angoissante.
+const DIAG_APRES = 25000;
 let coupeDepuis = 0;        // Date.now() de la coupure en cours, 0 si la liaison tient
 
 function __diagBoite() {
@@ -2719,7 +2791,10 @@ function retirerDiag() { document.getElementById("diag-ws")?.remove(); }
 // decide sur la DUREE plutot que sur l'evenement.
 function majDiagnostic() {
   const dure = coupeDepuis ? Date.now() - coupeDepuis : 0;
-  if (echecs < 4 || dure < DIAG_APRES) { retirerDiag(); return; }
+  // Deux echecs suffisent : conjugue a la duree, c'est deja une coupure qui ne se repare
+  // pas toute seule. Exiger quatre echecs retardait la boite de plusieurs dizaines de
+  // secondes supplementaires quand l'ecart entre tentatives avait grandi.
+  if (echecs < 2 || dure < DIAG_APRES) { retirerDiag(); return; }
   __diagBoite().textContent =
     "la reconnexion échoue depuis " + Math.round(dure / 1000) + " s"
     + (causeCoupure ? "\n" + causeCoupure : "")
@@ -5277,6 +5352,14 @@ let serveur = null;        // le dernier _pouls recu, tel quel
 let causeCoupure = "";     // ce qu'on sait de la derniere fermeture
 let minuterieRebranche = null, minuterieCompte = null, prochaineTentative = 0;
 let minuterieOuverture = null;   // le garde-temps d'une socket qui n'aboutit pas
+let minuterieBonjour = null;     // le garde-temps d'une socket ouverte mais muette
+
+// Une socket OUVERTE qui ne rejoue jamais rien. C'est le dernier cas ou la page pouvait
+// rester indefiniment sur « reconnexion… » : le navigateur a bien ouvert la liaison, donc
+// ni `onclose` ni le garde-temps d'ouverture ne se declenchent, mais le serveur n'envoie
+// pas un octet — un rejeu qui s'etrangle, un proxy qui retient le flux. On attendait alors
+// les 70 s de `perimee()`, c'est-a-dire une eternite passee a regarder trois points.
+let DELAI_BONJOUR = 20000;
 
 // Combien de temps on laisse une socket neuve aboutir avant de la declarer morte-nee.
 // Huit secondes : un handshake WebSocket local se compte en millisecondes, et meme un reseau
@@ -5406,7 +5489,11 @@ function programmerRebranche() {
   // Au bout de quelques essais, on arrete de dire « reconnexion » sans savoir : on demande
   // au serveur s'il est la. Pas avant : une coupure de deux secondes se repare toute seule,
   // et un diagnostic a chaque aller-retour serait du bruit.
-  if (echecs >= 3) diagnostiquerPanne();
+  // Des le DEUXIEME echec : la question « l'agent est-il encore la ? » est la seule qui
+  // compte, et elle coute deux cents octets. L'attendre trois echecs, c'est-a-dire une
+  // dizaine de secondes de plus, n'economisait rien et laissait la page dire « reconnexion »
+  // sans savoir si quelqu'un ecoutait encore en face.
+  if (echecs >= 2) diagnostiquerPanne();
   const delai = attenteRebranche();
   prochaineTentative = Date.now() + delai;
   reconnexionPrevue = true;
@@ -5438,7 +5525,15 @@ function rebrancherMaintenant(pourquoi, force) {
   // interesse est « depuis combien de temps je n'ai plus de serveur », pas « depuis combien
   // de temps dure cet essai-ci ».
   if (!coupeDepuis) coupeDepuis = Date.now();
-  echecs = 0;
+  // Le compteur d'echecs n'est PAS remis a zero ici, et c'est le coeur du defaut « trois
+  // petits points a l'infini, sans la moindre information ». Cette fonction est appelee a
+  // chaque retour sur la page, a chaque retour du reseau, a chaque appui sur l'etat. Sur un
+  // telephone, on quitte et on revient sans arret : le compteur retombait a zero avant
+  // d'atteindre les seuils qui RENSEIGNENT — trois echecs pour demander au serveur s'il
+  // repond encore, quatre pour afficher « deconnecte » et la boite de diagnostic. On
+  // reessayait donc eternellement en affichant « reconnexion… essai 1 », sans jamais rien
+  // apprendre ni rien dire. Seule une ouverture reussie remet le compteur a zero : c'est la
+  // seule preuve qu'il n'y a plus d'echec a compter.
   arreterRebranche();
   // Pas de compte a rebours : la tentative part maintenant. Sans cette remise a zero,
   // l'echeance d'un report precedent serait encore affichee, et on lirait « reconnexion
@@ -5512,9 +5607,13 @@ function surveillerLiaison() {
       rebrancherMaintenant("plus aucun signe du serveur", true);
       return;
     }
-    // Fermee, et personne n'a reprogramme : le cas ne devrait pas arriver, et c'est
-    // precisement pour ca qu'il merite un filet — une page morte ne se repare pas toute seule.
-    if (socket.readyState === 3 && !minuterieRebranche && !reconnexionPrevue) {
+    // Fermee, et aucune MINUTERIE ne tourne. On ne regarde plus `reconnexionPrevue` : une
+    // socket fermee pendant que la page etait en arriere-plan le laisse a `true` sans
+    // qu'aucune minuterie n'existe — la reprise y est confiee au retour sur la page. Quand
+    // ce retour n'emet pas `visibilitychange` (page gelee puis restauree, certains retours
+    // depuis l'ecran d'accueil), plus personne ne rebranchait, et le drapeau desarmait
+    // justement le filet cense rattraper ce cas. On se fie donc a ce qui tourne vraiment.
+    if (socket.readyState === 3 && !minuterieRebranche) {
       rebrancherMaintenant("liaison fermée sans reprise programmée", true);
     }
   }, DELAI_VEILLE);
@@ -5596,6 +5695,12 @@ function brancher() {
     dernierPouls = Date.now();
     arreterRebranche();
     reconnexionPrevue = false;
+    clearTimeout(minuterieBonjour);
+    minuterieBonjour = setTimeout(() => {
+      minuterieBonjour = null;
+      if (socket !== ws) return;
+      rebrancherMaintenant("liaison ouverte mais le serveur n'a rien rejoué", true);
+    }, DELAI_BONJOUR);
     // La verite du travail en cours revient avec l'etat rejoue, juste apres. En attendant on
     // leve le gel : si l'agent ne travaille plus, l'etat rejoue eteindra la pastille ; s'il
     // travaille, le compteur repart d'un chiffre juste.
@@ -5638,6 +5743,8 @@ function brancher() {
     if (d.genre === "_recu") { accuserJeton(d.jeton); return; }
     if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version, d.libelle); return; }
     if (d.genre === "_bonjour") {
+      clearTimeout(minuterieBonjour);
+      minuterieBonjour = null;
       serveur = d;
       verifierVersion(d.version, d.libelle);
       // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
@@ -5690,6 +5797,8 @@ function brancher() {
     if (socket !== ws) return;
     clearTimeout(minuterieOuverture);
     minuterieOuverture = null;
+    clearTimeout(minuterieBonjour);
+    minuterieBonjour = null;
     majEnvoyer();
     arreterCompte();
     toutClore("connexion perdue");

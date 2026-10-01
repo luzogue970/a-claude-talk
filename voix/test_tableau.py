@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 
 import aiohttp
@@ -1000,6 +1001,58 @@ async def la_reprise_dit_sur_quoi_on_retombe():
         await t.arreter()
 
 
+async def le_serveur_ecoute_pendant_qu_il_rejoue():
+    """La reconnexion sans fin, prise a sa racine.
+
+    Le rejeu d'une longue conversation precedait la boucle de lecture : tant qu'il durait,
+    le serveur n'entendait RIEN. Or une page qui revient de veille sonde la liaison aussitot
+    et jette la socket si la sonde reste 2,5 s sans reponse. Sur une conversation de
+    plusieurs milliers de lignes, le rejeu depasse ce delai : la page jetait une socket
+    saine, en ouvrait une autre, qui relancait un rejeu complet, qu'elle jetait encore. Plus
+    la conversation etait longue, plus la boucle etait certaine de ne jamais converger.
+    """
+    print("\n=== une sonde obtient sa reponse meme pendant le rejeu d'une longue conversation ===")
+    t = Tableau(port=7903, ouvrir=False, on_commande=None)
+    # Volumineux a dessein : c'est la LONGUEUR du rejeu qui cree la fenetre pendant laquelle
+    # le serveur etait sourd. Une poignee de lignes se rejoue plus vite qu'un aller-retour et
+    # ne prouverait rien.
+    for i in range(3000):
+        t.publier("texte", texte=f"ligne {i} " + "x" * 6000)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                # Sans attendre une seule trame du rejeu : c'est exactement ce que fait une
+                # page qui revient de veille.
+                await ws.send_str(json.dumps({"cmd": "ping"}))
+                vu_bonjour = False
+                pouls_avant_la_fin = False
+                pouls = None
+                debut = time.monotonic()
+                while time.monotonic() - debut < 10:
+                    m = await asyncio.wait_for(ws.receive(), timeout=5)
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_bonjour":
+                        vu_bonjour = True
+                    elif d.get("genre") == "_pouls":
+                        pouls = d
+                        pouls_avant_la_fin = pouls_avant_la_fin or not vu_bonjour
+                    if vu_bonjour and pouls:
+                        break
+                dire(vu_bonjour, "le rejeu va jusqu'au bout et dit son mot de la fin")
+                dire(pouls is not None,
+                     "et la sonde envoyee pendant le rejeu obtient sa reponse : la page "
+                     "n'a aucune raison de jeter la socket")
+                dire(pouls_avant_la_fin,
+                     "la reponse arrive PENDANT le rejeu, pas apres — sinon la page a deja "
+                     "conclu que la liaison etait morte et rouvert une socket")
+                dire(not ws.closed, "la liaison tient — pas de fermeture 1006 opaque")
+    finally:
+        await t.arreter()
+
+
 async def principal():
     logging.disable(logging.CRITICAL)  # le traceback attendu n'a pas a polluer la sortie
     await une_commande_qui_leve_ne_tue_pas_la_socket()
@@ -1018,6 +1071,7 @@ async def principal():
     un_moteur_sans_direct_est_annonce()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()
+    await le_serveur_ecoute_pendant_qu_il_rejoue()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
 

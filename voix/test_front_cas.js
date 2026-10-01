@@ -1628,6 +1628,86 @@ async function testerLiaisonQuiNAboutitPas() {
        'une socket muette est remplacee SANS qu on ait a quitter la page ('
        + sockets.length + ' tentatives)');
 
+  // ---- la reconnexion sans fin, et sans un mot ------------------------------------------
+  // Le defaut vecu : on quitte l application, on revient, « reconnexion… » et trois points
+  // pour toujours. Aucune information : ni depuis quand, ni pourquoi, ni si l agent est
+  // encore la. La cause etait ici — chaque retour sur la page appelle rebrancherMaintenant,
+  // qui remettait le compteur d echecs a zero. Or tous les seuils qui RENSEIGNENT sont
+  // accroches a ce compteur : interroger le serveur en HTTP, dire « deconnecte », ouvrir la
+  // boite de diagnostic. Un telephone qu on reprend toutes les trente secondes ne les
+  // atteignait donc jamais.
+  if (veilleLiaison) { clearInterval(veilleLiaison); veilleLiaison = null; }
+  arreterRebranche();
+  sockets.length = 0; echecs = 0; coupeDepuis = 0; serveurRepond = null;
+  brancher();
+  await pause(120);                       // quelques tentatives qui n aboutissent pas
+  const apresEchecs = echecs;
+  dire(apresEchecs >= 2, 'les echecs s accumulent (' + apresEchecs + ')');
+  rebrancherMaintenant('retour sur la page', true);
+  dire(echecs >= apresEchecs,
+       'revenir sur la page n EFFACE pas le compteur d echecs (' + echecs + ') — sinon on '
+       + 'reessaie eternellement sans jamais franchir le seuil qui informe');
+  coupeDepuis = Date.now() - 60000;
+  direLiaison();
+  dire(!!document.getElementById('diag-ws'),
+       'et au bout d une minute la page DIT ce qu elle sait, au lieu des trois points');
+  const sockAvant = sockets.length;
+  await pause(120);
+  dire(sockets.length > sockAvant, 'tout en continuant d essayer : rien n est abandonne');
+
+  // Une ouverture reussie, elle, repart vraiment de zero : c est la seule preuve qu il n y a
+  // plus d echec a compter.
+  arreterRebranche();
+  sockets.length = 0; brancher();
+  const bonne = sockets[sockets.length - 1];
+  bonne.readyState = 1; socket.readyState = 1; if (socket.onopen) socket.onopen();
+  dire(echecs === 0 && !document.getElementById('diag-ws'),
+       'une ouverture reussie remet le compteur a zero et retire le diagnostic');
+
+  // ---- le filet qui se desarmait tout seul ----------------------------------------------
+  // Une socket fermee pendant que la page etait en arriere-plan laisse `reconnexionPrevue`
+  // a vrai SANS aucune minuterie : la reprise est confiee au retour sur la page. Quand ce
+  // retour n emet pas `visibilitychange` — page gelee puis restauree — plus personne ne
+  // rebranchait, et la surveillance refusait d intervenir a cause de ce drapeau. Page morte,
+  // affichant « reconnexion… », pour toujours.
+  arreterRebranche();
+  sockets.length = 0;
+  document.visibilityState = 'hidden';
+  brancher();
+  const enFond = sockets[sockets.length - 1];
+  enFond.readyState = 1; socket.readyState = 1; if (socket.onopen) socket.onopen();
+  fermerSock(1006);
+  dire(reconnexionPrevue === true && !minuterieRebranche,
+       'coupure en arriere-plan : la reprise est differee, aucune minuterie ne tourne');
+  document.visibilityState = 'visible';     // on revient, mais sans visibilitychange
+  const avantFilet = sockets.length;
+  DELAI_VEILLE = 20;
+  surveillerLiaison();
+  await pause(60);
+  dire(sockets.length > avantFilet,
+       'la surveillance rattrape le cas et rebranche d elle-meme ('
+       + (sockets.length - avantFilet) + ' tentative(s))');
+  if (veilleLiaison) { clearInterval(veilleLiaison); veilleLiaison = null; }
+
+  // ---- une socket ouverte qui ne dit jamais rien -----------------------------------------
+  // Le dernier chemin vers « reconnexion… » eternel : le navigateur a ouvert la liaison —
+  // donc ni `onclose` ni le garde-temps d ouverture ne parlent — mais le serveur n envoie
+  // pas un octet. On attendait les 70 s de perimee() pour s en apercevoir.
+  arreterRebranche();
+  const gardeBonjour = DELAI_BONJOUR;
+  DELAI_BONJOUR = 30;
+  DELAI_OUVERTURE = 5000;     // sinon c est LUI qui tire, et on testerait l autre garde
+  sockets.length = 0;
+  brancher();
+  const muette = sockets[sockets.length - 1];
+  muette.readyState = 1; socket.readyState = 1; if (socket.onopen) socket.onopen();
+  const avantMuette = sockets.length;
+  await pause(80);
+  dire(sockets.length > avantMuette,
+       'une socket ouverte qui ne rejoue rien est jetee au lieu d etre attendue');
+  dire(/rejoué/.test(causeCoupure), 'et la cause est nommee : ' + causeCoupure);
+  DELAI_BONJOUR = gardeBonjour; DELAI_OUVERTURE = 30;
+
   DELAI_VEILLE = gardeVeille; DELAI_OUVERTURE = gardeOuverture;
   for (let i = 0; i < attentes.length; i++) ATTENTES[i] = attentes[i];
   if (veilleLiaison) { clearInterval(veilleLiaison); veilleLiaison = null; }

@@ -7,6 +7,43 @@ correctif pour un correctif.
 [kac]: https://keepachangelog.com/fr/1.1.0/
 [sv]: https://semver.org/lang/fr/
 
+## [Non publié]
+
+### Corrige — la reconnexion qui ne se fait jamais, et qui ne dit rien
+Revenir sur l'application après un détour par l'écran d'accueil laissait « reconnexion… » et
+trois points, indéfiniment, sans la moindre indication. Quatre défauts se renforçaient :
+
+- **Le serveur était sourd pendant qu'il rejouait.** La boucle de lecture ne démarrait
+  qu'après l'envoi de tout l'historique. Or une page qui revient de veille sonde la liaison
+  aussitôt et jette la socket si la sonde reste 2,5 s sans réponse — ce qu'un rejeu de
+  plusieurs milliers de lignes dépasse. La page jetait donc une socket saine, en ouvrait une
+  autre, qui relançait un rejeu complet, qu'elle jetait encore. Plus la conversation était
+  longue, plus la boucle était certaine de ne jamais converger. Le rejeu a maintenant sa
+  propre tâche, la lecture tourne pendant, et une réponse de liaison s'intercale entre deux
+  lots d'historique.
+- **Deux coroutines écrivaient sur la même socket.** Le rejeu et l'écrivain d'événements
+  pouvaient entrelacer leurs trames — un flux corrompu, que le navigateur sanctionne par une
+  fermeture 1006 sans un mot. Une seule plume par socket désormais.
+- **Le compteur d'échecs s'effaçait à chaque retour sur la page.** Tous les seuils qui
+  *renseignent* y sont accrochés : interroger le serveur en HTTP, dire « déconnecté »,
+  ouvrir la boîte de diagnostic. Un téléphone qu'on reprend toutes les trente secondes ne les
+  atteignait jamais. Seule une ouverture réussie remet le compteur à zéro.
+- **Le filet de sécurité se désarmait tout seul.** Une socket fermée en arrière-plan confie
+  sa reprise au retour sur la page ; quand ce retour n'émet pas `visibilitychange`, plus
+  personne ne rebranchait — et le drapeau posé pour l'occasion empêchait justement la
+  surveillance d'intervenir. Elle se fie maintenant aux minuteries qui tournent vraiment.
+
+### Ajoute — une liaison ouverte mais muette est jetée au bout de 20 s
+Dernier chemin vers l'attente éternelle : le navigateur ouvre la socket — donc ni `onclose`
+ni le garde-temps d'ouverture ne parlent — mais le serveur n'envoie pas un octet. On
+attendait les 70 s de la détection de socket périmée.
+
+### Change — le diagnostic parle plus tôt
+La page demande au serveur s'il répond encore dès le deuxième échec (contre trois), et la
+boîte de diagnostic paraît après 25 s de coupure (contre 45). La question « est-ce que ça
+reconnecte vraiment, ou est-ce que je regarde une page morte ? » se pose bien avant
+trois quarts de minute.
+
 ## [1.17.0] — 2026-08-27
 
 ### Ajoute — l'historique des messages, aux flèches
