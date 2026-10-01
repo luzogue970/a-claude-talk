@@ -593,7 +593,24 @@ async def une_image_arrive_par_son_chemin():
                 rep2 = _json.loads(await r.text())
         dire(_Path(rep2["chemin"]).parent == _Path(dossier),
              "le nom vient de nous : un chemin relatif dans le nom d'origine n'ecrit pas ailleurs")
-        dire(len(list(_Path(dossier).iterdir())) == 2, "deux images, deux fichiers distincts")
+        # Meme contenu, meme chemin. Joindre deux fois la meme photo — apres un echec, apres
+        # avoir rouvert la page — deposait deux fichiers jumeaux, et le message partait avec
+        # deux chemins pour une seule image : Claude la lisait deux fois et le transcript
+        # pesait le double pour rien.
+        dire(rep2["chemin"] == rep["chemin"], "la meme photo jointe deux fois garde son chemin")
+        dire(rep2.get("deja") is True, "et le dit, pour que la page n'affiche pas un doublon")
+        dire(len(list(_Path(dossier).iterdir())) == 1,
+             "un seul fichier sur le disque pour un seul contenu")
+
+        AUTRE = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+        async with aiohttp.ClientSession() as s:
+            envoi = aiohttp.FormData()
+            envoi.add_field("image", AUTRE, filename="autre.png", content_type="image/png")
+            async with s.post(url + "/image", data=envoi) as r:
+                rep3 = _json.loads(await r.text())
+        dire(rep3["chemin"] != rep["chemin"] and len(list(_Path(dossier).iterdir())) == 2,
+             "deux contenus differents restent deux fichiers")
     finally:
         _os.environ.pop("VOIX_IMAGES", None)
         await t.arreter()

@@ -201,6 +201,50 @@ def un_tour_venu_du_telephone():
          "un vocal sans texte n'envoie rien, et le dit")
 
 
+def une_photo_suit_la_phrase_dite():
+    """Le defaut repare : une image ne partait qu'avec un message TAPE.
+
+    Les chemins etaient colles au texte par la PAGE, dans le submit du composeur. Joindre une
+    capture puis parler — le geste naturel sur un telephone — envoyait la phrase seule, la
+    vignette restait collee au composeur, et Claude repondait qu'il ne voyait rien. On croyait
+    l'envoi casse alors que la photo n'avait jamais ete citee. L'agent accole desormais les
+    chemins au point unique ou un enonce part vraiment, quel que soit le canal.
+    """
+    print("\n=== une photo jointe suit la phrase, meme dite ===")
+    import tempfile
+    from pathlib import Path
+    from agent import Voix
+
+    def stand_in(chemins):
+        vus = []
+        return types.SimpleNamespace(_jointes=list(chemins), vus=vus,
+                                     _voir=lambda genre, **d: vus.append((genre, d)))
+
+    with tempfile.TemporaryDirectory() as dossier:
+        photo = Path(dossier) / "capture.png"
+        photo.write_bytes(b"\x89PNG")
+
+        o = stand_in([str(photo)])
+        texte = Voix._avec_jointes(o, "regarde ce bug")
+        dire(str(photo) in texte, "le chemin rejoint la phrase dite")
+        dire("Read" in texte, "avec la consigne de l'OUVRIR : un chemin pose n'oblige a rien")
+        dire(texte.startswith("regarde ce bug"), "et la phrase reste en tete, intacte")
+        dire(o._jointes == [], "la piece est consommee : elle ne repartira pas au tour suivant")
+
+        o = stand_in([str(photo)])
+        dire(Voix._avec_jointes(o, "").startswith("regarde cette image."),
+             "une photo sans phrase dit ce qu'elle veut dire")
+
+        o = stand_in([])
+        dire(Voix._avec_jointes(o, "bonjour") == "bonjour", "sans piece, le message est intact")
+
+        o = stand_in([str(Path(dossier) / "disparue.png")])
+        texte = Voix._avec_jointes(o, "regarde")
+        dire(texte == "regarde", "un chemin mort n'est pas cite")
+        dire(any(g == "erreur" for g, _ in o.vus),
+             "et il est DIT : partir en silence faisait chercher la panne chez Claude")
+
+
 async def le_contexte_du_job_est_rejoue():
     """Le piege, reproduit, puis desamorce.
 
@@ -350,6 +394,7 @@ async def main():
     await la_route_audio()
     await le_contexte_du_job_est_rejoue()
     un_tour_venu_du_telephone()
+    une_photo_suit_la_phrase_dite()
     print("\nTOUT VERT" if ok else "\nDES ECHECS")
     sys.exit(0 if ok else 1)
 

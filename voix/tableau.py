@@ -256,25 +256,48 @@ class Tableau:
         # Le nom vient de nous, jamais du client : un « ../ » dans le nom d'origine
         # ecrirait ou il veut, et deux photos prises a la meme seconde se marcheraient
         # dessus sans le compteur.
-        chemin = dossier / (time.strftime("%Y%m%d-%H%M%S") + f"-{self._images:03d}{TYPES[mime]}")
+        #
+        # On ecrit d'abord a cote, puis on renomme avec l'empreinte du contenu. La raison est
+        # concrete : joindre la meme photo deux fois — parce qu'on a retente apres un echec,
+        # parce qu'on a rouvert la page — deposait deux fichiers identiques sous deux noms, et
+        # le message partait alors avec deux chemins pour une seule image. Claude lisait deux
+        # fois la meme chose, et le transcript pesait le double pour rien. Meme contenu, meme
+        # chemin : la deuxieme jointure retrouve la premiere au lieu d'en creer une jumelle.
+        provisoire = dossier / f".part-{os.getpid()}-{self._images:03d}{TYPES[mime]}"
 
         octets = 0
-        with chemin.open("wb") as sortie:
-            while True:
-                bloc = await piece.read_chunk()
-                if not bloc:
-                    break
-                octets += len(bloc)
-                if octets > PLAFOND:
-                    sortie.close()
-                    chemin.unlink(missing_ok=True)
-                    return web.json_response(
-                        {"erreur": f"image trop lourde (plus de {PLAFOND // 1024 // 1024} Mo)"},
-                        status=413)
-                sortie.write(bloc)
+        empreinte = hashlib.sha256()
+        try:
+            with provisoire.open("wb") as sortie:
+                while True:
+                    bloc = await piece.read_chunk()
+                    if not bloc:
+                        break
+                    octets += len(bloc)
+                    if octets > PLAFOND:
+                        sortie.close()
+                        provisoire.unlink(missing_ok=True)
+                        return web.json_response(
+                            {"erreur": f"image trop lourde (plus de {PLAFOND // 1024 // 1024} Mo)"},
+                            status=413)
+                    empreinte.update(bloc)
+                    sortie.write(bloc)
+        except OSError as exc:
+            provisoire.unlink(missing_ok=True)
+            log.warning("photo non ecrite dans %s", dossier, exc_info=True)
+            return web.json_response({"erreur": f"image non ecrite sur le disque : {exc}"},
+                                     status=500)
         if not octets:
-            chemin.unlink(missing_ok=True)
+            provisoire.unlink(missing_ok=True)
             return web.json_response({"erreur": "image vide"}, status=400)
+
+        court = empreinte.hexdigest()[:12]
+        deja = next(iter(sorted(dossier.glob(f"*-{court}{TYPES[mime]}"))), None)
+        if deja is not None and deja.stat().st_size == octets:
+            provisoire.unlink(missing_ok=True)
+            return web.json_response({"chemin": str(deja), "octets": octets, "deja": True})
+        chemin = dossier / (time.strftime("%Y%m%d-%H%M%S") + f"-{court}{TYPES[mime]}")
+        provisoire.replace(chemin)
         return web.json_response({"chemin": str(chemin), "octets": octets})
 
     async def _audio(self, requete):
@@ -2564,7 +2587,9 @@ function envoyerCmd(ordre) {
   // telephone, ça ressemble a une page qui ignore les appuis. L'action n'est pourtant pas
   // perdue : elle est en file et partira. C'est exactement ce qu'il faut annoncer.
   // « texte » est exclu : les messages ont deja leur zone « en vol », qui dit mieux.
-  if (ordre.cmd !== "texte") {
+  // « jointes » aussi : ce n'est pas une action, c'est la page qui declare ce qu'elle tient.
+  // L'annoncer ecraserait la note du message qu'on vient justement d'envoyer.
+  if (ordre.cmd !== "texte" && ordre.cmd !== "jointes") {
     noteBarre("liaison perdue — l'action partira dès que la connexion revient", true);
   }
   reconnecter();          // ne pas attendre le prochain clic pour s'en apercevoir
@@ -2577,6 +2602,10 @@ function viderFile() {
   for (const o of file) {
     try { socket.send(JSON.stringify(o)); } catch (_) { enAttente.push(o); }
   }
+  // Et on redit ce qu'on tient. L'agent d'en face peut etre NEUF — il a redemarre pendant
+  // qu'on etait hors ligne — et il ne sait alors rien des photos posees dans le composeur :
+  // elles resteraient a l'ecran sans jamais suivre la phrase suivante.
+  if (typeof jointes !== "undefined" && jointes.some(j => j.chemin)) declarerJointes();
 }
 
 // Rebrancher tout de suite, sans doublonner les tentatives. Un seul chemin de reconnexion
@@ -3374,12 +3403,18 @@ const jointes = [];   // { chemin, url } — l'url ne sert qu'a la vignette loca
 const zoneJointes = document.getElementById("jointes");
 const champFichier = document.querySelector("#joindre input");
 
-function messageAvecImages(texte, chemins) {
-  if (!chemins.length) return texte;
-  // Sans phrase, le message serait une liste de chemins sans verbe : on en met une, parce
-  // qu'une photo envoyee seule veut presque toujours dire « regarde ca ».
-  return (texte || "regarde cette image.")
-    + "\n\nimages jointes :\n" + chemins.map(c => "- " + c).join("\n");
+// Les chemins prets, declares a l'agent. C'est LUI qui les accole a la phrase, et ce
+// deplacement est le coeur de la correction : tant que la page seule savait coller les
+// chemins, une image ne partait qu'avec un message TAPE. Joindre une capture puis PARLER —
+// le geste naturel sur un telephone — envoyait la phrase sans la photo, sans un mot.
+// Declare a chaque changement, consomme par l'envoi, quel que soit le canal.
+function declarerJointes() {
+  // `Set` : deux vignettes peuvent pointer le meme fichier (le serveur rend le meme chemin
+  // pour un contenu deja depose), et citer deux fois la meme image la ferait lire en double.
+  // Envoye a chaque changement, sans memoire d'un etat precedent : la liaison tombe et se
+  // refait, et un cache local finirait par mentir a l'agent sur ce qui attend vraiment.
+  envoyerCmd({ cmd: "jointes",
+               chemins: [...new Set(jointes.filter(j => j.chemin).map(j => j.chemin))] });
 }
 
 function majJointes() {
@@ -3396,6 +3431,7 @@ function majJointes() {
   zoneJointes.querySelectorAll("[data-jointe]").forEach(b => {
     b.onclick = () => { jointes.splice(Number(b.dataset.jointe), 1); majJointes(); majEnvoyer(); };
   });
+  declarerJointes();
   majEnvoyer();
 }
 
@@ -3444,6 +3480,16 @@ async function joindre(fichier) {
                           { method: "POST", body: corps, signal: abandon.signal });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.chemin) throw new Error(d.erreur || `envoi refuse (${r.status})`);
+    // Le serveur reconnait un contenu deja depose et rend le meme chemin. Si une autre
+    // vignette le porte deja, celle-ci est la MEME photo jointe deux fois : on la retire au
+    // lieu d'empiler un doublon, sinon le message citerait deux fois le meme fichier.
+    if (d.deja && jointes.some(j => j !== entree && j.chemin === d.chemin)) {
+      const i = jointes.indexOf(entree);
+      if (i >= 0) jointes.splice(i, 1);
+      noteBarre("cette photo était déjà jointe");
+      majJointes();
+      return;
+    }
     entree.chemin = d.chemin;
   } catch (e) {
     entree.rate = expire
@@ -3462,9 +3508,11 @@ champFichier.onchange = () => {
 
 composer.onsubmit = ev => {
   ev.preventDefault();
-  const prets = jointes.filter(j => j.chemin).map(j => j.chemin);
-  const texte = messageAvecImages(champ.value.trim(), prets);
-  if (!texte) return;
+  const prets = jointes.filter(j => j.chemin).length;
+  const texte = champ.value.trim();
+  // Une photo seule est un message : sans phrase, c'est « regarde ca », et l'agent met les
+  // mots. Ce qui compte est qu'on ne sorte pas en silence quand le champ est vide.
+  if (!texte && !prets) return;
   // Une image encore en cours d'envoi partirait sans son chemin : on attend le tour suivant
   // plutot que d'envoyer un message qui parle d'une piece absente.
   if (jointes.some(j => !j.chemin && !j.rate)) {

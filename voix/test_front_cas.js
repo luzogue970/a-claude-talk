@@ -1281,27 +1281,37 @@ titre('rejeu de l etat : les listes se remplissent quel que soit l ordre des num
 
 // ---- images jointes ---------------------------------------------------------------------
 titre('images jointes');
-dire(messageAvecImages('regarde ce bug', ['/tmp/a.jpg'])
-       === 'regarde ce bug\n\nimages jointes :\n- /tmp/a.jpg',
-     'le chemin est ajoute au message, pas l image');
-dire(messageAvecImages('', ['/tmp/a.jpg', '/tmp/b.png']).startsWith('regarde cette image.'),
-     'une photo envoyee seule reste une phrase, pas une liste de chemins');
-dire(messageAvecImages('bonjour', []) === 'bonjour', 'sans image, le message est intact');
-
-// Ce qui part reellement : une piece prete, un message, et ce que la socket recoit.
+// Ce qui part reellement : une piece prete, un message, et ce que la socket recoit. Les
+// chemins ne sont plus colles au texte par la page mais DECLARES a l agent : c est lui qui
+// les accole au moment de l envoi, donc une photo suit aussi une phrase DITE — avant, joindre
+// puis parler envoyait la phrase sans l image, sans un mot.
 socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
 jointes.length = 0;
 jointes.push({ chemin: '/home/x/.cache/claude-talk/images/maquette.png', url: 'blob:fantome' });
 majJointes();
+const decl = envoyes.filter(o => o.cmd === 'jointes').pop();
+dire(!!decl && decl.chemins.length === 1 && decl.chemins[0].endsWith('/maquette.png'),
+     'la piece prete est declaree a l agent des qu elle est la');
+dire(!!decl && !JSON.stringify(decl).includes('blob:'),
+     'et jamais l adresse locale de la vignette, qui ne veut rien dire sur la machine');
 champ.value = 'voici la maquette';
 composer.onsubmit({ preventDefault() {} });
 const envoiImage = envoyes.find(o => o.cmd === 'texte');
-dire(!!envoiImage && envoiImage.texte.includes('/maquette.png'),
-     'le message envoye porte le chemin de l image');
-dire(!!envoiImage && !envoiImage.texte.includes('blob:'),
-     'et jamais l adresse locale de la vignette, qui ne veut rien dire sur la machine');
+dire(!!envoiImage && envoiImage.texte === 'voici la maquette',
+     'le message dit ce qu on a ecrit, les chemins ne l encombrent plus');
 dire(jointes.length === 0, 'les pieces sont retirees apres l envoi');
+const apres = envoyes.filter(o => o.cmd === 'jointes').pop();
+dire(!!apres && apres.chemins.length === 0, 'et l agent sait que plus rien n attend');
 dire(imagesPretes === 0 && btnEnvoyer.disabled, 'et le bouton retombe au repos');
+
+// Une photo SANS phrase part quand meme : c est « regarde ca », et l agent met les mots.
+envoyes.length = 0; champ.value = ''; champ.oninput();
+jointes.push({ chemin: '/home/x/.cache/claude-talk/images/erreur.png', url: 'blob:fantome' });
+majJointes();
+dire(btnEnvoyer.disabled === false, 'une photo seule suffit a activer l envoi');
+composer.onsubmit({ preventDefault() {} });
+dire(!!envoyes.find(o => o.cmd === 'texte'), 'et le message part sans qu on ait rien ecrit');
+jointes.length = 0; majJointes();
 
 // ---- ce qui est parti mais pas encore pris en compte ------------------------------------
 titre('messages en vol : visibles jusqu a l echo, rendus en cas d echec');

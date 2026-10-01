@@ -206,6 +206,15 @@ class Voix(Agent):
         # tableau, lu et effacé par llm_node — pour qu'UNE seule ligne « toi » soit publiée
         # par tour, quel que soit le canal.
         self._tape_en_attente = False
+        # Les photos posees dans le composeur et pas encore parties. La page les declare a
+        # chaque changement, l'envoi les consomme.
+        #
+        # Pourquoi ici et pas seulement dans le navigateur : une image jointe ne partait
+        # qu'avec un message TAPE. Joindre une capture puis PARLER — le geste naturel sur un
+        # telephone — envoyait la phrase seule, la vignette restait collee au composeur, et
+        # Claude repondait qu'il ne voyait rien. On croyait l'envoi casse alors que la photo
+        # n'avait simplement jamais ete citee.
+        self._jointes: list[str] = []
         # Un niveau d'effort choisi a la main rend l'ajustement automatique silencieux : une
         # decision prise doit tenir, sinon le reglage n'en est pas un.
         self._effort_manuel = False
@@ -452,6 +461,35 @@ class Voix(Agent):
         """Le prochain tour vient du clavier, pas du micro."""
         self._tape_en_attente = True
 
+    def _avec_jointes(self, texte: str) -> str:
+        """La phrase, suivie des photos qui attendaient dans le composeur.
+
+        Deux garde-fous, et chacun repare un silence observe :
+
+        - le fichier doit EXISTER au moment de l'envoi. Un chemin mort partait sans un mot,
+          Claude repondait qu'il ne trouvait rien, et on cherchait la panne du mauvais cote.
+        - la consigne de LIRE est explicite. Un chemin pose dans le texte n'oblige a rien :
+          il arrivait que la reponse soit ecrite sans que l'image ait jamais ete ouverte.
+        """
+        chemins, self._jointes = self._jointes, []
+        if not chemins:
+            return texte
+        vivants, morts = [], []
+        for c in chemins:
+            (vivants if Path(c).is_file() else morts).append(c)
+        if morts:
+            self._voir("erreur", texte=("photo introuvable au moment de l'envoi : "
+                                        + ", ".join(Path(c).name for c in morts)))
+        if not vivants:
+            return texte
+        self._voir("log", niveau="INFO", source="image",
+                   texte=f"{len(vivants)} image(s) jointe(s) au message")
+        quoi = "ces images" if len(vivants) > 1 else "cette image"
+        return ((texte or f"regarde {quoi}.")
+                + f"\n\nimages jointes (ouvre chaque fichier avec l'outil Read avant de "
+                  f"répondre — {quoi} fait partie de la demande) :\n"
+                + "\n".join("- " + c for c in vivants))
+
     def _parler(self, texte: str):
         """Every short line the voice says goes to the page too, or the transcript on
         screen has holes exactly where the conversation happened."""
@@ -541,6 +579,12 @@ class Voix(Agent):
                        auto=bool(auto and not (self.retenir or rattrape)))
             return
 
+        # Les photos en attente rejoignent la phrase, quel que soit le canal qui l'a portee.
+        # On le fait ICI, au point unique ou un enonce part vraiment : plus haut, une dictee
+        # retenue ou un ordre local aurait consomme les images sans les envoyer. La ligne
+        # « toi » garde la phrase dite, pas les chemins : c'est ce qu'on a dit qu'on relit.
+        envoi = self._avec_jointes(texte)
+
         vu()
         deja_occupe = self.worker.occupe
         # Relevé au départ, pas à l'arrivée : sans point de comparaison il n'y a pas d'écart.
@@ -554,7 +598,7 @@ class Voix(Agent):
             self._dernier_tour_utilisateur = texte
         if not deja_occupe:
             await self._ajuster_effort(texte)
-        await self.worker.envoyer(texte)
+        await self.worker.envoyer(envoi)
         self._debut_tour = self._debut_tour or time.monotonic()
         # Deliberately short: the real answer arrives later through session.say(), so this
         # turn must not block for the twenty minutes Claude might take.
@@ -959,10 +1003,15 @@ async def entrypoint(ctx: JobContext):
     deja = journal.actives(config.WORKDIR)
     if deja:
         detail = ", ".join(f"pid {d['pid']} dans {d.get('projet') or '?'}" for d in deja)
-        alerte = (f"{len(deja)} session déjà active ({detail}) — elles se partagent le micro "
-                  f"et le quota. « vvstop » ferme les autres.")
+        pluriel = "s" if len(deja) > 1 else ""
+        alerte = (f"{len(deja)} autre{pluriel} conversation{pluriel} en cours ({detail}) — "
+                  f"le quota est partagé. « vvstop » les ferme.")
         log.warning("%s", alerte)
-        tableau.publier("erreur", texte=alerte)
+        # Un AVERTISSEMENT, pas une erreur. Travailler sur deux projets a la fois est un
+        # usage normal, pas une panne : le micro a son bail, personne ne se casse, et rien
+        # n'a echoue. En rouge, cette ligne apprenait seulement a ignorer le rouge — et une
+        # vraie erreur se serait perdue au milieu.
+        tableau.publier("log", niveau="WARNING", source="session", texte=alerte)
 
     # Le registre des conversations parallèles, et le bail sur le micro. Le micro est la
     # seule ressource vraiment exclusive : deux agents qui écoutent transcrivent la même
@@ -1458,6 +1507,12 @@ async def entrypoint(ctx: JobContext):
                 else:
                     tableau.publier("log", niveau="WARNING", source="session",
                                     texte="reprise impossible — voir les erreurs ci-dessus")
+        elif nom == "jointes":
+            # La page dit ce qui attend dans le composeur. On ne fait que le retenir : c'est
+            # l'envoi qui consomme, pour que la photo suive la phrase quel que soit le canal
+            # — clavier, micro du PC, micro du telephone.
+            agent._jointes = [c for c in (donnees.get("chemins") or [])
+                              if isinstance(c, str) and c][:12]
         elif nom == "barre_vide":
             # La barre a ete videe a la main : plus rien n'attend, la retenue collante tombe.
             agent._retenu_en_attente = False
@@ -1476,8 +1531,14 @@ async def entrypoint(ctx: JobContext):
             # Volontairement indépendant de l'état du micro : c'est micro coupé que taper
             # est le plus utile, et ça donne un mode de travail entièrement silencieux.
             propos = str(donnees.get("texte") or "").strip()
-            if not propos:
+            # Une photo sans phrase est un message a part entiere : c'est « regarde ca », et
+            # c'est _avec_jointes qui met les mots. Sortir ici sur un champ vide revenait a
+            # jeter l'envoi sans rien dire.
+            if not propos and not agent._jointes:
                 return
+            # Un enonce vide ne traverse pas la session : on met la phrase que la photo dit
+            # toute seule, et _avec_jointes se charge des chemins.
+            propos = propos or "regarde cette image."
             # llm_node publie la ligne « toi » pour tous les canaux ; on lui dit seulement
             # que celui-ci vient du clavier.
             agent.marquer_tape()

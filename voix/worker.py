@@ -444,7 +444,17 @@ class Worker:
         return c["session_id"]
 
     async def start(self):
-        self.client = ClaudeSDKClient(self._options(reprendre=self._a_reprendre()))
+        sid = self._a_reprendre()
+        if sid:
+            # Laisser la conversation precedente finir d'ecrire son transcript. Relancer dans
+            # la seconde qui suit un Ctrl-C tombait sur un fichier encore en cours d'ecriture,
+            # et Claude Code ouvre alors une conversation NEUVE sans rien dire.
+            try:
+                import journal
+                await asyncio.to_thread(journal.attendre_transcript, sid)
+            except Exception:
+                log.debug("attente du transcript impossible", exc_info=True)
+        self.client = ClaudeSDKClient(self._options(reprendre=sid))
         await self.client.connect()
         self._pompe = asyncio.create_task(self._drainer())
 
@@ -468,7 +478,8 @@ class Worker:
                     self._voir("erreur", niveau="WARNING", source="session",
                                texte=(f"la reprise de {voulu[:8]} n'a PAS pris — Claude Code a "
                                       f"ouvert une conversation neuve ({sid[:8]}). Le contexte "
-                                      f"précédent n'est pas là."))
+                                      f"précédent n'est pas perdu : « vvreprendre "
+                                      f"{voulu} » le retrouve."))
                     log.warning("reprise refusee : demande %s, obtenu %s", voulu, sid)
                 self._voir("session", id=sid, repris=repris,
                            tours=(self.reprise or {}).get("tours") if repris else 0)

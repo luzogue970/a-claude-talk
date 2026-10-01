@@ -18,6 +18,7 @@ en cours, pas la conversation.
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -481,6 +482,38 @@ def compte_messages(sid: str, dossier: str | None = None) -> int:
         return len(get_session_messages(sid, directory=dossier))
     except Exception:
         return -1
+
+
+def attendre_transcript(sid: str, patience: float = 4.0, calme: float = 0.6) -> bool:
+    """Attendre que Claude Code ait fini d'ecrire la session qu'on veut reprendre.
+
+    Le degat repare : relancer une conversation dans la seconde qui suit la fermeture de la
+    precedente — ce qu'on fait sans y penser, en tapant « vv » juste apres un Ctrl-C — tombait
+    parfois sur un transcript encore en cours d'ecriture. Claude Code ne rale pas dans ce
+    cas : il ouvre une conversation NEUVE, et tout le contexte est perdu en silence. Quelques
+    dixiemes de seconde d'attente valent mieux qu'une heure de travail qu'il faut reexpliquer.
+
+    Rend True si le fichier existe et ne bouge plus, False s'il reste introuvable — auquel cas
+    la reprise se tentera quand meme : mieux vaut essayer que refuser sur une heuristique.
+    """
+    fichiers = list(SESSIONS.glob(f"*/{sid}.jsonl")) if sid and SESSIONS.is_dir() else []
+    if not fichiers:
+        return False
+    fichier = fichiers[0]
+    fin = time.monotonic() + max(0.0, patience)
+    dernier = None
+    while time.monotonic() < fin:
+        try:
+            marque = fichier.stat().st_mtime_ns
+        except OSError:
+            return False
+        if marque == dernier:
+            return True
+        dernier = marque
+        time.sleep(calme)
+    log.warning("le transcript de %s bouge encore apres %.1f s — reprise tentee quand meme",
+                sid[:8], patience)
+    return True
 
 
 # Combien de messages de l'historique on rejoue au maximum sur le tableau. Une conversation

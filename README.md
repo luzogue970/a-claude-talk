@@ -935,6 +935,26 @@ capture, répondait qu'il ne voyait rien — et on cherchait le défaut chez lui
 maintenant refusé, en nommant la sortie : retirer la vignette par sa croix, ou joindre la photo
 de nouveau. Ce qui était écrit reste intact : c'est un refus, pas un échec.
 
+**Une photo qui ne partait qu'avec un message tapé.** C'était le plus coûteux des quatre, et
+le plus invisible. Les chemins étaient collés au texte **par la page**, dans le `submit` du
+composeur : joindre une capture puis **parler** — le geste naturel sur un téléphone — envoyait
+la phrase seule, la vignette restait là, et Claude répondait qu'il ne voyait rien. On croyait
+l'envoi cassé alors que la photo n'avait jamais été citée. La page ne colle plus rien : elle
+**déclare** ce qu'elle tient (`cmd: "jointes"`), et c'est l'agent qui accole les chemins au
+moment où un énoncé part vraiment — clavier, micro du PC, micro du téléphone, un seul endroit.
+Les pièces sont consommées à l'envoi, jamais par une dictée retenue ni par un ordre local.
+
+**Deux fichiers pour une seule photo.** Le nom venait de l'horodatage et d'un compteur, donc
+joindre deux fois la même image — après un échec, après avoir rouvert la page — déposait deux
+jumeaux, et le message citait deux chemins pour une seule photo : lue deux fois, payée deux
+fois, transcript doublé. Le nom porte maintenant l'**empreinte du contenu** : même contenu,
+même chemin, et la page retire le doublon au lieu de l'empiler.
+
+**Une image citée mais jamais ouverte.** Un chemin posé dans le texte n'oblige à rien, et il
+arrivait que la réponse soit écrite sans que l'image ait été lue. Le message nomme désormais
+l'outil et le moment — ouvrir chaque fichier avec `Read` *avant* de répondre — et l'existence
+du fichier est vérifiée à l'envoi : un chemin mort est dit, au lieu de partir en silence.
+
 ### La dictée s'écrit dans la barre
 
 Le texte reconnu s'écrit dans la barre de saisie à mesure qu'il arrive, en italique bleu tant
@@ -1297,6 +1317,20 @@ session lui-même (la source d'autorité, et elle marche aussi pour les conversa
 
 Si le compte est à zéro, il le dit avant de lancer : mieux vaut le savoir que de parler dix
 minutes à une session amnésique. Le dossier reste forçable : `vvreprendre 1 /chemin/du/projet`.
+
+**Et on attend que la précédente ait fini d'écrire.** Relancer dans la seconde qui suit un
+`Ctrl-C` — ce qu'on fait sans y penser — tombait parfois sur un transcript encore en cours
+d'écriture. Claude Code ne râle pas dans ce cas : il ouvre une conversation **neuve**, et tout
+le contexte est perdu en silence. Le démarrage attend donc que le fichier de session ne bouge
+plus (quatre secondes au maximum, puis il tente quand même : mieux vaut essayer que refuser sur
+une heuristique). Quand la reprise échoue malgré tout, le message ne se contente plus de le
+constater — il donne l'identifiant complet à passer à `vvreprendre`, parce que la conversation
+d'origine est toujours sur le disque et qu'elle se rattrape.
+
+**L'avertissement de session parallèle n'est plus une erreur.** Travailler sur deux projets à
+la fois est un usage normal : le micro a son bail, personne ne s'écrase, rien n'a échoué — seul
+le quota est partagé. En rouge, cette ligne n'apprenait qu'une chose, à ignorer le rouge, et
+une vraie erreur s'y serait perdue.
 
 `vvconv` ne montre que **ce qui a été lancé depuis le dossier courant ou l'un de ses
 descendants** : depuis la racine tu vois tout, depuis un projet tu ne vois que lui. La question
