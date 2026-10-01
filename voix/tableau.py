@@ -781,8 +781,10 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #jointes .jointe button{position:absolute;top:1px;right:1px;width:18px;height:18px;padding:0;
   border:0;border-radius:50%;background:#000000b0;color:#fff;font-size:11px;line-height:18px;
   cursor:pointer}
+/* padding-right : la croix est posee en absolu dans le coin, et sans cette reserve elle se
+   couche sur les derniers mots du message d'erreur — justement ceux qui disent quoi faire. */
 #jointes .rate{border-color:var(--erreur);color:var(--erreur);font-size:9.5px;padding:3px;
-  width:auto;max-width:150px;height:auto;line-height:1.3}
+  padding-right:21px;width:auto;max-width:150px;height:auto;line-height:1.3}
 #retour{display:none;align-items:center;justify-content:center;width:30px;height:30px;
   border:1px solid var(--bord);border-radius:9px;color:var(--faible);text-decoration:none;
   font-size:16px;line-height:1;flex:none}
@@ -3383,32 +3385,72 @@ function messageAvecImages(texte, chemins) {
 function majJointes() {
   imagesPretes = jointes.filter(j => j.chemin).length;
   zoneJointes.hidden = jointes.length === 0;
+  // La croix est sur TOUTES les vignettes, y compris celles en echec. Sans elle, une piece
+  // ratee ne pouvait plus etre retiree : elle restait collee au composeur, et comme un envoi
+  // est desormais refuse tant qu'elle est la, il n'y aurait plus eu de sortie du tout.
+  const croix = i => `<button type="button" data-jointe="${i}" title="retirer">&#10005;</button>`;
   zoneJointes.innerHTML = jointes.map((j, i) => j.rate
-    ? `<div class="jointe rate">${ech(j.rate)}</div>`
+    ? `<div class="jointe rate">${ech(j.rate)}${croix(i)}</div>`
     : `<div class="jointe${j.chemin ? "" : " envoi"}"><img src="${j.url}" alt="">`
-      + `<button type="button" data-jointe="${i}" title="retirer">&#10005;</button></div>`).join("");
+      + `${croix(i)}</div>`).join("");
   zoneJointes.querySelectorAll("[data-jointe]").forEach(b => {
     b.onclick = () => { jointes.splice(Number(b.dataset.jointe), 1); majJointes(); majEnvoyer(); };
   });
   majEnvoyer();
 }
 
+// Combien de temps on accorde au depot d'une photo avant de declarer l'envoi perdu.
+//
+// Le defaut : un `fetch` sans limite n'echoue JAMAIS de lui-meme quand la liaison meurt en
+// cours de televersement — il attend le delai du systeme, qui se compte en minutes. Pendant
+// ce temps la vignette reste en « envoi », donc le bouton refuse de partir, donc la
+// conversation est gelee sans un mot d'explication. Une requete qui ne revient pas doit
+// devenir une ERREUR, et une erreur se retire d'un clic.
+//
+// Le budget suit le poids du fichier plutot que d'etre fixe : le serveur accepte jusqu'a
+// 25 Mo, et sur un reseau mobile mediocre une photo de quatre megaoctets prend legitimement
+// une demi-minute. Un plafond unique serait soit trop court pour les grosses (on abandonnerait
+// un envoi qui marchait), soit trop long pour les petites (on attendrait deux minutes pour
+// apprendre que rien ne part). Trente secondes de base, dix de plus par megaoctet, et jamais
+// plus de trois minutes.
+//
+// `let` et non `const`, comme DELAI_SONDE : un test qui devrait attendre trente secondes pour
+// verifier l'abandon ne serait jamais ecrit, donc le comportement ne serait jamais verifie.
+let IMAGE_DELAI_BASE = 30000;
+let IMAGE_DELAI_PAR_MO = 10000;
+let IMAGE_DELAI_MAX = 180000;
+
+function delaiImage(octets) {
+  return Math.min(IMAGE_DELAI_MAX,
+                  IMAGE_DELAI_BASE + IMAGE_DELAI_PAR_MO * ((octets || 0) / 1048576));
+}
+
 async function joindre(fichier) {
   const entree = { url: URL.createObjectURL(fichier), chemin: null, rate: null };
   jointes.push(entree);
   majJointes();
+  const limite = delaiImage(fichier && fichier.size);
+  const abandon = new AbortController();
+  // `expire` distingue « c'est nous qui avons coupe » d'un abandon venu d'ailleurs : les deux
+  // arrivent en AbortError, et seul le premier merite de nommer le delai.
+  let expire = false;
+  const minuteur = setTimeout(() => { expire = true; abandon.abort(); }, limite);
   try {
     const corps = new FormData();
     corps.append("image", fichier, fichier.name || "photo.jpg");
     // Relatif au chemin de la page : servie derriere un proxy, une adresse absolue
     // viserait la racine du proxy — le meme piege que pour le WebSocket.
     const r = await fetch(location.pathname.replace(/\/$/, "") + "/image",
-                          { method: "POST", body: corps });
+                          { method: "POST", body: corps, signal: abandon.signal });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.chemin) throw new Error(d.erreur || `envoi refuse (${r.status})`);
     entree.chemin = d.chemin;
   } catch (e) {
-    entree.rate = "image non envoyee — " + (e.message || e);
+    entree.rate = expire
+      ? `image non envoyee — rien revenu apres ${Math.max(1, Math.round(limite / 1000))} s, reessaie`
+      : "image non envoyee — " + ((e && e.message) || e);
+  } finally {
+    clearTimeout(minuteur);
   }
   majJointes();
 }
@@ -3427,6 +3469,19 @@ composer.onsubmit = ev => {
   // plutot que d'envoyer un message qui parle d'une piece absente.
   if (jointes.some(j => !j.chemin && !j.rate)) {
     noteBarre("une image finit de partir…");
+    return;
+  }
+  // Une piece en ECHEC, elle, ne partira jamais. Le message s'en allait quand meme, sans elle
+  // et sans un mot : Claude recevait « regarde cette capture » sans capture, et repondait
+  // qu'il ne voyait rien — on cherchait alors le defaut chez lui. On refuse plutot, et on
+  // nomme la sortie : retirer la vignette par sa croix, ou rejoindre la photo.
+  const ratees = jointes.filter(j => j.rate).length;
+  if (ratees) {
+    noteBarre(ratees === 1
+      ? "une image n'est pas partie — retire-la par sa croix, ou joins-la de nouveau : "
+        + "sans ça le message parlerait d'une photo que Claude ne verrait pas"
+      : `${ratees} images ne sont pas parties — retire-les par leur croix, ou joins-les de `
+        + "nouveau : sans ça le message parlerait de photos que Claude ne verrait pas", true);
     return;
   }
   // Plus de test sur l'état de la liaison, et c'était un vrai défaut : la fonction sortait

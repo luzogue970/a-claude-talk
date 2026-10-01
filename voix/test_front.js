@@ -306,6 +306,11 @@ globalThis.audioEchoue = false;
 // Quand il est vrai, l envoi ne repond pas tout de suite : le test a le temps d appuyer sur
 // annuler, comme on le fait vraiment.
 globalThis.audioLent = false;
+// Le depot d'image : ce que le serveur rend, et les deux façons dont il peut ne pas le rendre.
+globalThis.imagesRecues = [];
+globalThis.imageEchoue = false;      // refus net, tout de suite
+globalThis.imageMuette = false;      // la requete part et ne revient jamais
+globalThis.cheminImage = "/home/x/.cache/claude-talk/images/20260101-120000-001.jpg";
 globalThis.AbortController = function () {
   const self = this;
   this.signal = { aborted: false, ecouteurs: [] };
@@ -331,6 +336,25 @@ globalThis.fetch = (url, opts) => {
                              headers: { get: () => "application/json; charset=utf-8" },
                              json: () => Promise.resolve({ cle: "abc123", octets: 9792, cache: false }),
                              blob: () => Promise.resolve({ size: 9792, type: "audio/mpeg" }) });
+  }
+  // Le depot d'une photo. imageMuette est le cas qu'on veut vraiment couvrir : une requete
+  // qui ne revient JAMAIS. Sans delai maximum cote page, elle gele le composeur pour de bon —
+  // c'est le defaut, et un test qui se contente d'une erreur franche ne le verrait pas.
+  if (String(url).endsWith("/image")) {
+    globalThis.imagesRecues.push(opts);
+    if (globalThis.imageMuette) {
+      const sig = opts && opts.signal;
+      return new Promise((resoudre, rejeter) => {
+        if (sig) sig.ecouteurs.push(() => {
+          const e = new Error("abandon"); e.name = "AbortError"; rejeter(e);
+        });
+        // et rien d autre : aucune resolution n est jamais programmee.
+      });
+    }
+    if (globalThis.imageEchoue) return Promise.reject(new Error("reseau coupe"));
+    return Promise.resolve({ ok: true, status: 200, redirected: false,
+                             headers: { get: () => "application/json; charset=utf-8" },
+                             json: () => Promise.resolve({ chemin: globalThis.cheminImage }) });
   }
   if (String(url).endsWith("/audio") && globalThis.audioEchoue) {
     return Promise.reject(new Error("reseau coupe"));

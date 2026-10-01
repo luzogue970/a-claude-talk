@@ -907,6 +907,34 @@ C'est **indépendant de l'état du micro** : micro coupé plus clavier donne un 
 entièrement silencieux. La page n'affiche pas le message elle-même — c'est le serveur qui
 republie `toi`, sinon un envoi refusé laisserait à l'écran un message jamais reçu.
 
+### Joindre une photo, et ce qui arrive quand elle ne part pas
+
+Le bouton trombone dépose la photo sur la machine et n'envoie que son **chemin** : Claude Code
+sait lire une image à partir d'un chemin, et le flux d'événements reste du texte. Les fichiers
+vont dans `~/.cache/claude-talk/images/`, volontairement hors de l'arborescence du projet.
+
+Trois défauts se tenaient par la main, et le résultat était une conversation gelée sans un mot.
+
+**Un dépôt qui ne revient jamais.** Un `fetch` sans limite n'échoue pas de lui-même quand la
+liaison meurt en cours de téléversement : il attend le délai du système, qui se compte en
+minutes. Pendant ce temps la vignette reste « en envoi », donc le bouton refuse de partir —
+et rien ne dit pourquoi. La requête a maintenant un budget, et il **suit le poids du
+fichier** : 30 s de base, 10 s de plus par mégaoctet, jamais plus de trois minutes. Un
+plafond unique serait soit trop court pour les grosses photos — on abandonnerait un envoi qui
+marchait — soit trop long pour les petites. Passé ce délai, l'envoi devient une **erreur**, et
+une erreur se retire d'un clic.
+
+**Une vignette en échec sans croix.** Elle ne pouvait plus être retirée : elle restait collée
+au composeur. La croix est désormais sur *toutes* les vignettes — d'autant plus nécessaire que
+l'envoi est maintenant refusé tant qu'une pièce a échoué, sans quoi il n'y aurait plus aucune
+sortie.
+
+**Un message qui prétend montrer ce qu'il ne montre pas.** Quand la pièce échouait, le message
+partait quand même, sans elle et sans un mot. Claude recevait « regarde cette capture » sans
+capture, répondait qu'il ne voyait rien — et on cherchait le défaut chez lui. L'envoi est
+maintenant refusé, en nommant la sortie : retirer la vignette par sa croix, ou joindre la photo
+de nouveau. Ce qui était écrit reste intact : c'est un refus, pas un échec.
+
 ### La dictée s'écrit dans la barre
 
 Le texte reconnu s'écrit dans la barre de saisie à mesure qu'il arrive, en italique bleu tant

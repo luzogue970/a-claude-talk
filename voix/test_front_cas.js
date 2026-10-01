@@ -2111,6 +2111,93 @@ async function testerRelaisVocal() {
 
 }
 
+// ---- une photo qui ne part pas ne gele pas la conversation -------------------------------
+// Le defaut vecu, en trois morceaux qui se tiennent : une requete qui ne revient jamais laisse
+// la vignette en « envoi », donc le bouton refuse de partir pour toujours ; une vignette en
+// echec n a pas de croix, donc on ne peut pas s en debarrasser ; et le message part quand meme
+// sans la photo, sans un mot, si bien que Claude repond qu il ne voit rien et qu on cherche le
+// defaut chez lui.
+async function testerPiecesJointes() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const pause = () => new Promise(r => setTimeout(r, 40));
+  titre('images : un depot qui ne revient pas devient une erreur');
+  brancher(); ouvrirSock();
+  await pause();
+  jointes.length = 0; majJointes(); noteBarre(null);
+  imagesRecues.length = 0;
+
+  // 1. Le cas normal, pour que le reste veuille dire quelque chose.
+  await joindre({ name: 'maquette.png', size: 240000 });
+  dire(jointes.length === 1 && !!jointes[0].chemin,
+       'une photo qui part rend son chemin');
+  dire(imagesPretes === 1, 'et elle compte comme prete');
+  const opts = imagesRecues[0] || {};
+  dire(!!(opts.signal), 'le depot est abandonnable : une requete sans issue doit pouvoir etre coupee');
+  jointes.length = 0; majJointes();
+
+  // 2. La requete qui ne revient JAMAIS. Sans delai maximum, ce test ne finirait pas.
+  const base = IMAGE_DELAI_BASE, parMo = IMAGE_DELAI_PAR_MO;
+  IMAGE_DELAI_BASE = 40; IMAGE_DELAI_PAR_MO = 0;    // 40 ms au lieu de 30 s
+  imageMuette = true;
+  const enVolImage = joindre({ name: 'photo.jpg', size: 3 * 1048576 });
+  await tick();
+  dire(jointes.length === 1 && !jointes[0].chemin && !jointes[0].rate,
+       'pendant le depot, la vignette est en cours d envoi');
+  await enVolImage;
+  imageMuette = false;
+  IMAGE_DELAI_BASE = base; IMAGE_DELAI_PAR_MO = parMo;
+  dire(!!jointes[0].rate,
+       'une requete qui ne revient pas devient une ERREUR : ' + jointes[0].rate);
+  dire(/reessaie/.test(jointes[0].rate || ''),
+       'et elle dit quoi faire, pas seulement que ça a rate');
+  dire(imagesPretes === 0, 'rien n est annonce comme pret');
+
+  // 3. La croix, qui n existait pas sur les vignettes en echec.
+  const boutons = zoneJointes.querySelectorAll('[data-jointe]');
+  dire(boutons.length === 1,
+       'une vignette en echec porte une croix de retrait (' + boutons.length + ')');
+
+  // 4. Le coeur du defaut : le message ne doit PAS partir en parlant d une photo absente.
+  socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0; noteBarre(null);
+  champ.value = 'regarde cette capture';
+  composer.onsubmit({ preventDefault() {} });
+  dire(!envoyes.some(o => o.cmd === 'texte'),
+       'le message ne part pas tant qu une piece a echoue');
+  dire(champ.value === 'regarde cette capture',
+       'et ce qu on avait ecrit est intact : rien n est perdu, c est un refus, pas un echec');
+  const refus = document.getElementById('note-barre').textContent || '';
+  dire(/n'est pas partie|ne sont pas parties/.test(refus) && /croix/.test(refus),
+       'on dit pourquoi, et par ou sortir : ' + refus);
+
+  // 5. La croix retire vraiment, et le message repart alors.
+  boutons[0].onclick();
+  dire(jointes.length === 0, 'la croix retire la piece en echec');
+  envoyes.length = 0;
+  composer.onsubmit({ preventDefault() {} });
+  const parti = envoyes.find(o => o.cmd === 'texte');
+  dire(!!parti && parti.texte === 'regarde cette capture',
+       'et le message part enfin, sans pretendre montrer quoi que ce soit');
+  dire(!/images jointes/.test((parti && parti.texte) || ''),
+       'sans la liste des pieces, puisqu il n y en a plus');
+
+  // 6. Un refus net du serveur se lit pareil, et se retire pareil.
+  noteBarre(null); champ.value = '';
+  imageEchoue = true;
+  await joindre({ name: 'photo.jpg', size: 120000 });
+  imageEchoue = false;
+  dire(!!jointes[0].rate && zoneJointes.querySelectorAll('[data-jointe]').length === 1,
+       'un refus du serveur donne aussi une vignette retirable');
+  jointes.length = 0; majJointes(); noteBarre(null);
+
+  // 7. Le budget suit le poids : une grosse photo a droit a plus de temps qu une vignette,
+  //    et aucune n a droit a l infini.
+  dire(delaiImage(0) === IMAGE_DELAI_BASE, 'un fichier minuscule a le delai de base');
+  dire(delaiImage(4 * 1048576) > delaiImage(1048576),
+       'une photo plus lourde a plus de temps');
+  dire(delaiImage(500 * 1048576) === IMAGE_DELAI_MAX,
+       'mais jamais plus que le plafond : attendre sans fin est precisement le defaut');
+}
+
 // ---- une question de Claude attend, puis cesse d attendre --------------------------------
 titre('question : la machine attend l utilisateur, et le montre');
 toutClore('remise a zero');
@@ -2274,6 +2361,7 @@ setTimeout(() => {
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
+      .then(testerPiecesJointes)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
