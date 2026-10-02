@@ -1428,14 +1428,21 @@ dire(attente2 > attente1, 'les tentatives s espacent (' + Math.round(attente1) +
      + Math.round(attente2) + ' ms)');
 // La pastille reste COURTE : elle partage sa ligne avec le titre de la conversation, et
 // chaque caractere qu elle prend est pris a lui. Elle dit l essentiel — deconnecte, et dans
-// combien de temps — et sa couleur fait le reste. Le numero d essai, la cause et ce qui va
-// se passer vivent dans la barre de saisie juste en dessous, qui est vide a ce moment-la.
+// combien de temps — et sa couleur fait le reste. Le detail vit dans le panneau de liaison.
 dire(/déconnecté/.test(etatEl.textContent) && etatEl.textContent.length < 22,
      'apres plusieurs echecs, une pastille courte qui dit deconnecte : ' + etatEl.textContent);
 dire(etatEl.className.includes('e-perdu'),
      'et sa couleur change — le rouge de la liaison perdue, pas le bleu de l ecoute');
-dire(/essai \d+/.test(champ.placeholder),
-     'le numero d essai est dans la barre, qui a la place de l expliquer : ' + champ.placeholder);
+// Le placeholder ne porte plus que ce qui concerne CE champ : ce qui arrive au texte qu on
+// y ecrit. Le reste — cause, numero d essai, geste a faire — est dans le panneau, qui a la
+// largeur et les boutons pour le porter.
+dire(/partira/.test(champ.placeholder) && champ.placeholder.length < 70,
+     'la barre ne dit plus que le sort du texte en cours : ' + champ.placeholder);
+coupeDepuis = Date.now() - 30000;
+direLiaison();
+dire(/essai \d+/.test(document.getElementById('l-cause').textContent),
+     'le numero d essai est dans le panneau : '
+     + document.getElementById('l-cause').textContent.split('\n')[0]);
 
 // 8. Hors ligne : ce n est pas la meme chose qu une panne du serveur, et ca se dit autrement.
 navigator.onLine = false;
@@ -1579,8 +1586,10 @@ async function testerLiaisonQuiNAboutitPas() {
   dire(serveurRepond === false, 'et retient que la machine ne repond plus du tout');
   dire(/agent arrêté/.test(etatEl.textContent),
        'l etat le DIT au lieu de promettre une reconnexion : ' + etatEl.textContent);
-  dire(/vv/.test(champ.placeholder),
-       'et la barre nomme le geste qui repare : ' + champ.placeholder);
+  dire(/fermée/.test(document.getElementById('l-titre').textContent),
+       'et le panneau NOMME ce qui se passe : ' + document.getElementById('l-titre').textContent);
+  dire(document.getElementById('l-actions').children.length >= 1,
+       'avec le geste qui repare, a portee de pouce — pas une phrase a lire');
 
   // La machine repond mais le flux ne s etablit pas : ce n est pas la meme panne, ni le meme
   // geste. Confondre les deux envoie relancer un agent qui tourne tres bien.
@@ -1590,7 +1599,8 @@ async function testerLiaisonQuiNAboutitPas() {
   await pause(5);
   dire(serveurRepond === true && !/agent arrêté/.test(etatEl.textContent),
        'une machine qui repond en HTTP ne se dit pas « arretee » : ' + etatEl.textContent);
-  dire(/flux/.test(champ.placeholder), 'et la barre dit ou est le probleme : ' + champ.placeholder);
+  dire(/flux/.test(document.getElementById('l-dit').textContent),
+       'et le panneau dit ou est le probleme : ' + document.getElementById('l-dit').textContent);
 
   // Un appui sur l etat REESSAYE. C est le geste qu on fait devant un compte a rebours en se
   // demandant s il sert a quelque chose ; le faire attendre vingt secondes de plus pour rien
@@ -1649,7 +1659,8 @@ async function testerLiaisonQuiNAboutitPas() {
        + 'reessaie eternellement sans jamais franchir le seuil qui informe');
   coupeDepuis = Date.now() - 60000;
   direLiaison();
-  dire(!!document.getElementById('diag-ws'),
+  const pan = document.getElementById('liaison');
+  dire(!!pan && !pan.hidden,
        'et au bout d une minute la page DIT ce qu elle sait, au lieu des trois points');
   const sockAvant = sockets.length;
   await pause(120);
@@ -1777,8 +1788,13 @@ dire(/nouvelle conversation/.test(zoneOu.title),
 dire(zoneOu.textContent === 'claude-talk', 'et le projet, lui, n a pas change');
 
 // ---- une reconnexion n est pas une erreur -------------------------------------------------
-titre('diagnostic : rouge seulement quand c est vraiment casse');
-const diagLa = () => !!document.getElementById('diag-ws');
+titre('le panneau de liaison : ce qui se passe, et le geste qui repare');
+// L etat de la liaison etait dit dans le PLACEHOLDER du champ de saisie : gris pale, une
+// ligne, tronque sur un telephone, efface des qu on tape. L information la plus importante
+// du moment etait celle qu on lisait le moins bien. Elle a maintenant un panneau, et des
+// boutons — devant une panne on veut le geste qui repare, pas sa description.
+const panneauLiaison = () => document.getElementById('liaison');
+const diagLa = () => { const p = panneauLiaison(); return !!p && !p.hidden; };
 
 brancher(); ouvrirSock();
 dire(!diagLa(), 'liaison etablie : aucune boite');
@@ -1793,26 +1809,72 @@ dire(/reconnexion/.test(document.getElementById('etat').textContent),
 dire(document.getElementById('etat').className.includes('e-reprise'),
      'en ambre : une reprise en cours se repare seule, ce n est pas une panne');
 
-// Quelques echecs d affilee, mais recents : toujours rien. On ne crie pas au bout de 3 s.
+// Quelques echecs d affilee, mais recents : toujours rien. Une coupure de trois secondes
+// se repare toute seule, et un panneau qui parait pour l annoncer est pire que le silence.
 echecs = 5;
-coupeDepuis = Date.now() - 5000;
+coupeDepuis = Date.now() - 3000;
 direLiaison();
-dire(!diagLa(), 'cinq echecs mais cinq secondes : encore rien');
+dire(!diagLa(), 'cinq echecs mais trois secondes : encore rien');
 
-// La coupure s installe. LA, il y a quelque chose a dire, et quelque chose a diagnostiquer.
+// La coupure s installe. LA, il y a quelque chose a dire, et quelque chose a faire.
 coupeDepuis = Date.now() - 60000;
+serveurRepond = null;
 direLiaison();
-dire(diagLa(), 'au bout d une minute d echecs, la boite parait');
-const boiteDiag = document.getElementById('diag-ws');
-dire(/échoue depuis/.test(boiteDiag.textContent), 'et elle dit depuis quand : ' + boiteDiag.textContent.split('\n')[0]);
-dire(/bottom/.test(boiteDiag.style.cssText), 'posee en BAS, pas par-dessus l en-tete');
-dire(!/#f85149/.test(boiteDiag.style.cssText), 'et pas en rouge : l agent tourne peut-etre encore');
+dire(diagLa(), 'passe une douzaine de secondes, le panneau parait');
+dire(/Reconnexion/.test(document.getElementById('l-titre').textContent),
+     'avec un titre qui se lit d un coup d oeil : ' + document.getElementById('l-titre').textContent);
+dire(/partira/.test(document.getElementById('l-dit').textContent),
+     'une phrase qui rassure sur ce qu on a ecrit : ' + document.getElementById('l-dit').textContent);
+dire(/coupée depuis 60 s/.test(document.getElementById('l-cause').textContent),
+     'la cause technique, a sa place : ' + document.getElementById('l-cause').textContent.split('\n')[0]);
+dire(document.getElementById('l-actions').children.length >= 1,
+     'et au moins un bouton : on ne decrit pas une panne sans offrir le geste');
 
-// Et elle repart des que la liaison revient.
+// La machine ne repond plus du tout : ce n est plus « ca reconnecte », c est « c est ferme ».
+serveurRepond = false;
+direLiaison();
+dire(/fermée/.test(document.getElementById('l-titre').textContent),
+     'quand plus rien ne repond, le panneau le NOMME : ' + document.getElementById('l-titre').textContent);
+dire(panneauLiaison().classList.contains('perdu'), 'et il passe au rouge');
+
+// ---- rouvrir la conversation depuis la page --------------------------------------------
+// LE cas vecu, et celui qu on ne savait pas nommer : le tableau de bord ferme les
+// conversations restees sans activite pour rendre la memoire. La page ouverte sur le
+// telephone ne l apprenait jamais — elle bouclait sur « connexion refusee », a l infini,
+// pendant que la seule chose a faire etait de relancer la session. Depuis un autre appareil
+// et un autre ecran, parce que la page n offrait pas le geste.
+{
+  const cheminAvant = location.pathname;
+  location.pathname = '/talk/palier/';
+  serveurRepond = false; coupeDepuis = Date.now() - 60000; echecs = 5;
+  ouvertureEnCours = false; ouvertureDit = '';
+  direLiaison();
+  const boutons = [...document.getElementById('l-actions').children].map(b => b.textContent);
+  dire(boutons.some(t => /Rouvrir/.test(t)),
+       'servie derriere le tableau de bord, la page offre de ROUVRIR : ' + boutons.join(' · '));
+  dire(/ferme celles/.test(document.getElementById('l-dit').textContent),
+       'et elle dit pourquoi c est ferme, au lieu de laisser croire a une panne');
+
+  requetes.length = 0;
+  globalThis.relanceRefuse = false;
+  document.getElementById('l-actions').children.find(b => /Rouvrir/.test(b.textContent)).onclick();
+  dire(requetes.some(r => String(r.url).indexOf('/api/talk/palier') >= 0
+                       && r.opts && r.opts.method === 'POST'),
+       'le bouton demande la reouverture au tableau de bord');
+  dire(ouvertureEnCours === true, 'et la page le dit tout de suite, sans attendre la reponse');
+  dire(/Relance/.test(document.getElementById('l-titre').textContent),
+       'le panneau passe a l etat « relance » : ' + document.getElementById('l-titre').textContent);
+  // On arrete d insister ici : la minuterie de relance force des reconnexions toutes les
+  // deux secondes, et elle ecraserait la cause de coupure des cas qui suivent.
+  finirOuverture('');
+  location.pathname = cheminAvant;
+}
+
+// Et il repart des que la liaison revient.
 brancher(); ouvrirSock();
-dire(!diagLa(), 'la reconnexion la fait disparaitre');
+dire(!diagLa(), 'la reconnexion le fait disparaitre');
 dire(coupeDepuis === 0, 'et remet l horloge de coupure a zero');
-echecs = 0;
+echecs = 0; serveurRepond = null;
 
 // ---- la bascule d effort se lit d un coup -------------------------------------------------
 titre('effort : voir que le modele change de regime, et pourquoi');
@@ -2624,6 +2686,50 @@ emettre({ genre: 'tour', actions: 3, duree: 12.0, jetons: 4200, tours: 5 });
 const ligneNette = document.getElementById('flux').children.slice(-1)[0].innerHTML;
 dire(!/⚠/.test(ligneNette), 'un tour normal ne porte aucun avertissement');
 
+// ---- la relance d une conversation fermee, jusqu au bout --------------------------------
+// Appuyer sur le bouton ne suffit pas : ce qui compte est ce qu on voit ENSUITE. Une relance
+// qui echoue en silence remettrait la page dans l etat qu on cherche a supprimer — une
+// attente sans fin dont on ignore la cause.
+async function testerReouverture() {
+  const pause = (ms) => new Promise(r => setTimeout(r, ms));
+  titre('rouvrir une conversation fermee : ce qu on voit apres le clic');
+  const cheminAvant = location.pathname;
+  location.pathname = '/talk/palier/';
+  const bouton = () => [...document.getElementById('l-actions').children]
+    .find(b => /Rouvrir|relance/.test(b.textContent));
+
+  // 1. Le tableau de bord refuse — plafond de sessions, projet inconnu. On le DIT.
+  finirOuverture('');
+  globalThis.relanceRefuse = true;
+  serveurRepond = false; coupeDepuis = Date.now() - 60000; echecs = 5;
+  direLiaison();
+  bouton().onclick();
+  await pause(10);
+  dire(ouvertureEnCours === false, 'un refus ne laisse pas la page en « relance… » pour toujours');
+  direLiaison();
+  dire(/trop de sessions/.test(document.getElementById('l-cause').textContent),
+       'et il est dit, mot pour mot : '
+       + document.getElementById('l-cause').textContent.split('\n').slice(-2)[0]);
+
+  // 2. Le tableau de bord accepte : la page insiste jusqu a ce que l agent ouvre son port.
+  globalThis.relanceRefuse = false;
+  finirOuverture('');
+  direLiaison();
+  const avant = sockets.length;
+  bouton().onclick();
+  await pause(10);
+  dire(sockets.length > avant,
+       'acceptee, la relance retente tout de suite au lieu d attendre le compte a rebours');
+  dire(ouvertureEnCours === true, 'et la page reste en « relance » tant que rien ne repond');
+
+  // 3. L agent ouvre son port : tout se range, et on arrete d insister.
+  ouvrirSock();
+  dire(ouvertureEnCours === false && insisterOuverture === null,
+       'des que la liaison s ouvre, on cesse d insister');
+  dire(document.getElementById('liaison').hidden, 'et le panneau disparait');
+  location.pathname = cheminAvant;
+}
+
 // ---- ce qui ne se verifie qu'apres une echeance -----------------------------------------
 // Deux comportements ne sont vrais QUE dans le temps : une sonde sans reponse, et le renvoi
 // d'un message apres le rejeu. Les verifier en synchrone reviendrait a tester autre chose.
@@ -2712,6 +2818,7 @@ setTimeout(() => {
       .then(testerPiecesJointes)
       .then(testerEcritEnMorceaux)
       .then(testerLiaisonQuiNAboutitPas)
+      .then(testerReouverture)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

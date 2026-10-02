@@ -199,6 +199,7 @@ setTimeout(async () => {
     const cog = document.getElementById("cogitation");
     const att = document.getElementById("en-attente");
     const nb = document.getElementById("note-barre");
+    const lia = document.getElementById("liaison");
     if (pile && cog && att && nb) {
       cog.hidden = att.hidden = nb.hidden = false;
       cog.querySelector("#mot").textContent = "solutionnage";
@@ -210,6 +211,33 @@ setTimeout(async () => {
                  l: Math.round(b.left), d: Math.round(b.right) }; };
       releve.pile = { cog: r(cog), att: r(att), note: r(nb), boite: r(pile),
                       barre: r(document.getElementById("saisie-barre")) };
+      // Le panneau de liaison, seul de son espece : il est PLEINE LARGEUR et porte des
+      // boutons, donc c'est lui qui risque de sortir de la fenetre ou de passer sous la
+      // barre de saisie. Il remplace un texte de placeholder qui, lui, ne pouvait rien
+      // casser — et ne se lisait pas non plus.
+      if (lia) {
+        lia.hidden = false;
+        lia.querySelector("#l-titre").textContent = "Conversation fermée";
+        lia.querySelector("#l-dit").textContent =
+          "plus personne ne répond sur cette conversation. Le tableau de bord ferme celles "
+          + "qui restent sans activité — rien n'est perdu, l'historique est sur le disque.";
+        lia.querySelector("#l-cause").textContent =
+          ["coupée depuis 312 s · essai 9", "fermée (code 1006)",
+           "socle:7788 · /talk/palier/"].join(String.fromCharCode(10));
+        for (const mot of ["Rouvrir la conversation", "Réessayer", "Tableau de bord"]) {
+          const b = document.createElement("button");
+          b.type = "button"; b.textContent = mot;
+          lia.querySelector("#l-actions").appendChild(b);
+        }
+        const bs = [...lia.querySelectorAll("#l-actions button")].map(b => {
+          const q = b.getBoundingClientRect();
+          return { l: Math.round(q.left), d: Math.round(q.right),
+                   h: Math.round(q.height) };
+        });
+        releve.liaison = { boite: r(lia), boutons: bs };
+        lia.querySelector("#l-actions").innerHTML = "";
+        lia.hidden = true;
+      }
       cog.hidden = att.hidden = nb.hidden = true;
     }
   }
@@ -325,6 +353,7 @@ try {
 
 const brut = /<pre id="releve">([\s\S]*?)<\/pre>/.exec(dom);
 if (!brut) {
+  require("fs").writeFileSync("/tmp/rendu-dom.html", dom);
   console.error("  ECHEC la sonde n'a rien releve : le script de la page a casse au chargement");
   process.exit(1);
 }
@@ -537,6 +566,26 @@ if (r.pile) {
        `et la pile reste AU-DESSUS de la barre (${att.b} <= ${barre.t})`);
   dire(note.d <= r.deborde.vue && att.d <= r.deborde.vue,
        "aucun element de la pile ne sort de la fenêtre");
+}
+
+// --- le panneau de liaison tient dans l'ecran, boutons compris ----------------------------
+// Il remplace un texte de placeholder : celui-ci ne pouvait rien casser — et ne se lisait pas
+// non plus. Le panneau, lui, est pleine largeur et porte des boutons ; s'il deborde ou passe
+// sous la barre de saisie, l'information qu'on vient de rendre visible redevient inaccessible.
+if (r.liaison) {
+  const { boite, boutons } = r.liaison;
+  dire(boite.d <= r.deborde.vue && boite.l >= 0,
+       `le panneau de liaison tient dans la fenêtre (${boite.l}..${boite.d} pour `
+       + `${r.deborde.vue} px)`);
+  dire(boite.b <= (r.pile ? r.pile.barre.t : boite.b) + 1,
+       "et reste au-dessus de la barre de saisie");
+  dire(boutons.length === 3 && boutons.every(b => b.d <= r.deborde.vue && b.l >= 0),
+       `ses trois boutons restent dans l'écran (${boutons.map(b => b.l + ".." + b.d).join(" · ")})`);
+  // La cible tactile recommandee est de 44 px. On mesure ici la feuille LARGE, ou le pointeur
+  // est une souris ; la feuille etroite donne des boutons plus hauts. En dessous de 32 px on
+  // rate le bouton deux fois sur trois — au moment precis ou l'on est le moins patient.
+  dire(boutons.every(b => b.h >= 32),
+       `et se touchent au pouce (hauteurs : ${boutons.map(b => b.h).join(", ")} px)`);
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

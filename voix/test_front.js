@@ -348,8 +348,21 @@ globalThis.azureMarche = true;
 // La sonde de sante : la page demande au serveur HTTP s il est encore la quand la WebSocket
 // n aboutit pas. C est ce qui distingue « l agent est arrete » de « je n ai plus de reseau ».
 globalThis.santeHS = false;
+// La reouverture d une conversation fermee par le tableau de bord. C est LE geste qui
+// manquait : la session est fermee au bout de trente minutes sans activite, la page
+// l ignore et boucle sur « connexion refusee » pendant que la reponse tient en un bouton.
+globalThis.relanceRefuse = false;
 globalThis.fetch = (url, opts) => {
   globalThis.requetes.push({ url, opts });
+  if (String(url).indexOf("/api/talk/") >= 0) {
+    return globalThis.relanceRefuse
+      ? Promise.resolve({ ok: false, status: 500, redirected: false,
+                          headers: { get: () => "application/json" },
+                          json: () => Promise.resolve({ erreur: "trop de sessions ouvertes" }) })
+      : Promise.resolve({ ok: true, status: 200, redirected: false,
+                          headers: { get: () => "application/json" },
+                          json: () => Promise.resolve({ ok: true, port: 7801 }) });
+  }
   if (String(url).indexOf("sante=") >= 0) {
     return globalThis.santeHS
       ? Promise.reject(new Error("injoignable"))

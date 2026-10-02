@@ -9,6 +9,34 @@ correctif pour un correctif.
 
 ## [Non publié]
 
+### Corrige — « connexion refusée » en boucle : la conversation avait été fermée
+Le tableau de bord ferme les sessions restées trente minutes sans activité, pour rendre la
+mémoire — c'est voulu, et c'est écrit dans son journal. Mais la page ouverte sur le téléphone
+ne l'apprenait jamais : elle retentait indéfiniment contre un port que plus personne
+n'écoutait, en affichant « reconnexion… ». Rien n'était cassé, rien n'était perdu, et la
+seule chose à faire était de relancer la session — depuis un autre appareil et un autre
+écran, parce que la page n'offrait pas le geste.
+
+Quand la page est servie derrière le tableau de bord (`/talk/<projet>/`), elle sait
+maintenant le nommer et le réparer : **« Conversation fermée »**, l'explication, et un bouton
+**« Rouvrir la conversation »** qui relance la session puis insiste jusqu'à ce que l'agent
+ait ouvert son port. Un refus du tableau de bord — plafond de sessions, jeton expiré — est
+affiché tel quel plutôt que de laisser la page en attente.
+
+### Change — les erreurs de liaison ont un panneau, pas un placeholder
+Tout ce qu'on avait à dire sur une panne — la cause, le numéro d'essai, le geste à faire —
+était écrit dans le *placeholder* du champ de saisie. C'était la plus mauvaise place
+possible : gris pâle, une seule ligne, tronqué au deuxième tiers de la phrase sur un écran de
+téléphone, et effacé dès qu'on tape une lettre. L'information la plus importante du moment
+était celle qu'on lisait le moins bien.
+
+Elle a maintenant son panneau au-dessus de la barre : un titre qui se lit d'un coup d'œil,
+une phrase, la cause technique en petit, et des **boutons**. Devant une panne, ce qu'on veut
+n'est pas une description — c'est le geste qui répare, à portée de pouce. Le panneau ne
+paraît qu'au bout de douze secondes de coupure : une reprise d'une seconde annoncée par un
+bandeau est pire que le silence. Le placeholder, lui, ne dit plus que ce qui concerne le
+champ : ce qui arrive au texte qu'on est en train d'y écrire.
+
 ### Corrige — la reconnexion qui ne se fait jamais, et qui ne dit rien
 Revenir sur l'application après un détour par l'écran d'accueil laissait « reconnexion… » et
 trois points, indéfiniment, sans la moindre indication. Quatre défauts se renforçaient :

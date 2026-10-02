@@ -1096,6 +1096,36 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
    barre, du côté opposé à l'indicateur d'activité pour qu'ils puissent coexister. Elle
    s'efface d'elle-même : une explication qui reste affichée alors que la situation a changé
    devient un mensonge. */
+/* Le panneau de liaison. Pleine largeur au-dessus de la barre, parce qu'une panne de
+   liaison concerne toute la page et pas un coin de celle-ci. Deux teintes seulement :
+   ambre tant que ça se repare tout seul, rouge quand le geste revient a l'utilisateur. */
+#liaison{align-self:stretch;display:flex;flex-direction:column;gap:5px;
+  background:var(--carte);border:1px solid var(--retenu);border-left:3px solid var(--retenu);
+  border-radius:10px;padding:9px 12px;font-size:13px;color:var(--texte)}
+#liaison[hidden]{display:none}
+#liaison.perdu{border-color:var(--erreur);border-left-color:var(--erreur)}
+#liaison .l-tete{display:flex;gap:8px;align-items:center}
+#liaison .l-point{width:8px;height:8px;border-radius:50%;background:var(--retenu);flex:none;
+  animation:battre 1.6s ease-in-out infinite}
+#liaison.perdu .l-point{background:var(--erreur);animation:none}
+#liaison strong{font-size:13.5px}
+#l-dit{color:var(--faible);line-height:1.45}
+/* La cause technique : presente, mais a sa place — on la lit si on la cherche, elle ne
+   mange pas la phrase qui dit quoi faire. */
+#l-cause{font:11.5px/1.4 ui-monospace,monospace;color:#6b7684;
+  white-space:pre-wrap;word-break:break-word}
+#l-cause:empty{display:none}
+#l-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+#l-actions:empty{display:none}
+/* 9 px de haut de padding : la cible tactile fait alors ~35 px, et ~41 px sur telephone
+   (voir la feuille etroite). Un bouton de panne qu'on rate deux fois sur trois ne repare
+   rien — c'est le moment ou l'on est le moins patient. */
+#l-actions button{font:600 12.5px system-ui,sans-serif;padding:9px 14px;border-radius:999px;
+  border:1px solid var(--bord);background:var(--fond);color:var(--texte);cursor:pointer}
+#l-actions button.premier{border-color:var(--voix);color:var(--voix)}
+#l-actions button[disabled]{opacity:.55;cursor:default}
+@keyframes battre{0%,100%{opacity:1}50%{opacity:.35}}
+
 #note-barre{align-self:flex-end;
   display:flex;gap:7px;align-items:center;background:var(--carte);
   border:1px solid var(--retenu);border-radius:999px;padding:5px 13px;
@@ -1754,6 +1784,8 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 
   #pile-barre { left: 12px; right: 12px; }
   #cogitation, #note-barre, #en-attente { font-size: 12px; max-width: 100%; }
+  #liaison { font-size: 12.5px; }
+  #l-actions button { padding: 12px 16px; font-size: 13px; }
   /* 10,5 px et 1 px de marge interne : lisible a la souris, invisible et intouchable au
      doigt. C'est pour ça qu'ils semblaient absents — ils etaient la, trop petits pour
      qu'on les voie. La cible tactile recommandee ne descend pas sous 32 px. */
@@ -1900,6 +1932,18 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          combien de temps travaille-t-il, et combien de jetons ça consomme. Le mot reste,
          minuscule et en retrait, parce qu'il fait une jolie preuve de vie animée — mais il
          ne prétend plus rien dire. -->
+    <!-- L'etat de la liaison quand elle va mal. Il etait dit dans le PLACEHOLDER du champ
+         de saisie : gris pale, sur une seule ligne, tronque des le deuxieme tiers de la
+         phrase sur un telephone, et efface des qu'on tape une lettre. Autrement dit,
+         l'information la plus importante du moment etait celle qu'on lisait le moins bien.
+         Elle a maintenant sa place, sa couleur, et surtout des BOUTONS : devant une panne,
+         ce qu'on veut n'est pas une description, c'est le geste qui repare. -->
+    <div id="liaison" hidden>
+      <div class="l-tete"><span class="l-point"></span><strong id="l-titre"></strong></div>
+      <div id="l-dit"></div>
+      <div id="l-cause"></div>
+      <div id="l-actions"></div>
+    </div>
     <div id="cogitation" hidden>
       <span class="spin"></span>
       <span id="cogite-mesure">envoyé…</span>
@@ -2748,59 +2792,189 @@ let serveurRepond = null;
 let diagEnCours = false;
 let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il en est ?
 
-// Sur telephone, la console du navigateur est inaccessible : une socket qui refuse de
-// s'ouvrir donnait « connexion... » sans jamais dire pourquoi. Cette boite existe pour ce
-// cas-la, et pour lui seul.
+// --- le panneau de liaison : ce qui se passe, et le geste qui repare --------------------
 //
-// Elle s'affichait a CHAQUE fermeture de socket, en rouge, en haut de l'ecran et par-dessus
-// l'en-tete. Or une fermeture suivie d'une reconnexion reussie n'est pas une erreur : c'est
-// le fonctionnement normal d'un telephone qu'on met dans sa poche. Le resultat etait le pire
-// possible — un bandeau d'alarme rouge qui masque la conversation pour annoncer que tout va
-// bien. L'etat de liaison, dans l'en-tete, disait deja « reconnexion dans 3 s » calmement.
+// Sur telephone, la console du navigateur est inaccessible : une liaison qui ne s'etablit
+// pas donnait « reconnexion… » sans jamais dire pourquoi. Le detail existait pourtant — il
+// etait ecrit dans le PLACEHOLDER du champ de saisie. C'etait le pire endroit possible :
+// gris pale, une seule ligne, tronque au deuxieme tiers de la phrase sur un ecran de
+// telephone, et efface des qu'on tape une lettre. L'information la plus importante du moment
+// etait celle qu'on lisait le moins bien, quand on la lisait.
 //
-// Elle n'apparait donc plus que lorsqu'il y a reellement quelque chose a diagnostiquer :
-// plusieurs echecs d'affilee ET une coupure qui dure. En bas, au-dessus de la barre, parce
-// qu'un diagnostic ne doit pas prendre la place de ce qu'on est en train de lire. Et en
-// ambre : c'est un avertissement, pas une panne — l'agent, lui, tourne probablement encore.
-// 25 s : au-dela, ce n'est plus un aller-retour. C'etait 45 s, et c'etait trop tard — la
-// question « est-ce que ça reconnecte vraiment, ou est-ce que je regarde une page morte ? »
-// se pose bien avant, et rester muet pendant trois quarts de minute est precisement ce qui
-// la rend angoissante.
-const DIAG_APRES = 25000;
+// Elle a maintenant son panneau, au-dessus de la barre : un titre, une phrase, la cause
+// technique en petit, et surtout des BOUTONS. Devant une panne, ce qu'on veut n'est pas une
+// description — c'est le geste qui repare, a portee de pouce.
+//
+// Il ne parait pas a la moindre coupure : une fermeture suivie d'une reconnexion reussie est
+// le fonctionnement normal d'un telephone qu'on met dans sa poche, et un bandeau d'alarme
+// qui masque la conversation pour annoncer que tout va bien est pire que pas de bandeau.
+const DIAG_APRES = 12000;   // au-dela, une coupure merite d'etre expliquee
+
 let coupeDepuis = 0;        // Date.now() de la coupure en cours, 0 si la liaison tient
 
-function __diagBoite() {
-  let b = document.getElementById("diag-ws");
-  if (!b) {
-    b = document.createElement("div");
-    b.id = "diag-ws";
-    b.style.cssText = "position:fixed;left:8px;right:8px;bottom:calc(var(--barre) + 10px);"
-      + "z-index:6;padding:8px 12px;border-radius:10px;"
-      + "font:12px/1.4 ui-monospace,monospace;color:#e3b341;background:#1c1710;"
-      + "border:1px solid #e3b34155;white-space:pre-wrap;word-break:break-word;cursor:pointer";
-    b.title = "toucher pour masquer";
-    b.onclick = () => b.remove();
-    document.body.appendChild(b);
-  }
+// Le projet, quand la page est servie derriere le tableau de bord sous /talk/<nom>/. C'est
+// ce qui permet de ROUVRIR une conversation depuis la page elle-meme : le tableau de bord
+// ferme les sessions restees sans activite, et jusqu'ici la page n'en savait rien — elle
+// bouclait sur « connexion refusée » pendant que la seule chose a faire etait de relancer
+// l'agent, depuis un autre appareil et un autre ecran.
+// Lu a chaque fois plutot que fige au chargement : une page peut etre servie ailleurs, et
+// une constante calculee a l'import ne se teste qu'en rechargeant tout le script.
+function sousTableau() {
+  return (/^\/talk\/([^/]+)\//.exec(location.pathname || "") || [])[1] || "";
+}
+let ouvertureEnCours = false;   // une relance est en vol : ne pas en lancer deux
+let ouvertureDit = "";          // ce que la derniere relance a donne, a afficher
+let insisterOuverture = null;   // la minuterie qui retente pendant que l'agent demarre
+// Le numero de la relance en cours. La reponse du tableau de bord arrive apres coup : sans
+// ce numero, une relance abandonnee entre-temps — la liaison est revenue toute seule, on a
+// quitte l'ecran — repartait quand meme insister, et forcait des reconnexions sur une
+// socket parfaitement saine.
+let ouvertureNo = 0;
+
+// Arreter d'insister. Appelee des que la liaison s'ouvre : continuer a forcer des
+// reconnexions sur une socket qui vient d'aboutir ne ferait que la refermer.
+function finirOuverture(dit) {
+  if (insisterOuverture) { clearInterval(insisterOuverture); insisterOuverture = null; }
+  ouvertureNo++;
+  ouvertureEnCours = false;
+  ouvertureDit = dit || "";
+}
+
+// Rouvrir la conversation sans quitter la page. Le tableau de bord sait le faire — c'est le
+// meme appel que le bouton de son ecran d'accueil — et la page est servie par lui, donc sur
+// la meme origine : le cookie suit, rien d'autre a prevoir.
+function rouvrirConversation() {
+  if (ouvertureEnCours || !sousTableau() || typeof fetch !== "function") return;
+  ouvertureEnCours = true;
+  ouvertureDit = "";
+  const mien = ++ouvertureNo;
+  majPanneauLiaison();
+  fetch("/api/talk/" + encodeURIComponent(sousTableau()), {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  })
+    .then(r => r.json().catch(() => ({})).then(d => ({ ok: r.ok, d })))
+    .then(({ ok, d }) => {
+      if (mien !== ouvertureNo) return;   // relance abandonnee entre-temps
+      // 401 : le jeton du tableau de bord a expire. « non authentifie » tout nu ferait
+      // chercher une panne ; le geste est d'y retourner et d'entrer le mot de passe.
+      if (ok === false && d && d.erreur === "non authentifie") {
+        throw new Error("ta session du tableau de bord a expiré — rouvre-le pour entrer");
+      }
+      if (!ok) throw new Error((d && d.erreur) || "le tableau de bord a refusé");
+      // L'agent met quelques secondes a ouvrir son port. On ne reste pas a attendre le
+      // prochain compte a rebours : on retente activement, c'est le moment ou quelqu'un
+      // regarde l'ecran.
+      ouvertureDit = "conversation relancée — elle ouvre son port…";
+      echecs = 0;
+      let essais = 0;
+      if (insisterOuverture) clearInterval(insisterOuverture);
+      insisterOuverture = setInterval(() => {
+        essais++;
+        if (essais > 30 || (socket && socket.readyState === 1)) {
+          finirOuverture(socket && socket.readyState === 1
+            ? "" : "relancée, mais toujours injoignable au bout d'une minute");
+          majPanneauLiaison();
+          return;
+        }
+        rebrancherMaintenant("la conversation vient d'être relancée", true);
+      }, 2000);
+      rebrancherMaintenant("la conversation vient d'être relancée", true);
+      majPanneauLiaison();
+    })
+    .catch(erreur => {
+      if (mien !== ouvertureNo) return;
+      finirOuverture("la relance a échoué : " + ((erreur && erreur.message) || erreur));
+      majPanneauLiaison();
+    });
+}
+
+function __panneau() { return document.getElementById("liaison"); }
+function retirerDiag() {
+  const p = __panneau();
+  if (p) p.hidden = true;
+}
+
+// Un bouton du panneau. Rendu a chaque mise a jour : le panneau est reconstruit plutot que
+// corrige, parce qu'un panneau corrige par morceaux finit toujours par afficher le bouton
+// d'un etat qu'on a quitte.
+function __action(zone, libelle, premier, surClic, inactif) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = libelle;
+  if (premier) b.className = "premier";
+  if (inactif) b.disabled = true;
+  else b.onclick = surClic;
+  zone.appendChild(b);
   return b;
 }
 
-function retirerDiag() { document.getElementById("diag-ws")?.remove(); }
-
 // Appelee chaque seconde par l'affichage de la liaison : un seul endroit decide, et il
 // decide sur la DUREE plutot que sur l'evenement.
-function majDiagnostic() {
+function majPanneauLiaison() {
+  const p = __panneau();
+  if (!p) return;
   const dure = coupeDepuis ? Date.now() - coupeDepuis : 0;
-  // Deux echecs suffisent : conjugue a la duree, c'est deja une coupure qui ne se repare
-  // pas toute seule. Exiger quatre echecs retardait la boite de plusieurs dizaines de
-  // secondes supplementaires quand l'ecart entre tentatives avait grandi.
-  if (echecs < 2 || dure < DIAG_APRES) { retirerDiag(); return; }
-  __diagBoite().textContent =
-    "la reconnexion échoue depuis " + Math.round(dure / 1000) + " s"
-    + (causeCoupure ? "\n" + causeCoupure : "")
-    + "\nl'agent tourne peut-être toujours : vérifie qu'il est lancé sur le PC"
-    + "\n" + location.host;
+  // Rien a dire : la liaison tient, ou la coupure est trop jeune pour etre autre chose
+  // qu'un aller-retour. Une relance en cours, elle, se montre tout de suite — c'est une
+  // action de l'utilisateur, elle doit avoir un retour immediat.
+  if (!coupeDepuis || (dure < DIAG_APRES && !ouvertureEnCours && !ouvertureDit)) {
+    p.hidden = true;
+    return;
+  }
+  const secondes = Math.round(dure / 1000);
+  const arrete = serveurRepond === false;
+  const titre = document.getElementById("l-titre");
+  const dit = document.getElementById("l-dit");
+  const cause = document.getElementById("l-cause");
+  const actions = document.getElementById("l-actions");
+  if (!titre || !dit || !cause || !actions) return;
+
+  p.classList.toggle("perdu", arrete || dure > 60000);
+  if (ouvertureEnCours) {
+    titre.textContent = "Relance de la conversation…";
+    dit.textContent = "le tableau de bord rouvre la session ; la page s'y rebranchera "
+      + "toute seule";
+  } else if (arrete) {
+    // LE cas du telephone, et celui qu'on ne savait pas nommer. Le tableau de bord ferme
+    // les conversations restees sans activite pour rendre la memoire : rien n'est casse,
+    // rien n'est perdu, il faut juste la rouvrir. Dit « déconnecté », on cherchait une
+    // panne de reseau pendant que la reponse tenait en un bouton.
+    titre.textContent = "Conversation fermée";
+    dit.textContent = sousTableau()
+      ? "plus personne ne répond sur cette conversation. Le tableau de bord ferme celles "
+        + "qui restent sans activité — rien n'est perdu, l'historique est sur le disque."
+      : "plus personne ne répond sur cette conversation : l'agent s'est arrêté, ou la "
+        + "machine dort. Relance-le avec « vv » sur le PC.";
+  } else {
+    titre.textContent = "Reconnexion en cours";
+    dit.textContent = serveurRepond === true
+      ? "la machine répond, mais le flux ne s'établit pas. Ce que tu écris partira dès "
+        + "le retour."
+      : "la liaison est coupée et la page réessaie toute seule. Ce que tu écris partira "
+        + "dès le retour.";
+  }
+  const lignes = [`coupée depuis ${secondes} s · essai ${echecs + 1}`];
+  if (causeCoupure) lignes.push(causeCoupure);
+  if (ouvertureDit) lignes.push(ouvertureDit);
+  lignes.push(location.host + (sousTableau() ? " · /talk/" + sousTableau() + "/" : ""));
+  cause.textContent = lignes.join("\n");
+
+  actions.textContent = "";
+  if (sousTableau()) {
+    __action(actions, ouvertureEnCours ? "relance…" : "Rouvrir la conversation",
+             arrete, rouvrirConversation, ouvertureEnCours);
+  }
+  __action(actions, "Réessayer", !arrete && !sousTableau(),
+           () => rebrancherMaintenant("essai demandé à la main", true), ouvertureEnCours);
+  if (arrete && sousTableau()) {
+    __action(actions, "Tableau de bord", false, () => { location.href = "/"; });
+  }
+  p.hidden = false;
 }
+
+// L'ancien nom, garde parce qu'il est appele depuis l'affichage de l'etat.
+function majDiagnostic() { majPanneauLiaison(); }
+
 function __diagSocket(ws) {
   // Le talon des tests donne une socket sans addEventListener : rien a surveiller.
   if (!ws || typeof ws.addEventListener !== "function") return;
@@ -5426,18 +5600,15 @@ function direLiaison() {
   // dix c'est le telephone qui a mis la page en veille, l'agent n'a rien vu, et rien n'est
   // perdu. La cause, le numero d'essai et ce qui va se passer tiennent dans la barre de
   // saisie, qui est vide a ce moment-la et sous les yeux.
-  const pourquoi = causeCoupure ? ` — ${causeCoupure}` : "";
+  // Le placeholder reste COURT. Il portait toute l'explication — cause, numero d'essai,
+  // geste a faire — et c'etait la plus mauvaise place qui soit : gris pale, une ligne,
+  // tronque au deuxieme tiers sur un telephone, et efface des qu'on tape une lettre. Tout
+  // cela est maintenant dans le panneau de liaison, qui a la largeur, la couleur et les
+  // boutons pour le porter. Ici, on garde la seule chose qui concerne CE champ : ce qui
+  // arrive au texte qu'on est en train d'y ecrire.
   champ.placeholder = arrete
-    ? `l'agent ne répond plus depuis ${depuis} s — il s'est arrêté ou la machine dort. `
-      + "Relance-le (« vv »), la page le retrouvera toute seule"
-    : perdu && serveurRepond === true
-    ? `déconnecté depuis ${depuis} s${pourquoi} · essai ${essai} — la machine répond, c'est `
-      + "le flux qui ne s'établit pas ; ce que tu écris partira dès le retour"
-    : perdu
-    ? `déconnecté depuis ${depuis} s${pourquoi} · essai ${essai} — l'agent tourne peut-être `
-      + "encore ; ce que tu écris partira à la reconnexion"
-    : `reconnexion${reste > 1 ? ` dans ${reste} s` : "…"}${pourquoi} · essai ${essai} — `
-      + "rien n'est perdu, ce que tu écris partira dès le retour";
+    ? `plus de liaison depuis ${depuis} s — voir le bandeau`
+    : `${perdu ? "déconnecté" : "reconnexion"} — ce que tu écris partira dès le retour`;
   el.title = (causeCoupure ? causeCoupure + ". " : "")
     + (serveurRepond === false ? "la machine ne répond plus en HTTP non plus. "
        : serveurRepond === true ? "la machine répond en HTTP : l'agent est là. " : "")
@@ -5691,6 +5862,7 @@ function brancher() {
     serveurRepond = null;
     causeCoupure = "";
     coupeDepuis = 0;
+    finirOuverture("");
     retirerDiag();
     dernierPouls = Date.now();
     arreterRebranche();
