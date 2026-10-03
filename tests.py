@@ -31,6 +31,8 @@ PYTHON = RACINE / ".venv" / "bin" / "python"
 SUITES = [
     ("intentions", "test_intentions.py", "py", "ordres locaux : toute formulation, et ce qui n'en est PAS un", False),
     ("journal", "test_journal.py", "py", "historique : portée par dossier, états, reprise", False),
+    ("reprise", "test_reprise_effort.py", "py",
+     "reconstruire le client (effort, modèle) sans perdre la conversation", False),
     ("consommation", "test_consommation.py", "py",
      "quotas des moteurs : ce qui est compté, ce qui prime dessus", False),
     ("fenetre", "test_fenetre.py", "py",

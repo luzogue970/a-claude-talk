@@ -328,7 +328,10 @@ class Worker:
             permission_mode=config.PERMISSION,
             # Reprendre rend le contexte COMPLET de la session precedente : Claude Code
             # ecrit ses sessions sur disque, on ne rejoue pas un resume approximatif.
-            resume=reprendre or config.REPRENDRE or None,
+            # Ce qu'on recoit, rien d'autre : retomber ici sur config.REPRENDRE ferait
+            # rouvrir la session demandee au lancement a chaque « nouvelle conversation ».
+            # L'argument est toujours resolu par l'appelant, _a_reprendre inclus.
+            resume=reprendre or None,
             # Only bypassPermissions really asks nothing; every other mode still routes
             # boundary crossings through the callback, which is how an out-of-project shell
             # command gets asked out loud instead of silently denied.
@@ -426,6 +429,21 @@ class Worker:
                     "constat d'échec est une réponse utile, un silence de dix minutes ne l'est pas."
     )
 
+    def _sid_vivant(self) -> str | None:
+        """La session a reprendre quand on reconstruit le client en cours de route.
+
+        `session_id` est ce que le SDK a fini par nous rendre — et il ne nous le rend qu'au
+        PREMIER message. Entre la connexion et la premiere reponse il vaut None, et c'est
+        une fenetre reelle : au lancement, l'ajustement automatique de l'effort tombe
+        pendant cette fenetre, puisqu'il precede l'envoi de la premiere question. Reconstruire
+        avec None ouvrait alors une conversation neuve et jetait la reprise du demarrage,
+        juste a temps pour que le contexte manque au moment ou on en avait besoin.
+
+        On retombe donc sur la session qu'on avait DEMANDEE, qui reste valable tant que
+        personne n'a dit « nouvelle conversation » — ce cas-la remet `reprise` a None.
+        """
+        return self.session_id or (self.reprise or {}).get("session_id") or None
+
     def _a_reprendre(self) -> str | None:
         """Quelle conversation reprendre au demarrage, et le dire.
 
@@ -438,6 +456,7 @@ class Worker:
         if config.REPRENDRE:
             self._voir("log", niveau="INFO", source="session",
                        texte=f"reprise demandée : {config.REPRENDRE[:8]}")
+            self.reprise = {"session_id": config.REPRENDRE}
             return config.REPRENDRE
         if not config.REPRISE_AUTO:
             self._voir("log", niveau="INFO", source="session",
@@ -489,7 +508,7 @@ class Worker:
                 # pas la session demandee : il en ouvre une neuve, et la conversation repart
                 # de zero sans le moindre message. C'est exactement le silence qui faisait
                 # croire a des conversations qui se dedoublent toutes seules.
-                voulu = (self.reprise or {}).get("session_id") or config.REPRENDRE or None
+                voulu = (self.reprise or {}).get("session_id") or None
                 repris = bool(voulu) and sid == voulu
                 if voulu and not repris:
                     self._voir("erreur", niveau="WARNING", source="session",
@@ -693,7 +712,7 @@ class Worker:
             return ""
 
         ancien, ancienne_pompe = self.client, self._pompe
-        nouveau = ClaudeSDKClient(self._options(effort=niveau, reprendre=self.session_id))
+        nouveau = ClaudeSDKClient(self._options(effort=niveau, reprendre=self._sid_vivant()))
         await nouveau.connect()
         # Bascule seulement maintenant : jusqu'ici l'ancien client servait encore.
         self.client = nouveau
