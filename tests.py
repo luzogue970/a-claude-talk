@@ -33,6 +33,8 @@ SUITES = [
     ("journal", "test_journal.py", "py", "historique : portée par dossier, états, reprise", False),
     ("reprise", "test_reprise_effort.py", "py",
      "reconstruire le client (effort, modèle) sans perdre la conversation", False),
+    ("pompe", "test_pompe.py", "py",
+     "liaison morte : la panne se dit, le tour se relâche, « débloque » repart", False),
     ("consommation", "test_consommation.py", "py",
      "quotas des moteurs : ce qui est compté, ce qui prime dessus", False),
     ("fenetre", "test_fenetre.py", "py",

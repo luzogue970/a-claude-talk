@@ -73,6 +73,23 @@ INTENTIONS = (
         objets=("travail", "t[âa]che", "tout", "[çc]a", "boulot", "run"),
     ),
     Intention(
+        # Le dernier recours, et il doit s'attraper a la voix : quand la liaison est morte,
+        # le bouton d'arret ne repond plus et l'ecran ne sert plus a rien. Place avant
+        # « arret » serait tentant, mais non — « débloque » n'a aucun mot en commun avec lui,
+        # et ses objets sont assez specifiques pour tirer seuls.
+        nom="debloque",
+        # Le mot seul, ou accompagné de ce qu'on débloque — jamais au milieu d'une phrase
+        # qui parle d'autre chose. « débloque le scroll du fil » est une tâche, pas un
+        # ordre, et il passe sous les douze mots sans croiser le vocabulaire de TACHE.
+        seules=(r"^\s*d[ée]bloque\w*\s*[.!?]*\s*$",
+                r"\bd[ée]bloque\w*\s+(?:la\s+)?(?:conversation|liaison|session|tout)\b",
+                r"\b[çc]a (?:ne )?r[ée]pond plus\b",
+                r"\bc'?est (?:tout )?bloqu[ée]\b",
+                r"\bre(?:lance|connecte)\w*\s+(?:la\s+)?(?:liaison|conversation|session)\b"),
+        verbes=("d[ée]bloqu", "d[ée]coinc", "relanc", "reconnect", "r[ée]veill"),
+        objets=("liaison", "conversation", "session", "connexion"),
+    ),
+    Intention(
         nom="repete",
         seules=(r"\br[ée]p[èe]te\b", r"\bpardon\b", r"\bcomment\b\s*\?*$",
                 r"\bj'?ai pas (?:bien )?(?:compris|entendu|saisi)\b",

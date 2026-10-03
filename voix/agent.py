@@ -727,6 +727,11 @@ class Voix(Agent):
             # whatever was being said — that is what barge-in is for.
             await self.worker.interrompre()
             return "ok, j'arrête."
+        if intention == "debloque":
+            # Dit a la voix parce que c'est le seul chemin qui marche encore quand l'ecran
+            # ne repond plus : la liaison avec Claude Code est morte, pas la nôtre.
+            message = await self.worker.debloquer()
+            return message or "je n'ai pas réussi à relancer la liaison."
         if intention == "statut":
             if self.worker.occupe:
                 return self.worker.journal.resume_court() + "."
@@ -1765,6 +1770,13 @@ async def entrypoint(ctx: JobContext):
             session.interrupt()
             await worker.interrompre()
             tableau.publier("arret", texte="arrêt demandé depuis le tableau")
+        elif nom == "debloquer":
+            # Le dernier recours, quand même « arrêter » ne répond plus : on reconstruit la
+            # liaison sur la même conversation. Le contexte vit sur disque, pas ici.
+            session.interrupt()
+            message = await worker.debloquer()
+            if message:
+                tableau.publier("ordre", texte=message)
 
     # Sans ça, tout appel venant du tableau passerait par Agent.session et son contrôle
     # d'activité — voir Voix.sess.

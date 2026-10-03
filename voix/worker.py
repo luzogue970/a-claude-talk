@@ -259,6 +259,9 @@ class Worker:
         # a part de session_id, qui est ce que le SDK finit par nous rendre : si la reprise
         # echouait, les deux differeraient et c'est precisement ce qu'il faut pouvoir dire.
         self.reprise: dict | None = None
+        # Vrai quand la pompe d'evenements s'est arretee : plus rien n'arrivera de ce
+        # client-la, et seule une reconstruction remet la conversation en marche.
+        self.pompe_morte = False
         self._pompe: asyncio.Task | None = None
         self.modele = config.WORKER_MODEL
         self._modele_base = config.WORKER_MODEL
@@ -498,7 +501,57 @@ class Worker:
         """Turn SDK messages into voice-layer events and dashboard lines.
 
         Runs for the life of the session. The journal it fills is what the porte-parole
-        reads, and what answers "t'en es ou" without calling a model."""
+        reads, and what answers "t'en es ou" without calling a model.
+
+        Elle ne meurt JAMAIS en silence, et c'est tout l'objet de l'enveloppe ci-dessous.
+        Le degat repare, observe sur une conversation d'insnap : la pompe s'est arretee au
+        debut d'un tour, `occupe` est reste vrai pour toujours, et la page a affiche « au
+        travail » pendant seize minutes pendant que Claude Code, lui, finissait tranquillement
+        son tour sur disque. Plus aucun evenement, plus aucun moyen d'envoyer quoi que ce
+        soit, et rien a l'ecran pour dire ce qui se passait. Une tache creee par
+        `create_task` qui leve emporte son exception avec elle : personne ne la lit, et la
+        conversation est morte sans un mot.
+
+        Deux choses sont donc garanties ici, quoi qu'il arrive en chemin : le tour se
+        TERMINE — `occupe` retombe, la couche vocale reçoit sa fin, elle n'attend pas un
+        bilan qui ne viendra pas — et la panne se DIT, a l'ecran, avec de quoi repartir.
+        """
+        try:
+            await self._drainer_boucle()
+        except asyncio.CancelledError:
+            raise                      # remplacement de client : normal, rien a signaler
+        except Exception as exc:
+            log.exception("la pompe d'evenements est tombee")
+            self._clore_sur_panne(f"la liaison avec Claude Code a lâché ({exc})")
+        else:
+            # Fin normale du flux : le CLI a ferme sa sortie. Dit quand meme, parce qu'un
+            # tour en cours ne se finira plus et que la page doit cesser de l'attendre.
+            self._clore_sur_panne("Claude Code a fermé le flux")
+
+    def _clore_sur_panne(self, pourquoi: str):
+        """Rendre la main apres une pompe tombee, et le dire.
+
+        Le pire etat possible est celui qu'on vient de quitter : bloque, sans explication et
+        sans bouton. On annonce donc la panne ET la sortie, parce que « débloque » remonte
+        une conversation intacte — le contexte est sur disque, pas dans ce processus.
+        """
+        self._voir("erreur", niveau="ERROR", source="session",
+                   texte=(f"{pourquoi} — le tour en cours ne rendra pas de bilan. "
+                          "« débloque » relance la liaison en gardant la conversation."))
+        self.pompe_morte = True
+        if self.occupe:
+            self.occupe = False
+            self._voir("travail", actif=False)
+            self.journal.fin = "error_during_execution"
+            self.journal.erreurs = [pourquoi]
+            # La couche vocale attend cette fin pour reprendre la parole. Sans elle, le
+            # micro reste ferme et plus rien n'entre : bloque une seconde fois.
+            try:
+                self.events.put_nowait(("fin", self.journal))
+            except Exception:
+                log.debug("file d'evenements pleine a la cloture", exc_info=True)
+
+    async def _drainer_boucle(self):
         assert self.client
         async for message in self.client.receive_messages():
             sid = getattr(message, "session_id", None)
@@ -649,8 +702,18 @@ class Worker:
                    recu=recu or None)
 
     async def envoyer(self, texte: str):
-        """Queued server-side if a turn is already running, so he can speak mid-work."""
+        """Queued server-side if a turn is already running, so he can speak mid-work.
+
+        Si la liaison est morte, on relance AVANT d'envoyer plutot que de laisser la phrase
+        tomber dans un tube que personne ne lit : c'est ce silence-la qu'on corrige, pas
+        seulement l'affichage.
+        """
         assert self.client
+        if self.pompe_morte:
+            self._voir("log", niveau="INFO", source="session",
+                       texte="liaison morte — on la relance avant d'envoyer")
+            if not await self.debloquer():
+                return
         if not self.occupe:
             self.journal = Journal(question=texte)
             self.occupe = True
@@ -828,10 +891,72 @@ class Worker:
                    temporaire=False)
 
     async def interrompre(self):
-        assert self.client
-        await self.client.interrupt()
+        """Arreter le tour en cours. Rend la main AVANT de demander l'arret.
+
+        L'ordre compte, et il a coute une conversation entiere. L'ancien ordre — demander
+        au client, puis relacher l'etat — supposait que `interrupt()` reponde. Quand la
+        liaison est justement ce qui est casse, il n'y repond jamais : le bouton « arrêter »
+        reste en attente pour toujours, et il ne reste plus aucun bouton. Or c'est
+        exactement dans ce cas-la qu'on appuie dessus.
+
+        On relache donc d'abord, on demande ensuite, et la demande est bornee : si le CLI ne
+        repond pas en trois secondes, il est injoignable et c'est « débloque » qu'il faut.
+        """
         self.occupe = False
         self._voir("travail", actif=False)
+        if not self.client:
+            return
+        try:
+            await asyncio.wait_for(self.client.interrupt(), 3.0)
+        except asyncio.TimeoutError:
+            self.pompe_morte = True
+            self._voir("erreur", niveau="WARNING", source="session",
+                       texte=("Claude Code ne répond plus à l'arrêt — « débloque » relance "
+                              "la liaison en gardant la conversation."))
+            log.warning("interrupt sans reponse : liaison probablement morte")
+        except Exception as exc:
+            log.warning("interrupt refuse : %s", exc)
+
+    async def debloquer(self) -> str:
+        """Reconstruire le client sur la MEME conversation, quand la liaison est morte.
+
+        La porte de sortie, et la raison pour laquelle elle existe : une pompe tombée laisse
+        un processus vivant mais sourd — la page affiche la conversation, le bouton d'arrêt
+        ne fait rien, et le seul remède connu était de tout relancer depuis un clavier qu'on
+        n'a pas forcément sous la main.
+
+        Rien n'est perdu en reconstruisant : Claude Code écrit ses sessions sur disque, donc
+        la reprise rend le contexte COMPLET. Ce qui disparaît est le tour en cours, qui de
+        toute façon n'allait plus rien rendre.
+        """
+        sid = self._sid_vivant()
+        ancien, ancienne_pompe = self.client, self._pompe
+        try:
+            nouveau = ClaudeSDKClient(self._options(reprendre=sid))
+            await nouveau.connect()
+        except Exception as exc:
+            log.warning("deblocage impossible : %s", exc)
+            self._voir("erreur", niveau="ERROR", source="session",
+                       texte=f"impossible de relancer la liaison : {exc}")
+            return ""
+        self.client = nouveau
+        self.pompe_morte = False
+        self.occupe = False
+        self.journal = Journal()
+        self._pompe = asyncio.create_task(self._drainer())
+        self._voir("travail", actif=False)
+
+        if ancienne_pompe:
+            ancienne_pompe.cancel()
+        if ancien:
+            # Sans borne : un client mort ne dit pas toujours au revoir, et on ne va pas
+            # attendre son adieu pour rendre la conversation a son proprietaire.
+            try:
+                await asyncio.wait_for(ancien.disconnect(), 3.0)
+            except Exception:
+                log.debug("l'ancien client n'a pas pu etre ferme", exc_info=True)
+        return ("liaison relancée" + (f" sur {sid[:8]}" if sid else " sur une conversation neuve")
+                + " — le contexte est gardé.")
 
     async def stop(self):
         if self._pompe:
