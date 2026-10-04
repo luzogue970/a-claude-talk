@@ -732,10 +732,17 @@ class Voix(Agent):
             # ne repond plus : la liaison avec Claude Code est morte, pas la nôtre.
             message = await self.worker.debloquer()
             return message or "je n'ai pas réussi à relancer la liaison."
+        if intention == "compacte":
+            return await self.worker.compacter() or "je n'ai pas pu compacter."
         if intention == "statut":
+            # Le poids de la conversation fait partie de « où on en est » : c'est lui qui
+            # explique qu'une question banale mette trente secondes et coûte un quart de
+            # dollar, et on ne peut pas le deviner en regardant l'écran.
+            poids = self.worker.poids()
+            suite = f" — {poids}." if poids else ""
             if self.worker.occupe:
-                return self.worker.journal.resume_court() + "."
-            return "il n'y a rien en cours."
+                return self.worker.journal.resume_court() + "." + suite
+            return "il n'y a rien en cours." + suite
         if intention == "repete":
             return self._dernier_debrief or "je ne t'ai encore rien dit."
         if intention == "quota":
@@ -1770,6 +1777,10 @@ async def entrypoint(ctx: JobContext):
             session.interrupt()
             await worker.interrompre()
             tableau.publier("arret", texte="arrêt demandé depuis le tableau")
+        elif nom == "compacter":
+            message = await worker.compacter()
+            if message:
+                tableau.publier("ordre", texte=message)
         elif nom == "debloquer":
             # Le dernier recours, quand même « arrêter » ne répond plus : on reconstruit la
             # liaison sur la même conversation. Le contexte vit sur disque, pas ici.

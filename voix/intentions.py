@@ -90,6 +90,18 @@ INTENTIONS = (
         objets=("liaison", "conversation", "session", "connexion"),
     ),
     Intention(
+        # Alléger la conversation sans la quitter. « compacte » est un mot qu'on n'emploie
+        # pour ainsi dire jamais en parlant de code — et quand on l'emploie (« compacte ce
+        # tableau »), le garde-fou TACHE l'attrape avant d'arriver ici.
+        nom="compacte",
+        seules=(r"^\s*compacte\w*\s*[.!?]*\s*$",
+                r"\bcompacte\w*\s+(?:la\s+)?(?:conversation|session|contexte|tout)\b",
+                r"\br[ée]sume la conversation\b",
+                r"\ball[èe]ge\w*\s+(?:la\s+)?(?:conversation|contexte)\b"),
+        verbes=("compact", "all[èe]g", "r[ée]sum", "nettoi", "d[ée]gross"),
+        objets=("contexte", "conversation", "session", "jetons"),
+    ),
+    Intention(
         nom="repete",
         seules=(r"\br[ée]p[èe]te\b", r"\bpardon\b", r"\bcomment\b\s*\?*$",
                 r"\bj'?ai pas (?:bien )?(?:compris|entendu|saisi)\b",

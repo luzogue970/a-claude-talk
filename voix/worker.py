@@ -24,6 +24,7 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     ResultMessage,
     StreamEvent,
+    SystemMessage,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -164,6 +165,24 @@ VERBES = {
 }
 
 
+# Ce qu'une conversation pese, et a partir de quand il faut le dire.
+#
+# Mesure sur cette machine le 5 octobre 2026, et c'est elle qui a motive tout ce qui suit :
+# six conversations au-dessus de 850 000 jetons, deux collees au plafond du million, environ
+# 1 190 $ d'API a elles toutes. Rien ne l'avait signale — le chiffre etait pourtant a
+# l'ecran, mais sans echelle pour le lire, et un nombre sans echelle ne se lit pas.
+#
+# Le cout n'est pas une image, c'est de l'arithmetique : une conversation relit son contexte
+# ENTIER a chaque aller-retour, et un tour avec dix outils en fait dix. A 500 000 jetons,
+# l'aller-retour coute 0,25 $ en lecture de cache Opus ; le meme tour, en debut de
+# conversation, en coute deux centimes.
+SEUILS_CONTEXTE = (200_000, 400_000, 600_000, 800_000)
+
+# Lecture de cache Opus 5 : 10 % du prix d'entree, soit 0,50 $ le million. C'est le tarif qui
+# s'applique a la quasi-totalite d'un contexte relu — le neuf, lui, est marginal.
+PRIX_LECTURE_CACHE_PAR_JETON = 0.50 / 1_000_000
+
+
 @dataclass
 class Journal:
     """What actually happened this turn — the input the spoken debrief reads."""
@@ -262,6 +281,10 @@ class Worker:
         # Vrai quand la pompe d'evenements s'est arretee : plus rien n'arrivera de ce
         # client-la, et seule une reconstruction remet la conversation en marche.
         self.pompe_morte = False
+        # Les paliers de contexte deja annonces. Vides a l'ouverture et apres chaque
+        # compactage : franchir 400 k une seconde fois, apres s'en etre allege, est une
+        # nouvelle quand le redire a chaque tour n'en est pas une.
+        self._seuils_dits: set[int] = set()
         self._pompe: asyncio.Task | None = None
         self.modele = config.WORKER_MODEL
         self._modele_base = config.WORKER_MODEL
@@ -480,6 +503,20 @@ class Worker:
                    texte=(f"reprise de la conversation de {c.get('projet') or 'ce dossier'} — "
                           f"{c.get('tours', 0)} tours, "
                           f"{c.get('reprises', 1)} lancement(s) · {c['session_id'][:8]}"))
+        # Son poids AVANT la premiere question, parce que c'est le seul moment ou on peut
+        # encore choisir d'en ouvrir une neuve. Apres, la question est posee et payee.
+        try:
+            poids = journal.poids_session(c["session_id"])
+        except Exception:
+            log.debug("poids de la session illisible", exc_info=True)
+            poids = 0
+        if poids >= SEUILS_CONTEXTE[0]:
+            self.journal.contexte = poids
+            self._seuils_dits.update(s for s in SEUILS_CONTEXTE if poids >= s)
+            self._voir("erreur" if poids >= 600_000 else "log",
+                       niveau="WARNING", source="contexte",
+                       texte=(f"{self.poids()}. « compacte » la résume sans la quitter, "
+                              "« nouvelle conversation » repart à zéro."))
         return c["session_id"]
 
     async def start(self):
@@ -608,6 +645,8 @@ class Worker:
                         # indefiniment sur la page.
                         self._voir("resultat", texte=texte[:1500],
                                    id=block.tool_use_id, echec=bool(block.is_error))
+            elif isinstance(message, SystemMessage):
+                self._systeme(message)
             elif isinstance(message, ResultMessage):
                 self.journal.cout_usd = message.total_cost_usd
                 self.journal.duree_s = round((message.duration_ms or 0) / 1000, 1)
@@ -689,6 +728,85 @@ class Worker:
             if bout:
                 self._voir("texte", texte=bout, suite=True)
 
+    def _systeme(self, message: SystemMessage):
+        """Ce que le CLI raconte de lui-meme. On n'en retient que le compactage.
+
+        Il etait jusqu'ici jete en silence, et c'est dommage : c'est le seul endroit qui
+        dise ce qu'une conversation pesait AVANT d'etre resumee. Sans ça, un compactage
+        automatique — celui que le CLI declenche tout seul en arrivant au plafond — passait
+        pour un trou de memoire inexplicable : Claude oubliait soudain la moitie de la
+        conversation, et rien a l'ecran ne disait pourquoi.
+        """
+        if message.subtype == "status" and (message.data or {}).get("status") == "compacting":
+            self._voir("log", niveau="INFO", source="contexte",
+                       texte="compactage en cours — la conversation se résume elle-même")
+            return
+        if message.subtype != "compact_boundary":
+            return
+        meta = (message.data or {}).get("compact_metadata") or {}
+        avant = int(meta.get("pre_tokens") or 0)
+        auto = (meta.get("trigger") or "") != "manual"
+        self._seuils_dits.clear()
+        self.journal.contexte = 0
+        self._voir("contexte", genre_compactage="auto" if auto else "manuel", avant=avant)
+        self._voir("log", niveau="INFO", source="contexte",
+                   texte=(f"conversation compactée{' automatiquement' if auto else ''} — "
+                          f"elle pesait {avant // 1000} k jetons. Le contexte repart léger ; "
+                          "le détail d'avant n'est plus relu, le résumé le remplace."))
+
+    def poids(self) -> str | None:
+        """Une phrase sur ce que la conversation pese, ou None quand ça ne vaut pas la peine.
+
+        Dire un nombre de jetons ne sert a rien : personne ne sait si 400 000 est beaucoup.
+        Dire ce qu'il COUTE par aller-retour, si — et c'est la seule facon de faire sentir
+        que la meme question posee ici coute dix fois ce qu'elle couterait ailleurs.
+        """
+        c = self.journal.contexte
+        if c < SEUILS_CONTEXTE[0]:
+            return None
+        return (f"cette conversation pèse {c // 1000} k jetons — "
+                f"{c * PRIX_LECTURE_CACHE_PAR_JETON:.2f} $ par aller-retour, "
+                f"et un tour avec outils en fait plusieurs")
+
+    def _veiller_au_contexte(self):
+        """Prevenir UNE fois par palier franchi, jamais a chaque tour.
+
+        Le piege evite : une alerte a chaque echange devient un decor, on cesse de la lire,
+        et le jour ou elle compte elle ne se distingue plus du reste. Un palier franchi est
+        un evenement ; le meme palier re-franchi n'en est pas un.
+        """
+        c = self.journal.contexte
+        for seuil in SEUILS_CONTEXTE:
+            if c >= seuil and seuil not in self._seuils_dits:
+                self._seuils_dits.add(seuil)
+                self._voir("erreur" if seuil >= 600_000 else "log",
+                           niveau="WARNING", source="contexte",
+                           texte=(f"{self.poids()}. « compacte » la résume sans la quitter, "
+                                  "« nouvelle conversation » repart à zéro."))
+
+    async def compacter(self) -> str:
+        """Demander au CLI de resumer la conversation, sans la quitter.
+
+        Pourquoi ne pas laisser faire l'automatique : il existe, mais il attend le PLAFOND.
+        Avec une fenetre d'un million de jetons, ça veut dire traverser toute la zone ou
+        chaque aller-retour coute un demi-dollar avant que quoi que ce soit ne se passe —
+        mesure du 5 octobre 2026 : six conversations au-dessus de 850 k, deux collees au
+        million, et la facture qui va avec. Compacter quand on le DECIDE, typiquement entre
+        deux sujets, coute un resume et rend une conversation legere.
+
+        Rien ne se perd de ce qui compte : le resume est ecrit par le modele qui vient de
+        faire le travail, et la session garde son identifiant — donc son historique sur
+        disque reste relisible en entier.
+        """
+        if not self.client:
+            return ""
+        if self.occupe:
+            return "une tâche est en cours — arrête-la d'abord."
+        avant = self.journal.contexte
+        await self.envoyer("/compact")
+        return (f"je compacte{f' — {avant // 1000} k jetons avant' if avant else ''}."
+                if avant else "je compacte.")
+
     def _publier_jetons(self, recu: bool = False):
         """Ce que le tour a consomme jusqu'ici. Des chiffres mesures, jamais estimes.
 
@@ -700,6 +818,7 @@ class Worker:
                    sortie=self.journal.jetons_sortie,
                    echanges=self.journal.echanges,
                    recu=recu or None)
+        self._veiller_au_contexte()
 
     async def envoyer(self, texte: str):
         """Queued server-side if a turn is already running, so he can speak mid-work.

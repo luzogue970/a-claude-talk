@@ -434,6 +434,46 @@ def actives(ici: str | None = None) -> list[dict]:
 SESSIONS = Path.home() / ".claude" / "projects"
 
 
+def poids_session(sid: str) -> int:
+    """Ce que pese une conversation sur disque, en jetons de contexte. 0 si on ne sait pas.
+
+    Lu dans le dernier `usage` ecrit par Claude Code : entree neuve + lecture de cache +
+    ecriture de cache, c'est-a-dire tout ce que le modele a RELU au dernier aller-retour.
+    C'est la seule mesure honnete du poids — le nombre de tours n'en dit rien, une
+    conversation de vingt tours sur de gros fichiers pese plus que cent tours de questions
+    courtes.
+
+    Pourquoi le dire au moment de reprendre, et pas seulement en cours de route : c'est la
+    qu'on peut encore choisir. Une fois la question posee dans une conversation de 900 k,
+    elle est payee.
+    """
+    if not sid or not SESSIONS.is_dir():
+        return 0
+    fichiers = list(SESSIONS.glob(f"*/{sid}.jsonl"))
+    if not fichiers:
+        return 0
+    poids = 0
+    try:
+        with fichiers[0].open(encoding="utf-8", errors="replace") as f:
+            for ligne in f:
+                # Filtre avant de parser : ces fichiers pesent des dizaines de Mo, et
+                # json.loads sur chaque ligne coutait plusieurs secondes au demarrage.
+                if '"usage"' not in ligne:
+                    continue
+                try:
+                    u = (json.loads(ligne).get("message") or {}).get("usage") or {}
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                total = (int(u.get("input_tokens") or 0)
+                         + int(u.get("cache_read_input_tokens") or 0)
+                         + int(u.get("cache_creation_input_tokens") or 0))
+                if total:
+                    poids = total
+    except OSError:
+        return 0
+    return poids
+
+
 def dossier_de_session(sid: str) -> str | None:
     """Le repertoire de travail dans lequel une session Claude Code a ete ouverte.
 
