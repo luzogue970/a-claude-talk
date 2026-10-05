@@ -373,6 +373,10 @@ class Worker:
             # arret muet, et c'est tout l'interet de les exposer.
             max_turns=config.MAX_TOURS,
             max_budget_usd=config.MAX_DEPENSE,
+            # Sans ça, un `Read` sur une photo coupe la conversation en plein travail : le
+            # resultat d'outil voyage en base64 dans UNE ligne du flux, et le defaut du SDK
+            # plafonne une ligne a un mega-octet. Voir config.MAX_TAMPON.
+            max_buffer_size=config.MAX_TAMPON,
             # Deltas feed the dashboard: thinking and the written answer appear as they are
             # produced instead of landing in one block at the end.
             include_partial_messages=True,
@@ -559,7 +563,16 @@ class Worker:
             raise                      # remplacement de client : normal, rien a signaler
         except Exception as exc:
             log.exception("la pompe d'evenements est tombee")
-            self._clore_sur_panne(f"la liaison avec Claude Code a lâché ({exc})")
+            # Nommer ce cas-la plutot que de recracher l'exception : « Failed to decode
+            # JSON » laisse croire a un flux corrompu alors que c'est un plafond de taille,
+            # et on cherche la panne du mauvais cote pendant une demi-heure.
+            if "buffer size" in str(exc):
+                raison = (f"un message dépassait le plafond de taille "
+                          f"({config.MAX_TAMPON // 1024 // 1024} Mo) — "
+                          "une image ou un résultat d'outil trop gros")
+            else:
+                raison = f"la liaison avec Claude Code a lâché ({exc})"
+            self._clore_sur_panne(raison)
         else:
             # Fin normale du flux : le CLI a ferme sa sortie. Dit quand meme, parce qu'un
             # tour en cours ne se finira plus et que la page doit cesser de l'attendre.

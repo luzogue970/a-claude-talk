@@ -61,6 +61,8 @@ SUITES = [
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),
     ("rendu", "test_rendu.js", "node", "mise en page réelle, mesurée dans Chrome", True),
+    ("tampon", "test_tampon.py", "py",
+     "une grosse image ne coupe plus la liaison (coûte du quota)", True),
     ("noyau", "test_noyau.py", "py", "worker et porte-parole, avec le vrai Claude (coûte du quota)", True),
     ("boucle", "test_boucle.py", "py", "boucle vocale complète via AgentSession.run()", True),
     ("conversation", "test_conversation.py", "py", "assistant « Hey Claude » (désactivé) — audio via Azure", True),

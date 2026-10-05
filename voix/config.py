@@ -122,6 +122,23 @@ def _plafond(nom: str, conversion):
 MAX_TOURS = _plafond("VOIX_MAX_TOURS", int)
 MAX_DEPENSE = _plafond("VOIX_MAX_DEPENSE", float)
 
+# La taille d'UN message du flux que le SDK accepte. Son défaut est d'un mégaoctet, et c'est
+# ce chiffre-là qui coupait des conversations en plein travail :
+#
+#     Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes
+#
+# Ce n'est pas une erreur de format, c'est un plafond. Le CLI écrit un message JSON par
+# ligne, et le résultat d'un `Read` sur une image EST l'image — en base64, dans la ligne.
+# Une photo de téléphone de 3 Mo en fait 4 une fois encodée : quatre fois le plafond, et le
+# flux lève au milieu du tour. La liaison tombe, le tour est perdu, et rien dans le message
+# ne laisse deviner qu'il s'agit d'une image trop grosse.
+#
+# 64 Mo n'est pas un chiffre rond pris au hasard : notre propre route d'envoi de photo
+# plafonne à 25 Mo, et le base64 gonfle d'un tiers — soit 34 Mo pour la plus grosse image
+# qu'on accepte, avec de la marge pour ce qui l'accompagne. La mémoire n'est prise que
+# lorsqu'un tel message arrive vraiment ; le reste du temps, ce plafond ne coûte rien.
+MAX_TAMPON = int(os.environ.get("VOIX_MAX_TAMPON") or 64 * 1024 * 1024)
+
 # Switchable at runtime, by voice or from the page. Effort is fixed for the session (the SDK
 # exposes set_model but no set_effort), so a lighter model is the lever for a quick answer.
 # L'ordre de ce dictionnaire EST celui du menu deroulant de la page : le defaut n'est pas le
