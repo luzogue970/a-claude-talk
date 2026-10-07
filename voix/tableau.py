@@ -2784,6 +2784,10 @@ function ajouter(e) {
 // L'etat du micro appartient au serveur : le bouton demande, il n'agit pas. Sinon la page
 // pourrait afficher « coupe » alors que le flux audio tourne toujours.
 let socket = null, microActif = true, reconnexionPrevue = false;
+// A-t-on déjà reçu un état de micro du serveur ? `microActif` démarre à `true` par défaut,
+// donc avant la première nouvelle on ne compare à rien de réel — et sonner sur cette
+// comparaison-là ferait biper une page qui s'ouvre sur une session au micro coupé.
+let microVu = false;
 // Ce que la machine repond en HTTP quand la WebSocket n'aboutit pas : null = pas encore su,
 // true = elle repond donc l'agent est la, false = plus rien du tout. Declare ICI et pas pres
 // de la fonction qui le remplit : `envoyerCmd` s'en sert, et une variable `let` lue avant sa
@@ -4049,7 +4053,9 @@ function recevoir(e, etat = false) {
     if (e.genre === "_histoire") {
       // L'état du micro se relit sur TOUTE l'histoire, y compris la partie déjà affichée :
       // c'est une resynchronisation, pas un affichage.
-      e.evenements.forEach(ev => { if (ev.genre === "micro") microActif = ev.actif; });
+      e.evenements.forEach(ev => {
+        if (ev.genre === "micro") { microActif = ev.actif; microVu = true; }
+      });
       majMicro();
       enRejeu = true;
       try { e.evenements.filter(ev => !dejaVu(ev)).forEach(ajouter); }
@@ -4178,6 +4184,17 @@ function recevoir(e, etat = false) {
       return;
     }
     if (e.genre === "micro") {
+      // Le même son que pour le micro du téléphone, pour le micro du PC — c'est le même
+      // fait : on est écouté, ou on ne l'est plus. Il vient de la réponse du SERVEUR, donc
+      // d'un état confirmé, jamais d'un clic.
+      //
+      // Trois conditions, et chacune évite un son faux. Un vrai CHANGEMENT, sinon une
+      // resynchronisation anodine sonnerait pour rien. Pas pendant un rejeu ni dans un état
+      // renvoyé à la connexion : ouvrir la page déclencherait sinon une rafale de bips pour
+      // des ouvertures de micro vieilles de deux jours. Et le silence au tout premier état,
+      // puisque `microActif` vaut encore sa valeur de départ et qu'on ne compare à rien.
+      if (!etat && !enRejeu && microVu && e.actif !== microActif) sonMicro(!!e.actif);
+      microVu = true;
       microActif = e.actif;
       // Le micro change d'état : l'énoncé en cours n'en est plus un. Sans cette remise à
       // zéro, couper le micro en pleine parole laissait les ondes s'animer indéfiniment
@@ -4993,6 +5010,65 @@ function alerterFort() {
   try { navigator.vibrate?.([120, 80, 120]); } catch (_) {}
 }
 
+// --- les deux petits sons du micro -------------------------------------------------------
+//
+// Pourquoi un son alors que le bouton change déjà d'allure : on appuie sur le micro PUIS on
+// regarde ailleurs — c'est tout l'intérêt de parler plutôt que de taper. Le changement
+// d'apparence a donc lieu sur un écran que personne ne regarde à cet instant, et un
+// enregistrement qui n'a pas démarré ne se découvre qu'après la phrase, quand elle est
+// perdue. C'est le même raisonnement que la vibration juste au-dessus, par l'autre sens.
+//
+// Synthétisés plutôt que servis en fichier, et ce n'est pas de la coquetterie : un fichier,
+// c'est une requête de plus au moment précis où la liaison peut être en train de tomber, un
+// cache à invalider, et un format à choisir pour Safari. Deux sinus et une enveloppe tiennent
+// en quinze lignes, partent en deux millisecondes et ne dépendent de rien.
+//
+// La forme est celle qu'on reconnaît sans l'avoir apprise : deux notes qui MONTENT à
+// l'ouverture, les deux mêmes qui DESCENDENT à la fermeture. Rien à mémoriser.
+let ctxSons = null;
+
+// WebKit refuse tout son qui ne descend pas d'un geste de l'utilisateur, et il le refuse en
+// SILENCE : un contexte créé au chargement reste suspendu pour le reste de la session, sans
+// la moindre erreur. On le crée donc au premier appui — qui est justement le geste qu'on
+// sonorise. C'est la contrainte qui tient déjà « lire ici » éteint au chargement.
+function reveillerSons() {
+  const AC = (typeof AudioContext === "function" && AudioContext)
+          || (typeof webkitAudioContext === "function" && webkitAudioContext);
+  if (!AC) return null;
+  try {
+    if (!ctxSons) ctxSons = new AC();
+    if (ctxSons.state === "suspended" && ctxSons.resume) ctxSons.resume();
+  } catch (_) { ctxSons = null; }
+  return ctxSons;
+}
+
+// Deux notes courtes. L'enveloppe n'est pas un ornement : une sinusoïde qui démarre et
+// s'arrête net produit un clic, et sur un petit haut-parleur le clic s'entend plus que la
+// note elle-même.
+function sonMicro(ouvert) {
+  const ctx = reveillerSons();
+  if (!ctx) return false;
+  const notes = ouvert ? [740, 1108] : [1108, 740];   // fa#5 → do#6, et l'inverse
+  try {
+    notes.forEach((hz, i) => {
+      const debut = ctx.currentTime + i * 0.075;
+      const fin = debut + 0.07;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(hz, debut);
+      // Volume délibérément bas : c'est une confirmation, pas une alarme. Elle se place
+      // sous une voix qui parle, elle ne la couvre pas.
+      g.gain.setValueAtTime(0.0001, debut);
+      g.gain.exponentialRampToValueAtTime(0.14, debut + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, fin);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(debut); o.stop(fin + 0.02);
+    });
+  } catch (_) { return false; }
+  return true;
+}
+
 // Opus dans WebM la ou c'est possible (Chrome, Firefox), AAC dans MP4 sinon (Safari). Le PC
 // decode les deux ; ce qui compte est de demander un format que CET appareil sait produire,
 // sinon MediaRecorder leve a la construction et rien ne s'enregistre.
@@ -5206,6 +5282,11 @@ async function demarrerVocal() {
   debutVocal = Date.now();
   vocalEnCours = true;
   majBoutonDictee();
+  // Ici et pas au clic : le clic dit ce qu'on a demandé, ce son-ci dit que ça ENREGISTRE
+  // vraiment. Entre les deux il y a l'autorisation du micro, un flux à ouvrir et un
+  // MediaRecorder à construire, et chacun peut échouer. Un son qui part sur l'intention
+  // serait une confirmation fausse, c'est-à-dire pire que pas de son du tout.
+  sonMicro(true);
   noteBarre("j'écoute (" + (enregistreur.mimeType || mime || "format par défaut")
             + ") — appuie à nouveau pour envoyer");
   minuterieVocal = setTimeout(() => { if (vocalEnCours) arreterVocal(); }, VOCAL_MAX_MS);
@@ -5248,6 +5329,11 @@ function interrompreVocal(pourquoi) {
 function arreterVocal() {
   clearInterval(veilleLiaisonVocal);
   veilleLiaisonVocal = null;
+  // Le son de fermeture part ici, et pas seulement sur l'appui : on arrive aussi dans cette
+  // fonction par la durée maximale et par une liaison qui tombe. Ces fois-là sont justement
+  // celles où on ne regarde pas l'écran, et où apprendre que le micro s'est refermé compte
+  // le plus.
+  if (vocalEnCours) sonMicro(false);
   if (!enregistreur) { vocalEnCours = false; libererMicro(); majBoutonDictee(); return; }
   try { enregistreur.stop(); }          // onstop fait le reste
   catch (_) { libererMicro(); vocalEnCours = false; majBoutonDictee(); }

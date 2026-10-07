@@ -2195,7 +2195,41 @@ async function testerEcouteHistorique() {
 
 // ---- dicter avec le telephone : enregistrer ici, transcrire au PC -------------------------
 // Asynchrone : l envoi attend fetch. La fonction est appelee juste avant le tally, qui l attend.
+// Le micro du PC sonne lui aussi — c est le meme fait, « on est ecoute ou on ne l est
+// plus ». Mais il arrive par le flux d evenements, qui rejoue l histoire a chaque
+// connexion : sans garde-fous, ouvrir la page declencherait une rafale de bips pour des
+// ouvertures de micro vieilles de deux jours.
+function testerSonMicroPC() {
+  titre('micro du PC : un son sur un vrai changement, et sur rien d autre');
+
+  notes.length = 0;
+  recevoir({ genre: 'micro', actif: false, n: 90001, h: '12:00:00' }, true);
+  dire(notes.length === 0,
+       'l etat renvoye a la connexion ne sonne pas : on vient d ouvrir la page');
+
+  notes.length = 0;
+  recevoir({ genre: '_histoire', evenements: [
+    { genre: 'micro', actif: true, n: 90002, h: '12:00:01' },
+    { genre: 'micro', actif: false, n: 90003, h: '12:00:02' },
+  ] });
+  dire(notes.length === 0, 'et le rejeu de l historique non plus, quoi qu il contienne');
+
+  notes.length = 0;
+  emettre({ genre: 'micro', actif: true });
+  dire(notes.length === 2 && notes[1] > notes[0],
+       'une ouverture confirmee par le serveur, elle, sonne et MONTE');
+
+  notes.length = 0;
+  emettre({ genre: 'micro', actif: true });
+  dire(notes.length === 0, 'le meme etat repete ne sonne pas : ce n est pas un changement');
+
+  notes.length = 0;
+  emettre({ genre: 'micro', actif: false });
+  dire(notes.length === 2 && notes[1] < notes[0], 'et la coupure DESCEND');
+}
+
 async function testerRelaisVocal() {
+  testerSonMicroPC();
   const tick = () => new Promise(r => setTimeout(r, 0));
   // Un envoi traverse fetch : les microtaches ne suffisent pas a le voir retomber,
   // et un envoi en retard ecrase la note du cas suivant.
@@ -2214,8 +2248,14 @@ async function testerRelaisVocal() {
   // `pause()` et pas `tick()` : l ouverture du micro attend desormais que la session audio
   // d iOS soit rendue avant de la reclamer. Sans ce repit, le micro ouvert par-dessus une
   // lecture rend un flux parfaitement valide et parfaitement MUET.
+  notes.length = 0;
   btnDicter.onclick(); await pause();
   dire(microDemandes === 1, 'un appui reclame le micro pour de vrai');
+  // On appuie, puis on regarde ailleurs — c est tout l interet de parler. Le son est donc
+  // la seule confirmation qui arrive vraiment, et il part quand ca ENREGISTRE, pas quand on
+  // a cliqué : entre les deux il y a l autorisation, le flux et le MediaRecorder.
+  dire(notes.length === 2 && notes[1] > notes[0],
+       'l ouverture fait un petit son qui MONTE : ' + JSON.stringify(notes));
   dire(lecteur.src === '', 'et la lecture a rendu la session audio AVANT le micro : '
        + 'sinon, sur iOS, le micro capte du silence sans rien signaler');
   dire(enregistreurs.length === 1 && enregistreurs[0].etat === 'recording', 'et l enregistrement demarre');
@@ -2224,8 +2264,11 @@ async function testerRelaisVocal() {
        'et la barre dit quoi faire : ' + document.getElementById('note-barre').textContent);
 
   // Appuyer encore : l enregistrement s arrete et PART vers le PC.
+  notes.length = 0;
   btnDicter.onclick(); await pause();
   dire(enregistreurs[0].etat === 'inactive', 'un second appui arrete l enregistrement');
+  dire(notes.length === 2 && notes[1] < notes[0],
+       'la fermeture fait le meme son a l envers, qui DESCEND : ' + JSON.stringify(notes));
   dire(requetes.length === 1 && /\/audio$/.test(requetes[0].url),
        'et le fichier part vers /audio : ' + (requetes[0] && requetes[0].url));
   const corps = requetes[0] && requetes[0].opts.body;

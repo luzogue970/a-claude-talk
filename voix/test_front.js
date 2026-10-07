@@ -259,11 +259,26 @@ globalThis.microMuet = false;     // la piste existe mais elle est coupee
 globalThis.microFini = false;     // la piste est morte (retour de veille)
 // Le niveau que le micro « entend », sur l echelle de getByteTimeDomainData (128 = silence).
 globalThis.niveauMicro = 40;
+// Les notes jouees par les petits sons du micro, dans l ordre. C est tout ce qu on veut
+// verifier : qu un son part au bon moment, et qu il MONTE a l ouverture, descend a la
+// fermeture — le reste (l enveloppe, le timbre) ne ment a personne.
+globalThis.notes = [];
 globalThis.AudioContext = function () {
   const self = this;
+  this.state = "running";
+  this.currentTime = 0;
+  this.destination = { nom: "sortie" };
   this.close = () => {};
   this.resume = () => {};
   this.createMediaStreamSource = () => ({ connect: () => {} });
+  this.createOscillator = () => ({
+    type: "", frequency: { setValueAtTime: (hz) => globalThis.notes.push(hz) },
+    connect: () => {}, start: () => {}, stop: () => {},
+  });
+  this.createGain = () => ({
+    gain: { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} },
+    connect: () => {},
+  });
   this.createAnalyser = () => ({
     fftSize: 512,
     getByteTimeDomainData: (tampon) => {
