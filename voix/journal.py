@@ -434,6 +434,51 @@ def actives(ici: str | None = None) -> list[dict]:
 SESSIONS = Path.home() / ".claude" / "projects"
 
 
+# Les questions posées et pas encore répondues, une par session. Sur le disque, et non en
+# mémoire du processus : c'est exactement quand l'application se ferme — Ctrl-C, téléphone
+# posé, machine qui redémarre — qu'une question en attente a le plus de chances d'être
+# oubliée. Elle doit revenir au relancement, sinon la conversation reste arrêtée sur une
+# question que plus personne ne voit.
+QUESTIONS = RACINE / "questions.json"
+
+
+def _questions() -> dict:
+    try:
+        return json.loads(QUESTIONS.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def noter_question(sid: str | None, question: dict) -> None:
+    """Retenir qu'une question attend sa réponse dans cette session."""
+    if not sid:
+        return
+    etat = _questions()
+    etat[sid] = question
+    try:
+        QUESTIONS.parent.mkdir(parents=True, exist_ok=True)
+        QUESTIONS.write_text(json.dumps(etat, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        log.debug("question non enregistree", exc_info=True)
+
+
+def effacer_question(sid: str | None) -> None:
+    if not sid:
+        return
+    etat = _questions()
+    if etat.pop(sid, None) is None:
+        return
+    try:
+        QUESTIONS.write_text(json.dumps(etat, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        log.debug("question non effacee", exc_info=True)
+
+
+def question_en_attente(sid: str | None) -> dict | None:
+    """La question laissée en plan par un lancement précédent, s'il y en a une."""
+    return _questions().get(sid) if sid else None
+
+
 def poids_session(sid: str) -> int:
     """Ce que pese une conversation sur disque, en jetons de contexte. 0 si on ne sait pas.
 

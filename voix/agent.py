@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 from livekit.agents import (
@@ -134,6 +135,10 @@ class Voix(Agent):
         # Une question de Claude, en attente d'une phrase. Distincte de la
         # permission : celle-ci se repond par oui ou non, celle-la par ce qu'on veut.
         self.question_en_cours: asyncio.Future | None = None
+        # La question en attente, telle qu'elle est publiee et enregistree. None quand il
+        # n'y en a pas — c'est cette valeur qui dit si la conversation attend quelque chose
+        # de toi, et elle est la meme a l'ecran, dans /etat.json et sur le disque.
+        self._attente: dict | None = None
         self._debut_tour: float | None = None
         self._dernier_debrief: str | None = None
         # « Retenir » : la dictée se dépose dans la barre de saisie au lieu de partir chez
@@ -547,6 +552,14 @@ class Voix(Agent):
             yield self._parler("je n'ai pas compris : c'est oui ou c'est non ?")
             return
 
+        # Une question RETROUVEE au relancement n'a plus de tour en vol derriere elle : le
+        # futur est mort avec le processus precedent. La phrase part donc normalement a
+        # Claude — c'est exactement ce qu'il faut, la reprise lui rend la question dans son
+        # contexte — et l'attente se referme ici, parce qu'on vient d'y repondre.
+        if self._attente and not (self.question_en_cours
+                                  and not self.question_en_cours.done()):
+            self._fermer_attente()
+
         # Local orders, answered with zero latency and never forwarded to Claude. The
         # detection is published so a wrong hijack is visible as such instead of looking
         # like Claude behaving oddly.
@@ -725,6 +738,12 @@ class Voix(Agent):
             self.sess.interrupt()
             return None
         if intention == "arret":
+            # Une question sans delai a besoin d'une porte, et c'est celle-ci. Sans ce
+            # denouement, « arrete » laissait la question en vol : le tour ne se terminait
+            # pas, puisque plus rien n'attendait de limite de temps pour le faire.
+            if self.denouer_attente():
+                return "d'accord, je laisse la question de côté."
+
             # No session.interrupt() here: it would cancel the very speech this returns,
             # which is how "arrête tout" ended up silent. Your own voice already interrupted
             # whatever was being said — that is what barge-in is for.
@@ -921,7 +940,21 @@ class Voix(Agent):
         La reponse est rendue en texte libre. Les options proposees sont dites, mais rien
         n'oblige a en choisir une : le CLI accepte une phrase, et a l'oral c'est le mode
         naturel — on repond « la deuxieme, mais garde l'ancien » bien plus souvent qu'on ne
-        recite un intitule."""
+        recite un intitule.
+
+        **On attend. Sans limite.** Il y avait ici un delai de cinq minutes au bout duquel
+        l'outil rendait « pas de reponse » et Claude reprenait la main — c'est-a-dire
+        tranchait tout seul la question qu'il venait de poser. Le raisonnement d'origine
+        (« le cout d'attendre est nul, celui d'abandonner est un tour perdu ») etait le bon ;
+        la conclusion s'arretait un cran trop tot. Une question posee veut dire qu'aucune des
+        reponses n'est evidente : la trancher a la place de quelqu'un parce qu'il etait au
+        telephone est precisement le pire moment pour le faire, et personne ne saura jamais
+        qu'un choix a ete pris.
+
+        Ce qui remplace le delai, ce n'est pas rien : la question devient un ETAT. Elle est
+        republiee a chaque reconnexion, elle est lisible de l'exterieur dans /etat.json, et
+        elle survit a la fermeture de l'application — au relancement, on la retrouve. Et
+        « arrete » la denoue, parce qu'une attente sans fin a besoin d'une porte."""
         boucle = asyncio.get_running_loop()
         self.question_en_cours = boucle.create_future()
 
@@ -944,19 +977,62 @@ class Voix(Agent):
         # d'eteindre l'attente de SA question au lieu d'empiler une seconde ligne qui tourne.
         marque = f"q{id(self.question_en_cours):x}"
         self._voir("question", id=marque, texte=dite, questions=pour_la_page)
+        self._ouvrir_attente(marque, dite, pour_la_page)
         await self.sess.say(self._parler(dite), allow_interruptions=True)
         try:
-            # Large : une question peut arriver pendant qu'on regarde ailleurs, et le cout
-            # d'attendre est nul alors que celui d'abandonner est un tour perdu. Au-dela,
-            # l'outil dit lui-meme qu'il n'a pas eu de reponse et Claude reprend la main.
-            reponse = await asyncio.wait_for(self.question_en_cours, timeout=300)
-        except asyncio.TimeoutError:
-            reponse = None
+            reponse = await self.question_en_cours
+        except asyncio.CancelledError:
+            # On ne laisse pas l'attente derriere soi : la page afficherait une question a
+            # laquelle plus personne n'ecoute la reponse.
+            self._fermer_attente()
+            self.question_en_cours = None
+            raise
         finally:
             self.question_en_cours = None
+        self._fermer_attente()
         self._voir("question", id=marque, texte=dite, questions=pour_la_page,
-                   reponse=reponse or "(pas de réponse)")
+                   reponse=reponse or "(sans réponse — interrompue)")
         return reponse
+
+    def _ouvrir_attente(self, marque: str, dite: str, pour_la_page: list) -> None:
+        """Déclarer qu'une question attend : à l'écran, dans /etat.json, et sur le disque.
+
+        Les trois, parce qu'ils répondent à trois questions différentes. L'écran, pour la
+        page ouverte. `/etat.json`, pour ce qui regarde la session de l'extérieur — sans quoi
+        une conversation qui attend une réponse est indiscernable d'une conversation oisive,
+        même silence et mêmes zéro événement. Le disque, pour que fermer l'application ne
+        fasse pas disparaître la question : on la retrouve au relancement.
+        """
+        self._attente = {"id": marque, "texte": dite, "questions": pour_la_page,
+                         "depuis": datetime.now().strftime("%H:%M:%S")}
+        self._voir("attente_reponse", actif=True, **self._attente)
+        try:
+            journal.noter_question(getattr(self.worker, "session_id", None), self._attente)
+        except Exception:
+            log.debug("question non enregistree sur le disque", exc_info=True)
+
+    def _fermer_attente(self) -> None:
+        if not getattr(self, "_attente", None):
+            return
+        marque = self._attente.get("id", "")
+        self._attente = None
+        self._voir("attente_reponse", actif=False, id=marque)
+        try:
+            journal.effacer_question(getattr(self.worker, "session_id", None))
+        except Exception:
+            log.debug("question non effacee du disque", exc_info=True)
+
+    def denouer_attente(self) -> bool:
+        """Rendre la main quand on ne veut plus répondre. La porte de l'attente sans fin.
+
+        Sans elle, « arrête » ne pourrait rien : la question n'a plus de délai, donc plus rien
+        ne la termine de lui-même. On rend `None`, exactement ce que l'ancien délai rendait —
+        l'outil dira qu'il n'a pas eu de réponse, et Claude reprendra la main en le SACHANT.
+        """
+        if self.question_en_cours and not self.question_en_cours.done():
+            self.question_en_cours.set_result(None)
+            return True
+        return False
 
     async def demander_permission(self, action: str, libelle: str) -> bool:
         """Awaited by the worker's can_use_tool, so the session really waits for an answer."""
@@ -1153,6 +1229,26 @@ async def entrypoint(ctx: JobContext):
     if reprise_initiale:
         # En tâche de fond : lire huit cents messages ne doit pas retarder le premier mot.
         asyncio.create_task(_rejouer_historique(reprise_initiale))
+
+    # Et la question laissee en plan, s'il y en a une. C'est le cas qui motive tout : fermer
+    # l'application sur une question en attente la faisait disparaitre avec le processus, et
+    # on revenait sur une conversation arretee sans jamais savoir qu'elle attendait une
+    # reponse. On la republie donc, en disant franchement qu'il n'y a plus de tour en vol
+    # derriere — repondre maintenant, c'est reparler a Claude, pas remplir un formulaire resté
+    # ouvert.
+    if reprise_initiale:
+        laissee = journal.question_en_attente(reprise_initiale)
+        if laissee:
+            agent._attente = dict(laissee)
+            tableau.publier("attente_reponse", actif=True, **laissee)
+            tableau.publier("question", id=laissee.get("id", ""),
+                            texte=laissee.get("texte", ""),
+                            questions=laissee.get("questions") or [],
+                            reprise=True)
+            tableau.publier("log", niveau="WARNING", source="question",
+                            texte=("cette conversation attendait une réponse depuis "
+                                   f"{laissee.get('depuis', '?')} — « {laissee.get('texte', '')[:120]} ». "
+                                   "Réponds normalement : ça repart de là."))
 
     # Quel moteur transcrit, et lesquels sont disponibles. Publie tot : c'est la premiere
     # question qu'on se pose quand une transcription est mauvaise.
@@ -1808,6 +1904,13 @@ async def entrypoint(ctx: JobContext):
         elif nom == "arreter":
             # The reason this button exists: with the microphone cut you can no longer say
             # "stop", so the page has to carry the stop.
+            #
+            # Et c'est aussi la porte de l'attente sans fin : une question n'a plus de delai,
+            # donc rien ne la termine toute seule. Le bouton doit pouvoir la denouer, sinon
+            # une question posee a laquelle on ne veut pas repondre arrete la conversation
+            # pour toujours.
+            if agent.denouer_attente():
+                tableau.publier("ordre", texte="question laissée sans réponse — Claude reprend la main")
             session.interrupt()
             await worker.interrompre()
             tableau.publier("arret", texte="arrêt demandé depuis le tableau")

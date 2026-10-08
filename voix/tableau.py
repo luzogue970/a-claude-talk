@@ -52,6 +52,12 @@ ETATS = frozenset({
     # evenement, chaque vieille dictee de l'historique revenait remplir la barre a la
     # reconnexion, y compris celles envoyees depuis longtemps.
     "dictee",
+    # Une question de Claude qui attend sa réponse. Un ETAT, et c'est tout l'objet : une
+    # question posée et jamais répondue doit revenir à la reconnexion, après un retour de
+    # veille, sur un téléphone rouvert deux heures plus tard. Rejouée comme un simple
+    # événement, elle se perdait dans l'historique — on ne savait plus qu'on devait répondre,
+    # et la conversation restait arrêtée sans que rien ne dise pourquoi.
+    "attente_reponse",
 })
 
 
@@ -557,6 +563,16 @@ class Tableau:
             "travail": bool((etat.get("travail") or {}).get("actif")),
             "micro": bool((etat.get("micro") or {}).get("actif")),
             "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
+            # Une question posée et pas encore répondue. Publié ici parce que c'est ce que
+            # lit ce qui regarde la session de l'extérieur : sans ça, une conversation en
+            # attente d'une réponse est indiscernable d'une conversation oisive — même
+            # silence, même absence d'événements — et un superviseur qui ferme les sessions
+            # inactives fermerait précisément celle qui attend quelque chose de toi.
+            "question": {
+                "attend": bool((etat.get("attente_reponse") or {}).get("actif")),
+                "texte": (etat.get("attente_reponse") or {}).get("texte") or "",
+                "depuis": (etat.get("attente_reponse") or {}).get("depuis") or "",
+            },
             # « pret » : l'agent a branche ses commandes. Avant, la page repond mais un
             # message n'a personne pour le recevoir — c'est ce qu'un lanceur doit attendre.
             "pret": self._on_commande is not None,
@@ -604,6 +620,10 @@ class Tableau:
             "depuis": round(time.monotonic() - self._t0, 1),
             "clients": len(self.clients),
             "travail": bool((etat.get("travail") or {}).get("actif")),
+            # Avec le pouls, et pas seulement dans /etat.json : une page qui revient de veille
+            # doit retrouver la question en attente sans avoir à demander, sinon on reprend le
+            # téléphone et rien ne dit qu'on bloque la conversation depuis une heure.
+            "attend_reponse": bool((etat.get("attente_reponse") or {}).get("actif")),
             "pret": self._on_commande is not None,
             "en_attente": len(self._commandes_en_attente),
             "evenements": self._n,
@@ -2064,6 +2084,8 @@ const GROUPES = [
       cache: true },
     { g: "attente", lib: "attente",  quoi: "une autre conversation parle, celle-ci patiente" },
     { g: "question", lib: "question", quoi: "Claude te demande quelque chose, et ta réponse" },
+    { g: "attente_reponse", lib: "attend ta réponse",
+      quoi: "une question posée et pas encore répondue — la conversation s'arrête là" },
   ]},
   { nom: "Travail", aide: "ce que Claude fait pendant qu'il travaille", genres: [
     { g: "pensee",   lib: "réflexion", quoi: "sa réflexion, au fil de sa production" },
@@ -2071,6 +2093,7 @@ const GROUPES = [
     { g: "outil",    lib: "outil",     quoi: "chaque action : lecture, édition, commande" },
     { g: "resultat", lib: "résultat",  quoi: "la sortie des outils — souvent longue", cache: true },
     { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
+    { g: "contexte", lib: "contexte",  quoi: "la conversation compactée, et ce qu'elle pesait" },
   ]},
   { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [
     { g: "ordre",      lib: "ordre local", quoi: "un ordre exécuté ici, jamais transmis à Claude" },

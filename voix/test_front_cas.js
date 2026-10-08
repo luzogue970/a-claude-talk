@@ -99,10 +99,15 @@ dire(tousGenres.some(e => e.g === 'dictee'),
      'mais il reste proposé dans les filtres : decoche n est pas supprime');
 dire(caches.every(g => !actifs.has(g)), 'et ils ne sont effectivement pas actifs');
 
-// le compteur de la famille se lit sans l ouvrir
+// le compteur de la famille se lit sans l ouvrir.
+// Le total est DEDUIT de la declaration, jamais ecrit a la main : ajouter un genre a la
+// famille faisait echouer quatre verifications qui ne parlaient pas de lui, et le vrai
+// defaut — un compteur qui ne suit pas — disparaissait dans ce bruit.
 const famTravail = barre.children[1];
 const resumeTravail = famTravail.children[0];
-dire(resumeTravail.children[1].textContent === '4/5',
+const nTravail = GROUPES[1].genres.length;
+const masquesTravail = GROUPES[1].genres.filter(e => e.cache).length;
+dire(resumeTravail.children[1].textContent === (nTravail - masquesTravail) + '/' + nTravail,
      'compteur de « Travail » : ' + resumeTravail.children[1].textContent
      + ' (resultat masque)');
 
@@ -116,7 +121,7 @@ const caseOutil = panneauTravail.children.find(
   c => c.children.some(x => x.textContent === 'outil')).children[0];
 caseOutil.checked = false; caseOutil.onchange();
 dire(ligneOutil.style.display === 'none', 'decochee, la ligne disparait');
-dire(resumeTravail.children[1].textContent === '3/5',
+dire(resumeTravail.children[1].textContent === (nTravail - masquesTravail - 1) + '/' + nTravail,
      'et le compteur suit : ' + resumeTravail.children[1].textContent);
 caseOutil.checked = true; caseOutil.onchange();
 dire(ligneOutil.style.display === '', 'recochee, elle revient');
@@ -124,10 +129,10 @@ dire(ligneOutil.style.display === '', 'recochee, elle revient');
 // tout / rien
 const [btnTout, btnRien] = panneauTravail.children[panneauTravail.children.length - 1].children;
 btnRien.onclick();
-dire(resumeTravail.children[1].textContent === '0/5', '« rien » coupe la famille entiere');
+dire(resumeTravail.children[1].textContent === '0/' + nTravail, '« rien » coupe la famille entiere');
 dire(resumeTravail.classList.contains('vide'), 'et la pastille se marque vide');
 btnTout.onclick();
-dire(resumeTravail.children[1].textContent === '5/5', '« tout » la rallume entiere');
+dire(resumeTravail.children[1].textContent === nTravail + '/' + nTravail, '« tout » la rallume entiere');
 dire(resumeTravail.classList.contains('pleine'), 'et la pastille se marque pleine');
 btnRien.onclick(); btnTout.onclick();
 
