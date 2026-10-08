@@ -198,6 +198,24 @@ WORKER_EFFORT = os.environ.get("VOIX_WORKER_EFFORT", "medium")
 # une fois pour toutes.
 EFFORT_AUTO = os.environ.get("VOIX_EFFORT_AUTO", "1") not in ("0", "non", "false")
 
+# Au-dessus de ce poids de conversation, l'effort ne s'ajuste plus tout seul.
+#
+# Mesure directe du 8 octobre 2026, meme session reprise, conversation de 45 000 jetons :
+# un tour ordinaire relit 45 365 jetons en cache et n'en reecrit que 57 ; le tour qui suit
+# une bascule d'effort relit ZERO et en reecrit 45 822. Une bascule detruit donc le cache
+# en entier — ce que le code affirmait pourtant preserver.
+#
+# L'arithmetique qui en decoule : l'ecriture de cache coute vingt fois sa lecture, donc une
+# bascule equivaut a vingt allers-retours de relecture du contexte. Et ce que l'effort fait
+# baisser — la sortie — ne pese que 5 % de la facture. Simule sur les vraies demandes de
+# cette machine, 40 % des tours changeaient de niveau : une bascule tous les deux tours et
+# demi, jamais amortie.
+#
+# 25 000 jetons : en dessous, une bascule coute quelques centimes et l'ajustement garde tout
+# son sens — c'est le debut d'une conversation, la ou le choix du niveau compte le plus et ou
+# il tient ensuite longtemps. Au-dessus, elle coute plus qu'elle ne rapportera.
+EFFORT_AUTO_MAX_CONTEXTE = int(os.environ.get("VOIX_EFFORT_AUTO_MAX") or 25_000)
+
 
 def effort_sdk(niveau: str) -> str:
     """Ce qu'on envoie au SDK pour ce niveau — « ultracode » n'existe pas de son cote.

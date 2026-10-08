@@ -33,6 +33,8 @@ SUITES = [
     ("journal", "test_journal.py", "py", "historique : portée par dossier, états, reprise", False),
     ("reprise", "test_reprise_effort.py", "py",
      "reconstruire le client (effort, modèle) sans perdre la conversation", False),
+    ("effort-cache", "test_effort_cache.py", "py",
+     "l'effort ne bascule plus quand la bascule coûte plus qu'elle ne rapporte", False),
     ("contexte", "test_contexte.py", "py",
      "poids d'une conversation : paliers dits une fois, compactage annoncé", False),
     ("pompe", "test_pompe.py", "py",

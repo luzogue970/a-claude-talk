@@ -218,6 +218,9 @@ class Voix(Agent):
         # Un niveau d'effort choisi a la main rend l'ajustement automatique silencieux : une
         # decision prise doit tenir, sinon le reglage n'en est pas un.
         self._effort_manuel = False
+        # L'ajustement automatique s'est-il tu faute de place ? Sert uniquement a ne le
+        # dire qu'UNE fois : repete a chaque tour, l'avertissement deviendrait du decor.
+        self._effort_gele = False
         # L'enonce en cours vient du micro d'un AUTRE appareil : il n'y a pas de tour audio
         # LiveKit derriere, donc rien a commettre — le texte part par generate_reply. Vrai
         # tant que `_dit` porte du texte venu du telephone, faux des qu'il est consomme.
@@ -851,12 +854,43 @@ class Voix(Agent):
         defaire un choix pareil. Un niveau choisi a la main non plus — c'est une decision, et
         une decision qui ne tient pas jusqu'au message suivant n'en est pas une.
 
-        Le changement reconstruit le client, ce qui prend une demi-seconde et PRESERVE le
-        cache de prompt (mesure : voir Worker.changer_effort). C'est ce qui le rend possible
-        a chaque tour ; si la reconstruction coutait le contexte, il faudrait s'en abstenir.
+        Et un troisieme, mesure le 8 octobre 2026, qui corrige une erreur que ce commentaire
+        affirmait lui-meme : **le changement d'effort DETRUIT le cache de prompt.** Mesure
+        directe, meme session reprise, conversation de 45 000 jetons :
+
+            tour ordinaire                 relu 45 365   reecrit      57
+            tour apres bascule d'effort    relu      0   reecrit 45 822
+
+        Tout le prefixe est reecrit. L'ancienne mesure regardait le tour d'APRES, ou le cache
+        est effectivement revenu — d'ou la conclusion inverse. Le prix n'est pas anodin :
+        l'ecriture de cache coute vingt fois sa lecture, donc une bascule equivaut a vingt
+        allers-retours de relecture. Sur une conversation de 500 000 jetons en Opus, c'est
+        cinq dollars par bascule.
+
+        D'ou le seuil. Ce que l'effort fait baisser, c'est la SORTIE, qui ne pese que 5 % de
+        la facture ; une bascule ne se rembourse donc qu'en economisant beaucoup
+        d'allers-retours, et seulement tant que le prefixe reecrit reste petit. En dessous du
+        seuil la bascule coute des centimes et l'ajustement garde tout son sens ; au-dessus,
+        elle coute plus qu'elle ne rapportera, et on garde le niveau en place.
+
+        Le niveau choisi a la main, lui, passe toujours : c'est une decision, pas une
+        optimisation, et elle se paie si elle se paie.
         """
         if not config.EFFORT_AUTO or self._effort_manuel:
             return
+        # Au-dessus du seuil, on ne bascule plus : voir la mesure ci-dessus. Dit une fois,
+        # parce qu'un ajustement qui cesse sans rien dire ressemble a une panne.
+        contexte = getattr(getattr(self.worker, "journal", None), "contexte", 0) or 0
+        if contexte >= config.EFFORT_AUTO_MAX_CONTEXTE:
+            if not self._effort_gele:
+                self._effort_gele = True
+                self._voir("log", niveau="INFO", source="effort",
+                           texte=(f"effort figé sur « {complexite.LIBELLES.get(getattr(self.worker, 'effort', ''), '?')} » : "
+                                  f"la conversation pèse {contexte // 1000} k jetons, et "
+                                  "chaque bascule en réécrirait le cache entier. "
+                                  "« compacte » lui rend sa liberté."))
+            return
+        self._effort_gele = False
         # Un worker qui n'expose ni niveau ni moyen d'en changer n'a rien a ajuster. Le cas
         # existe : les tests du tableau branchent un double qui ne joue que le strict
         # necessaire, et l'ajustement ne doit pas etre ce qui les fait tomber.
