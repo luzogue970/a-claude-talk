@@ -1925,6 +1925,30 @@ async def entrypoint(ctx: JobContext):
             session.interrupt()
             await worker.interrompre()
             tableau.publier("arret", texte="arrêt demandé depuis le tableau")
+        elif nom == "redeployer":
+            # Remettre CETTE conversation sur le code ecrit. L'agent ne peut pas se relancer
+            # lui-meme — il mourrait avant d'avoir rouvert quoi que ce soit — donc l'ordre
+            # part a systemd, qui lui survit, et le script reprend l'identifiant de session
+            # pour que le fil ne soit pas perdu. Deux a trois secondes de coupure, et la page
+            # se rebranche seule : c'est la meme interruption qu'un rechargement.
+            projet = os.environ.get("VOIX_UI_PORTFILE", "")
+            projet = (os.path.basename(projet).removeprefix("claude-talk-")
+                      .removesuffix(".port")) if projet else ""
+            if not projet:
+                tableau.publier("erreur", niveau="WARNING", source="deploiement",
+                                texte="impossible de savoir quelle session relancer "
+                                      "(VOIX_UI_PORTFILE absent)")
+            else:
+                tableau.publier("ordre", texte="je relance la conversation sur le code écrit "
+                                               "— elle revient dans quelques secondes.")
+                r = await asyncio.create_subprocess_exec(
+                    os.path.expanduser("~/.local/bin/claude-talk-redeployer"), projet,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                sortie, _ = await r.communicate()
+                if r.returncode != 0:
+                    tableau.publier("erreur", niveau="WARNING", source="deploiement",
+                                    texte="la relance n'a pas pu être programmée : "
+                                          + sortie.decode("utf-8", "replace").strip()[:200])
         elif nom == "compacter":
             message = await worker.compacter()
             if message:

@@ -30,6 +30,8 @@ from datetime import datetime
 import aiohttp
 from aiohttp import WSMsgType, web
 
+import deploiement
+
 # La voix d'Azure se lit dans la configuration, comme partout ailleurs. Aucun cycle : config
 # ne connait pas ce module, et c'est lui qui tient la cle, la region et le nom de la voix —
 # les recopier ici les ferait diverger au premier reglage.
@@ -614,6 +616,11 @@ class Tableau:
             # que le correctif ne marche pas alors qu'il n'est simplement pas la.
             "version": _version_page(),
             "libelle": _libelle_version(),
+            # La version du CODE, qui n'est pas celle de la page : la page se recharge d'un
+            # F5, l'agent non — il a charge son code au demarrage et ne le relira jamais. Les
+            # deux ensemble repondent a la seule question qui compte apres une correction :
+            # « est-ce que ce que je tiens contient ma correction ? »
+            "deploiement": deploiement.etat(),
             # L'etat de l'agent voyage avec le pouls : c'est lui qui permet a la page de
             # decider, en fin de reprise, si quelque chose peut ENCORE etre en cours.
             "etat": (etat.get("etat") or {}).get("vers", ""),
@@ -964,6 +971,30 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #moteur.montre{display:inline-flex}
 #moteur:hover{border-color:#4b5563;color:var(--texte)}
 #moteur.replie{border-color:var(--outil);color:#e3b341}
+
+/* La version EN SERVICE. Deux caracteres au repos — « v0.5.1 » en gris, qu'on ne regarde
+   pas — et c'est voulu : une information qui ne sert qu'en cas d'ecart ne doit rien couter
+   a l'ecran le reste du temps. Des qu'un commit est ecrit sans etre en service, la pastille
+   passe en orange et porte le nombre : c'est le seul moment ou elle demande a etre vue.
+   Sur telephone le numero disparait et il ne reste que la puce coloree. */
+#deploie{border:1px solid var(--bord);border-radius:999px;padding:2px 9px;font-size:11.5px;
+  color:var(--faible);cursor:pointer;white-space:nowrap;display:inline-flex;
+  gap:5px;align-items:center;font-variant-numeric:tabular-nums}
+#deploie:hover{border-color:#4b5563;color:var(--texte)}
+#deploie.vieux{border-color:var(--outil);color:#e3b341}
+#deploie .pt{width:6px;height:6px;border-radius:999px;background:var(--faible);flex:none}
+#deploie.vieux .pt{background:#e3b341}
+#choix-deploie{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+  width:max-content;max-width:min(320px, calc(100vw - 32px));
+  background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:11px 13px;
+  box-shadow:0 12px 32px #00000080;font-size:11.5px;color:var(--faible);line-height:1.5}
+#choix-deploie[hidden]{display:none}
+#choix-deploie b{color:var(--texte)}
+#choix-deploie .maj{margin-top:9px;width:100%;padding:6px 10px;border-radius:7px;
+  border:1px solid var(--bord);background:#1f242c;color:var(--texte);
+  font-size:12px;cursor:pointer}
+#choix-deploie .maj:hover{border-color:var(--accent);color:var(--accent)}
+#choix-deploie .maj[disabled]{opacity:.5;cursor:default}
 
 /* Le bouton des conversations n'avait AUCUN style propre : il héritait du bouton générique et
    détonnait à côté des pastilles de l'en-tête, plus grand et plus dur. Même forme que
@@ -1822,6 +1853,12 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 }
 
 @media (max-width: 420px) {
+  /* La pastille de version tombe a sa seule puce coloree : a jour, elle n'a rien a dire
+     et c'est la hauteur de la conversation qu'on defend ; en retard, la couleur suffit a
+     faire ouvrir le panneau, qui lui a toute la place de s'expliquer. */
+  #deploie .num { display: none; }
+  #deploie { padding: 2px 7px; }
+
   /* Recalibre : la rangee porte un rond de plus depuis que cet appareil peut lire et
      dicter lui-meme. Mesure a 390 px — 360 px de contenu pour 366 disponibles, plus les
      espaces, donc quinze de trop, et « envoyer » repartait sur une troisieme ligne.
@@ -1906,6 +1943,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   <span class="avec-choix">
     <button type="button" id="convs" title="les conversations de ce dossier"></button>
     <div id="choix-conv" hidden></div>
+  </span>
+  <span class="avec-choix">
+    <button type="button" id="deploie" title="version en service"></button>
+    <div id="choix-deploie" hidden></div>
   </span>
   <span id="compte" title="temps avant envoi automatique">
     <span id="reste"></span>
@@ -5566,6 +5607,89 @@ function majBoutonsLecture() {
 
 const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle", initializing: "démarre" };
 
+// --- la version EN SERVICE, et comment la remettre a jour --------------------------------
+// A ne pas confondre avec la version de la PAGE, juste en dessous. La page se recharge d'un
+// F5 ; l'agent, lui, a charge son code Python au demarrage et ne le relira jamais. Une
+// conversation ouverte depuis la veille tourne donc sur le code de la veille, correction
+// comprise ou non, et rien ne le disait : on corrigeait, on relancait la page, on constatait
+// que « ca ne marche toujours pas ». La pastille repond a ca, et le bouton y remedie.
+let deploie = null;
+
+function majDeploiement(d) {
+  if (!d) return;
+  deploie = d;
+  const b = document.getElementById("deploie");
+  if (!b) return;
+  const retard = d.retard || 0;
+  b.classList.toggle("vieux", !d.a_jour);
+  b.innerHTML = '<span class="pt"></span><span class="num"></span>';
+  b.querySelector(".num").textContent =
+    "v" + d.version + (retard ? " ↑" + retard : "");
+  b.title = d.a_jour
+    ? "version " + d.version + " — à jour"
+    : retard + (retard > 1 ? " commits écrits" : " commit écrit")
+      + " depuis le démarrage de cette conversation";
+  const p = document.getElementById("choix-deploie");
+  if (p && !p.hidden) dessinerDeploiement();
+}
+
+function dessinerDeploiement() {
+  const p = document.getElementById("choix-deploie");
+  if (!p || !deploie) return;
+  const d = deploie;
+  // L'heure du deploiement en toutes lettres : « il y a 3 h » dit si c'est vieux, la date
+  // dit si c'est AVANT ou APRES la correction qu'on vient d'ecrire. Les deux sont utiles.
+  const quand = new Date(d.depuis * 1000);
+  const ecoule = Math.max(0, (Date.now() - quand.getTime()) / 1000);
+  const age = ecoule < 90 ? "à l'instant"
+    : ecoule < 5400 ? "il y a " + Math.round(ecoule / 60) + " min"
+    : ecoule < 172800 ? "il y a " + Math.round(ecoule / 3600) + " h"
+    : "il y a " + Math.round(ecoule / 86400) + " j";
+  const heure = quand.toLocaleString("fr-FR",
+    { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const lignes = [
+    "<div>en service : <b>v" + d.version + "</b> · " + d.commit + "</div>",
+    "<div>déployée " + age + " — " + heure + "</div>",
+  ];
+  if (d.a_jour) {
+    lignes.push('<div style="color:var(--accent)">c\'est le dernier code écrit</div>');
+  } else {
+    const n = d.retard || 0;
+    lignes.push('<div style="color:#e3b341">écrit depuis : <b>v' + d.version_disque
+      + "</b>" + (n ? " · " + n + (n > 1 ? " commits" : " commit") : "") + "</div>");
+  }
+  p.innerHTML = lignes.join("");
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "maj";
+  b.textContent = d.a_jour ? "relancer sur ce code" : "mettre à jour et relancer";
+  b.onclick = () => {
+    // La conversation est reprise a l'identique de l'autre cote : ce qui est perdu, c'est
+    // l'attente, pas le fil. On le dit avant plutot que de laisser l'ecran se vider.
+    b.disabled = true;
+    b.textContent = "relance en cours…";
+    envoyerCmd({ cmd: "redeployer" });
+  };
+  p.appendChild(b);
+  placerPanneau(p);
+}
+
+function brancherDeploiement() {
+  const b = document.getElementById("deploie");
+  const p = document.getElementById("choix-deploie");
+  if (!b || !p) return;
+  b.onclick = (ev) => {
+    ev.stopPropagation();
+    p.hidden = !p.hidden;
+    if (!p.hidden) dessinerDeploiement();
+  };
+  // Meme idiome que les panneaux voisins : l'ecouteur est global, pas sur `document` —
+  // c'est ce que la page utilise partout ailleurs, et ce que le banc d'essai sait simuler.
+  addEventListener("click", (ev) => {
+    if (!p.hidden && !p.contains(ev.target) && ev.target !== b) p.hidden = true;
+  });
+}
+
+
 // --- servir a se savoir perimee ----------------------------------------------------------
 // On developpe cette page DEPUIS cette page, en parlant. Le serveur la garde en memoire au
 // demarrage : modifier le code, recharger l'onglet et ne rien voir changer est donc le
@@ -6022,12 +6146,16 @@ function brancher() {
     // qu'elle est morte.
     dernierPouls = Date.now();
     if (d.genre === "_recu") { accuserJeton(d.jeton); return; }
-    if (d.genre === "_pouls") { serveur = d; verifierVersion(d.version, d.libelle); return; }
+    if (d.genre === "_pouls") {
+      serveur = d; verifierVersion(d.version, d.libelle);
+      majDeploiement(d.deploiement); return;
+    }
     if (d.genre === "_bonjour") {
       clearTimeout(minuterieBonjour);
       minuterieBonjour = null;
       serveur = d;
       verifierVersion(d.version, d.libelle);
+      majDeploiement(d.deploiement);
       // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
       // « ça tourne alors que rien ne tourne ». L'historique renvoyé contient les lignes
       // telles qu'elles ont été publiées : un vieux « voix » y rallume la pastille parole,
@@ -6133,6 +6261,7 @@ if (__entete && typeof addEventListener === "function") {
 }
 
 brancher();
+brancherDeploiement();
 surveillerLiaison();
 
 // --- « suivre » : le bouton qui ramene en bas ---------------------------------------------
