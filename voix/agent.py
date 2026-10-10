@@ -1318,51 +1318,62 @@ async def entrypoint(ctx: JobContext):
 
     if isinstance(moteur_stt, stt_api.FallbackAdapter):
         # Le label est le chemin complet du module (livekit.plugins.azure.stt.STT), pas le
-        # nom du plugin : on cherche donc le segment, pas une égalité.
+        # nom du plugin. L'ancienne table en dur ne citait qu'Azure, Deepgram et le local :
+        # pour tous les autres — AssemblyAI le premier — le nom restait brut, et comme on
+        # comparait ce brut a des LIBELLES, le moteur tombe ne sortait jamais de la liste
+        # des restants. Resultat : « livekit.plugins.assemblyai.stt.stt est tombe, bascule
+        # sur AssemblyAI », et le tableau continuait de l'annoncer actif. On retient donc la
+        # CLE, deduite du champ `module` que chaque moteur porte deja : rien a tenir a jour.
         tombes: set[str] = set()
-        NOMS = (("azure", "Azure"), ("deepgram", "Deepgram"),
-                ("stream_adapter", "le moteur local"), ("whisper", "le moteur local"))
 
-        def _nom_moteur(m) -> str:
+        def _cle_moteur(m) -> str | None:
             brut = (getattr(m, "label", "") or type(m).__name__).lower()
-            for motif, joli in NOMS:
-                if motif in brut:
-                    return joli
-            return brut
+            for mot in moteurs_stt.MOTEURS:
+                if mot.module and mot.module.lower() in brut:
+                    return mot.cle
+            # Le local n'a pas de plugin LiveKit : il arrive par l'adaptateur de flux.
+            if "stream_adapter" in brut or "whisper" in brut:
+                return "local"
+            return None
 
         @moteur_stt.on("stt_availability_changed")
         def _bascule(ev):
-            nom = _nom_moteur(ev.stt)
+            cle = _cle_moteur(ev.stt)
+            nom = moteurs_stt.PAR_CLE[cle].libelle if cle else (
+                getattr(ev.stt, "label", "") or type(ev.stt).__name__)
+            if ev.available:
+                tombes.discard(cle)
+            else:
+                tombes.add(cle)
+            debout = [c for c in moteurs_stt.chaine() if c not in tombes]
             if ev.available:
                 texte = f"reconnaissance : {nom} est de nouveau disponible"
             else:
-                restants = [moteurs_stt.PAR_CLE[c].libelle
-                            for c in moteurs_stt.chaine()
-                            if moteurs_stt.PAR_CLE[c].libelle != nom]
-                suite = restants[0] if restants else "plus rien"
+                suite = moteurs_stt.PAR_CLE[debout[0]].libelle if debout else "plus rien"
                 texte = (f"reconnaissance : {nom} est tombé, bascule sur {suite} "
                          f"(nouvelle tentative en arrière-plan)")
             log.warning("%s", texte)
-            tableau.publier("erreur" if not ev.available else "log",
-                            niveau="WARNING", source="stt", texte=texte)
+            # Une bascule REUSSIE n'est pas une erreur : un credit epuise est la vie normale
+            # d'une chaine faite pour ca, et afficher une alerte rouge a chaque fois revenait
+            # a signaler une panne qui n'existe pas. On n'alerte que s'il ne reste personne.
+            tableau.publier("erreur" if not ev.available and not debout else "log",
+                            niveau="WARNING" if not ev.available else "INFO",
+                            source="stt", texte=texte)
             # Le moteur ACTIF, recalcule : c'est le premier de la chaine encore debout.
             # Sans ca le tableau continuerait d'annoncer celui du demarrage.
-            tombes.discard(nom) if ev.available else tombes.add(nom)
-            debout = [c for c in moteurs_stt.chaine()
-                      if moteurs_stt.PAR_CLE[c].libelle not in tombes]
             actif["cle"] = debout[0] if debout else None
             # Decoupe la mesure a la bascule : sans ca, le temps consomme par Azure avant sa
             # chute serait impute au moteur qui prend le relais.
             consommation.moteur_actif(actif["cle"])
-            if ev.available:
-                for c, m in moteurs_stt.PAR_CLE.items():
-                    if m.libelle == nom:
-                        consommation.oublier_epuise(c)
+            if ev.available and cle:
+                consommation.oublier_epuise(cle)
             tableau.publier("moteur_actif",
                             cle=debout[0] if debout else None,
                             libelle=(moteurs_stt.PAR_CLE[debout[0]].libelle
                                      if debout else "aucun"),
-                            tombes=sorted(tombes))
+                            # Un moteur non reconnu entre en None : il compte comme tombe,
+                            # mais il ne doit pas faire exploser le tri.
+                            tombes=sorted(c for c in tombes if c))
             _publier_conso()
 
     session = AgentSession(
