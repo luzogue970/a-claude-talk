@@ -49,6 +49,10 @@ ETATS = frozenset({
     "config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
     "consommation", "conversations",
     "micro", "quota", "pupitre", "retenir", "session", "travail", "etat",
+    # Les taches lancees en arriere-plan. Un ETAT, et c'est capital : si la page se
+    # recharge pendant qu'une tache tourne, elle doit la retrouver — sinon la conversation
+    # a de nouveau l'air finie, ce qui est tout le defaut qu'on corrige.
+    "fond",
     # La dictee retenue : ce qui attend dans la barre. Un ETAT, parce qu'une seule compte —
     # la derniere — et qu'elle doit etre vide une fois consommee. Rejouee comme un simple
     # evenement, chaque vieille dictee de l'historique revenait remplir la barre a la
@@ -1665,6 +1669,15 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 .act.pensee{border-color:var(--pensee);color:#c3a6f5}
 .act.outil{border-color:var(--outil);color:#e3b341}
 .act.voix{border-color:var(--voix);color:#7ee08d}
+/* Le travail de FOND ne s'arrete pas avec le tour : c'est la seule pastille qui doit
+   survivre a la fin de la reponse, et c'est tout son interet. Sans elle, « je lance ca,
+   je te dis quand c'est bon » ressemble exactement a une conversation terminee — on
+   repond, et le message part au milieu d'autre chose. Pleine, pas en contour : elle doit
+   se voir du coin de l'oeil sans qu'on la cherche. */
+.act.fond{border-color:var(--permission);background:#8957e520;color:#d2b7ff;font-weight:600}
+.act.fond::before{border-top-color:#d2b7ff}
+.puce-fond{margin-left:6px;padding:0 5px;border-radius:4px;font-size:.72em;
+  background:#8957e530;color:#d2b7ff;border:1px solid var(--permission);white-space:nowrap}
 #travail::before{content:"⟳ ";display:inline-block;animation:tourne 1.1s linear infinite}
 /* Un indicateur qui tourne AFFIRME qu'il se passe quelque chose. Liaison coupee, on ne sait
    plus : il s'arrete, et perd sa couleur, plutot que de continuer a jouer l'activite. */
@@ -1889,6 +1902,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 @media (max-width: 900px) and (orientation: landscape) {
   header { padding-top: 5px; padding-bottom: 5px; }
   header #activite, header #pupitre { display: none; }
+  /* Sauf celle-la. Masquer « il reste du travail en fond » est precisement le defaut
+     qu'on corrige : on la laisse, seule, et sans son libelle. */
+  header #activite:has(.fond) { display: flex; }
+  header #activite .act:not(.fond) { display: none; }
   #flux { padding-bottom: calc(var(--barre) + 16px); }
   #saisie { max-height: 28vh; }
 }
@@ -2473,8 +2490,13 @@ function corps(e) {
         ? `<details class="args"><summary title="voir les arguments">⋯</summary>`
           + `<pre>${ech(JSON.stringify(e.args, null, 2))}</pre></details>`
         : "";
+      // « lance en fond » : sans ca, la ligne est identique a celle d'un outil qui a rendu
+      // sa reponse dans le tour, et rien ne dit que le resultat affiche juste dessous n'est
+      // qu'un accuse de reception.
+      const fond = e.fond ? `<span class="puce-fond" title="lancé en arrière-plan : le `
+        + `résultat arrivera plus tard">en fond</span>` : "";
       return `<span class="quoi" title="${ech(quoi)}"><code>${ech(e.nom)}</code> `
-        + `${ech(e.cible || "")}</span>${args}`;
+        + `${ech(e.cible || "")}</span>${fond}${args}`;
     }
     case "effort": {
       // Une bascule automatique se lit d'un coup : d'ou l'on vient, ou l'on va, et pourquoi.
@@ -2651,6 +2673,9 @@ const LIB_ACT = { stt: "transcription", pensee: "réflexion", voix: "parole" };
 // passe pendant plusieurs secondes. Sans ce libellé, la page semble figée puis du texte
 // apparaît sans explication — c'est exactement ce qui rendait le comportement incompréhensible.
 let sttDirect = true;
+// Volontairement HORS de `encours` : cette liste-la ne doit pas etre videe par la fin du
+// tour. Elle ne se referme que sur la notification de fin, qui arrive plus tard.
+let tachesFond = [];
 function majActivite() {
   const outils = [...encours.keys()].filter(c => c.startsWith("outil:")).length;
   const bouts = [];
@@ -2661,6 +2686,15 @@ function majActivite() {
   }
   if (outils) {
     bouts.push(`<span class="act outil">${outils} outil${outils > 1 ? "s" : ""}</span>`);
+  }
+  if (tachesFond.length) {
+    const n = tachesFond.length;
+    // Le detail au survol : savoir QUE ca tourne suffit a ne pas repondre trop tot, savoir
+    // QUOI tourne evite d'avoir a le demander.
+    const detail = tachesFond
+      .map(t => (t.nom || "tâche") + (t.cible ? " · " + t.cible : "")).join("\n");
+    bouts.unshift('<span class="act fond" title="' + detail.replace(/"/g, "&quot;")
+      + '">' + n + ' en arrière-plan</span>');
   }
   zoneActivite.innerHTML = bouts.join("");
   majCogitation();
@@ -4209,6 +4243,13 @@ function recevoir(e, etat = false) {
     }
     if (e.genre === "moteur_actif") {
       majMoteur(e.libelle, (e.tombes || []).length > 0);
+      return;
+    }
+    if (e.genre === "fond") {
+      // Remplacement complet, jamais d'ajout : le serveur envoie la liste entiere a chaque
+      // changement, donc une tache disparue disparait ici sans qu'on ait a la retirer.
+      tachesFond = e.taches || [];
+      majActivite();
       return;
     }
     if (e.genre === "transcrit") {

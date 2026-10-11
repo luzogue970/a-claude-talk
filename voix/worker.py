@@ -10,6 +10,7 @@ last paragraph of text.
 
 import asyncio
 import re
+import time
 import logging
 import os
 import warnings
@@ -269,6 +270,10 @@ class Worker:
         self.events: asyncio.Queue = asyncio.Queue()
         self.journal = Journal()
         self.occupe = False
+        # Ce qui tourne encore quand le tour est fini. Survit d'un tour a l'autre : c'est
+        # tout l'interet, la notification de fin arrive apres.
+        self._fond: dict[str, dict] = {}
+        self._attente_fond: dict[str, tuple[str, str]] = {}
         self._on_permission = on_permission
         self._on_question = on_question
         self._tableau = tableau
@@ -294,6 +299,58 @@ class Worker:
     def _voir(self, genre: str, **donnees):
         if self._tableau:
             self._tableau.publier(genre, **donnees)
+
+    # ─── le travail qui continue apres la reponse ────────────────────────────────
+    #
+    # Une commande lancee en arriere-plan et un sous-agent ne s'arretent pas avec le tour :
+    # Claude dit « je lance ca, je te dis quand c'est bon », le tour se termine, et plus rien
+    # a l'ecran ne distingue cette fin-la d'une vraie. On repond alors a une conversation qui
+    # n'a pas fini de travailler — et le message part au milieu d'autre chose.
+    #
+    # On tient donc la liste de ce qui tourne encore. Elle s'ouvre a l'appel de l'outil et ne
+    # se referme que sur la notification de fin, qui arrive un tour plus tard ou jamais.
+
+    def _fond_publier(self):
+        self._voir("fond", taches=[
+            {"id": c, "nom": t["nom"], "cible": t["cible"], "depuis": t["depuis"]}
+            for c, t in self._fond.items()
+        ])
+
+    def _fond_ouvrir(self, cle: str, nom: str, cible: str):
+        if cle in self._fond:
+            return
+        self._fond[cle] = {"nom": nom, "cible": cible, "depuis": time.time()}
+        self._fond_publier()
+
+    def _fond_fermer(self, *cles: str) -> bool:
+        parti = False
+        for cle in cles:
+            if cle and self._fond.pop(cle, None) is not None:
+                parti = True
+        if parti:
+            self._fond_publier()
+        return parti
+
+    def _fond_resultat(self, tool_id: str, texte: str):
+        """Le retour immediat d'un outil lance en fond : il porte l'identifiant de la tache.
+
+        Les deux identifiants ne sont pas les memes. L'outil a le sien (`toolu_...`), la
+        tache de fond en recoit un autre a son demarrage — « (ID: bdjie0kr9) » pour une
+        commande, « agentId: ... » pour un sous-agent. C'est le SECOND que portera la
+        notification de fin : sans ce rattachement, la ligne ne s'eteindrait jamais.
+        """
+        attendu = self._attente_fond.pop(tool_id, None)
+        if not attendu:
+            return
+        nom, cible = attendu
+        m = re.search(r"\(ID: ([A-Za-z0-9_-]+)\)|agentId: ([A-Za-z0-9_-]+)", texte or "")
+        cle = (m.group(1) or m.group(2)).strip() if m else tool_id
+        self._fond_ouvrir(cle, nom, cible)
+
+    def _fond_notifie(self, texte: str):
+        """Une notification de fin, qui arrive un tour plus tard — ou jamais."""
+        for m in re.finditer(r"<task-id>([^<]+)</task-id>", texte or ""):
+            self._fond_fermer(m.group(1).strip())
 
     async def _can_use_tool(self, name: str, args: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
         # AskUserQuestion passe par ici, et c'est le seul outil qui y passe QUOI QU'IL ARRIVE :
@@ -635,8 +692,15 @@ class Worker:
                         # L'identifiant voyage jusqu'a la page : c'est lui qui permet de
                         # rattacher le resultat a l'action et d'afficher un verdict plutot
                         # qu'une ligne dont on ne sait jamais si elle s'est terminee.
+                        # `run_in_background` est la seule marque fiable : c'est le champ
+                        # que Bash comme Agent utilisent pour dire « je rends la main tout
+                        # de suite, le travail continue ». On ne peut pas encore ouvrir la
+                        # ligne — l'identifiant de la tache n'existera qu'au retour.
+                        en_fond = bool(args.get("run_in_background"))
+                        if en_fond:
+                            self._attente_fond[block.id] = (block.name, entree[1])
                         self._voir("outil", nom=block.name, cible=entree[1], args=args,
-                                   id=block.id)
+                                   id=block.id, fond=en_fond)
                         await self.events.put(("outil", entree))
                     elif isinstance(block, TextBlock) and block.text.strip():
                         self.journal.textes.append(block.text.strip())
@@ -644,6 +708,11 @@ class Worker:
                         pass  # already streamed as deltas
             elif isinstance(message, UserMessage):
                 # Tool results come back echoed on the user turn.
+                # Une notification de fin de tache arrive sur le tour utilisateur, et pas
+                # toujours en blocs : quand le contenu est une simple chaine, la boucle qui
+                # suit ne la voyait pas passer et la ligne restait allumee pour toujours.
+                if isinstance(message.content, str):
+                    self._fond_notifie(message.content)
                 contenu = message.content if isinstance(message.content, list) else []
                 for block in contenu:
                     if isinstance(block, ToolResultBlock):
@@ -656,8 +725,13 @@ class Worker:
                         # Publie meme sans texte : un outil qui ne renvoie rien reussit
                         # quand meme, et sans cet evenement son indicateur tournerait
                         # indefiniment sur la page.
+                        self._fond_resultat(block.tool_use_id, texte)
                         self._voir("resultat", texte=texte[:1500],
                                    id=block.tool_use_id, echec=bool(block.is_error))
+                    elif isinstance(block, TextBlock):
+                        # Les notifications de fin de tache arrivent par la, sur le tour
+                        # utilisateur, sans passer par le moindre outil.
+                        self._fond_notifie(block.text)
             elif isinstance(message, SystemMessage):
                 self._systeme(message)
             elif isinstance(message, ResultMessage):

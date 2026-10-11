@@ -830,6 +830,10 @@ def tout_genre_affiche_a_un_filtre():
         # d'ETATS volontairement : un compteur rejoue a la reconnexion afficherait la
         # consommation d'un tour termine comme si elle etait en cours.
         "jetons",
+        # « fond » est la LISTE des taches encore en cours a la fin du tour : elle pilote une
+        # pastille, pas une ligne. En faire du flux republierait la meme liste a chaque
+        # ouverture et fermeture de tache, au milieu de la conversation.
+        "fond",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
@@ -840,7 +844,7 @@ def tout_genre_affiche_a_un_filtre():
     # a vide les selecteurs de modele et de delai pendant des semaines.
     durables = {"config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
                 "consommation", "conversations", "micro", "quota", "pupitre", "retenir",
-                "travail", "etat"}
+                "travail", "etat", "fond"}
     from tableau import ETATS
     oublies = sorted(durables - set(ETATS))
     dire(not oublies,
