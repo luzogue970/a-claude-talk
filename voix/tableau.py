@@ -988,14 +988,16 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #deploie.vieux{border-color:var(--outil);color:#e3b341}
 #deploie .pt{width:6px;height:6px;border-radius:999px;background:var(--faible);flex:none}
 #deploie.vieux .pt{background:#e3b341}
-/* « neuf » : une version vient d'etre ecrite et on ne l'a pas encore vue. La pastille
-   respire pendant quelques secondes au lieu de rester posee — un orange fixe en haut a
-   droite, on finit par ne plus le voir. L'animation s'arrete des qu'on a ouvert le
-   panneau : signaler deux fois la meme chose, c'est du bruit. */
-@keyframes respire{0%,100%{box-shadow:0 0 0 0 #e3b34100}50%{box-shadow:0 0 0 4px #e3b34140}}
-#deploie.neuf{animation:respire 1.7s ease-in-out infinite}
-#choix-deploie .neuve{margin:-2px 0 7px;padding:4px 7px;border-radius:6px;
-  background:#e3b34118;border:1px solid #e3b34155;color:#e3b341;font-weight:600}
+/* Le bouton de mise a jour. Il n'est pas une annonce : il ne se montre pas, ne clignote
+   pas et ne s'efface pas tout seul. Il est LA tant que le code ecrit n'est pas celui qui
+   tourne, et il disparait quand il n'a plus rien a faire. Rien a surveiller, rien a
+   rattraper : on appuie quand on veut. */
+#maj-vite{border:1px solid var(--outil);border-radius:999px;padding:2px 10px;font-size:11.5px;
+  background:#e3b34118;color:#e3b341;cursor:pointer;white-space:nowrap;font-weight:600;
+  display:inline-flex;gap:5px;align-items:center}
+#maj-vite:hover{background:#e3b34130}
+#maj-vite[hidden]{display:none}
+#maj-vite[disabled]{opacity:.55;cursor:default}
 #choix-deploie{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
   width:max-content;max-width:min(320px, calc(100vw - 32px));
   background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:11px 13px;
@@ -1878,6 +1880,8 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      et c'est la hauteur de la conversation qu'on defend ; en retard, la couleur suffit a
      faire ouvrir le panneau, qui lui a toute la place de s'expliquer. */
   #deploie .num { display: none; }
+  /* Le libelle se raccourcit, le bouton reste : c'est lui qui compte. */
+  #maj-vite { padding: 2px 8px; font-size: 11px; }
   #deploie { padding: 2px 7px; }
 
   /* Recalibre : la rangee porte un rond de plus depuis que cet appareil peut lire et
@@ -1973,6 +1977,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <button type="button" id="deploie" title="version en service"></button>
     <div id="choix-deploie" hidden></div>
   </span>
+  <button type="button" id="maj-vite" hidden></button>
   <span id="compte" title="temps avant envoi automatique">
     <span id="reste"></span>
     <button id="retenir-vite" type="button"
@@ -4325,8 +4330,6 @@ function recevoir(e, etat = false) {
       }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
-      // La version ecrite pendant le tour s'annonce maintenant : on vient de rendre la main.
-      if (!e.actif && annonceEnAttente) annoncerDeploiement();
       if (e.actif && !minuteur) minuteur = setInterval(majTravail, 1000);
       majTravail();
       return;
@@ -5665,29 +5668,13 @@ const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle"
 // comprise ou non, et rien ne le disait : on corrigeait, on relancait la page, on constatait
 // que « ca ne marche toujours pas ». La pastille repond a ca, et le bouton y remedie.
 let deploie = null;
-// Ce qu'on a DEJA signale, et ce qui attend de l'etre. Le bouton de mise a jour ne sert a
-// rien s'il faut penser a aller le chercher : c'est une manoeuvre manuelle pour un fait que
-// la machine connait avant nous. Elle le dit donc d'elle-meme, une fois par version ecrite.
-let versionSignalee = null, annonceEnAttente = false, fermetureAnnonce = null;
 
-function annoncerDeploiement() {
-  // Jamais au milieu d'un tour : ouvrir un panneau par-dessus une reponse qui defile gene
-  // la lecture, et la relance qu'il propose tuerait le travail en cours. L'annonce attend la
-  // fin du tour — le moment ou l'on reprend la parole est exactement celui ou elle sert.
-  if (debutTravail != null) { annonceEnAttente = true; return; }
-  annonceEnAttente = false;
-  const b = document.getElementById("deploie");
-  const p = document.getElementById("choix-deploie");
-  if (!b || !p) return;
-  b.classList.add("neuf");
-  p.hidden = false;
-  dessinerDeploiement();
-  // Elle se referme seule : une annonce qui reste ouverte devient un panneau a fermer, donc
-  // une corvee de plus. La pastille orange, elle, reste — l'information n'est pas perdue.
-  clearTimeout(fermetureAnnonce);
-  fermetureAnnonce = setTimeout(() => {
-    if (!p.contains(document.activeElement)) p.hidden = true;
-  }, 14000);
+// Lance la relance sur le code ecrit, depuis n'importe quel bouton qui la propose.
+function lancerRelance(bouton, texte) {
+  // La conversation est reprise a l'identique de l'autre cote : ce qui est perdu, c'est
+  // l'attente, pas le fil. On le dit avant plutot que de laisser l'ecran se vider.
+  if (bouton) { bouton.disabled = true; bouton.textContent = texte || "relance en cours…"; }
+  envoyerCmd({ cmd: "redeployer" });
 }
 
 function majDeploiement(d) {
@@ -5696,9 +5683,18 @@ function majDeploiement(d) {
   // Une cle par etat du disque : elle bouge a chaque commit ecrit, donc chaque nouveauté
   // s'annonce, et une page ouverte sur du retard connu ne se remet pas a sonner toutes les
   // trente secondes.
-  const cle = d.a_jour ? null : d.version_disque + ":" + (d.retard || 0);
-  if (cle && cle !== versionSignalee) { versionSignalee = cle; annoncerDeploiement(); }
-  if (!cle) { versionSignalee = null; annonceEnAttente = false; }
+  const m = document.getElementById("maj-vite");
+  if (m) {
+    // Aucune condition de plus : pas « si le tour est fini », pas « si on ne l'a pas deja
+    // vu ». Du retard, donc un bouton. Il reste jusqu'a ce qu'on l'utilise, ou jusqu'a ce
+    // que la version en service rattrape celle du disque.
+    m.hidden = !!d.a_jour;
+    if (!d.a_jour && !m.disabled) {
+      m.textContent = "⟳ mettre à jour";
+      m.title = "relancer cette conversation sur la v" + d.version_disque
+        + " — le fil est repris, seule l'attente est perdue";
+    }
+  }
   const b = document.getElementById("deploie");
   if (!b) return;
   const retard = d.retard || 0;
@@ -5736,7 +5732,6 @@ function dessinerDeploiement() {
     lignes.push('<div style="color:var(--accent)">c\'est le dernier code écrit</div>');
   } else {
     const n = d.retard || 0;
-    lignes.unshift('<div class="neuve">une nouvelle version est écrite</div>');
     lignes.push('<div style="color:#e3b341">écrit depuis : <b>v' + d.version_disque
       + "</b>" + (n ? " · " + n + (n > 1 ? " commits" : " commit") : "") + "</div>");
   }
@@ -5744,13 +5739,7 @@ function dessinerDeploiement() {
   const b = document.createElement("button");
   b.type = "button"; b.className = "maj";
   b.textContent = d.a_jour ? "relancer sur ce code" : "mettre à jour et relancer";
-  b.onclick = () => {
-    // La conversation est reprise a l'identique de l'autre cote : ce qui est perdu, c'est
-    // l'attente, pas le fil. On le dit avant plutot que de laisser l'ecran se vider.
-    b.disabled = true;
-    b.textContent = "relance en cours…";
-    envoyerCmd({ cmd: "redeployer" });
-  };
+  b.onclick = () => lancerRelance(b);
   p.appendChild(b);
   placerPanneau(p);
 }
@@ -5759,10 +5748,10 @@ function brancherDeploiement() {
   const b = document.getElementById("deploie");
   const p = document.getElementById("choix-deploie");
   if (!b || !p) return;
+  const m = document.getElementById("maj-vite");
+  if (m) m.onclick = () => lancerRelance(m, "⟳ relance…");
   b.onclick = (ev) => {
     ev.stopPropagation();
-    clearTimeout(fermetureAnnonce);
-    b.classList.remove("neuf");
     p.hidden = !p.hidden;
     if (!p.hidden) dessinerDeploiement();
   };
