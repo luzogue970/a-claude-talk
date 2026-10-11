@@ -988,6 +988,14 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #deploie.vieux{border-color:var(--outil);color:#e3b341}
 #deploie .pt{width:6px;height:6px;border-radius:999px;background:var(--faible);flex:none}
 #deploie.vieux .pt{background:#e3b341}
+/* « neuf » : une version vient d'etre ecrite et on ne l'a pas encore vue. La pastille
+   respire pendant quelques secondes au lieu de rester posee — un orange fixe en haut a
+   droite, on finit par ne plus le voir. L'animation s'arrete des qu'on a ouvert le
+   panneau : signaler deux fois la meme chose, c'est du bruit. */
+@keyframes respire{0%,100%{box-shadow:0 0 0 0 #e3b34100}50%{box-shadow:0 0 0 4px #e3b34140}}
+#deploie.neuf{animation:respire 1.7s ease-in-out infinite}
+#choix-deploie .neuve{margin:-2px 0 7px;padding:4px 7px;border-radius:6px;
+  background:#e3b34118;border:1px solid #e3b34155;color:#e3b341;font-weight:600}
 #choix-deploie{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
   width:max-content;max-width:min(320px, calc(100vw - 32px));
   background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:11px 13px;
@@ -4317,6 +4325,8 @@ function recevoir(e, etat = false) {
       }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
+      // La version ecrite pendant le tour s'annonce maintenant : on vient de rendre la main.
+      if (!e.actif && annonceEnAttente) annoncerDeploiement();
       if (e.actif && !minuteur) minuteur = setInterval(majTravail, 1000);
       majTravail();
       return;
@@ -5655,10 +5665,40 @@ const ETATS = { listening: "écoute", thinking: "réfléchit", speaking: "parle"
 // comprise ou non, et rien ne le disait : on corrigeait, on relancait la page, on constatait
 // que « ca ne marche toujours pas ». La pastille repond a ca, et le bouton y remedie.
 let deploie = null;
+// Ce qu'on a DEJA signale, et ce qui attend de l'etre. Le bouton de mise a jour ne sert a
+// rien s'il faut penser a aller le chercher : c'est une manoeuvre manuelle pour un fait que
+// la machine connait avant nous. Elle le dit donc d'elle-meme, une fois par version ecrite.
+let versionSignalee = null, annonceEnAttente = false, fermetureAnnonce = null;
+
+function annoncerDeploiement() {
+  // Jamais au milieu d'un tour : ouvrir un panneau par-dessus une reponse qui defile gene
+  // la lecture, et la relance qu'il propose tuerait le travail en cours. L'annonce attend la
+  // fin du tour — le moment ou l'on reprend la parole est exactement celui ou elle sert.
+  if (debutTravail != null) { annonceEnAttente = true; return; }
+  annonceEnAttente = false;
+  const b = document.getElementById("deploie");
+  const p = document.getElementById("choix-deploie");
+  if (!b || !p) return;
+  b.classList.add("neuf");
+  p.hidden = false;
+  dessinerDeploiement();
+  // Elle se referme seule : une annonce qui reste ouverte devient un panneau a fermer, donc
+  // une corvee de plus. La pastille orange, elle, reste — l'information n'est pas perdue.
+  clearTimeout(fermetureAnnonce);
+  fermetureAnnonce = setTimeout(() => {
+    if (!p.contains(document.activeElement)) p.hidden = true;
+  }, 14000);
+}
 
 function majDeploiement(d) {
   if (!d) return;
   deploie = d;
+  // Une cle par etat du disque : elle bouge a chaque commit ecrit, donc chaque nouveauté
+  // s'annonce, et une page ouverte sur du retard connu ne se remet pas a sonner toutes les
+  // trente secondes.
+  const cle = d.a_jour ? null : d.version_disque + ":" + (d.retard || 0);
+  if (cle && cle !== versionSignalee) { versionSignalee = cle; annoncerDeploiement(); }
+  if (!cle) { versionSignalee = null; annonceEnAttente = false; }
   const b = document.getElementById("deploie");
   if (!b) return;
   const retard = d.retard || 0;
@@ -5696,6 +5736,7 @@ function dessinerDeploiement() {
     lignes.push('<div style="color:var(--accent)">c\'est le dernier code écrit</div>');
   } else {
     const n = d.retard || 0;
+    lignes.unshift('<div class="neuve">une nouvelle version est écrite</div>');
     lignes.push('<div style="color:#e3b341">écrit depuis : <b>v' + d.version_disque
       + "</b>" + (n ? " · " + n + (n > 1 ? " commits" : " commit") : "") + "</div>");
   }
@@ -5720,6 +5761,8 @@ function brancherDeploiement() {
   if (!b || !p) return;
   b.onclick = (ev) => {
     ev.stopPropagation();
+    clearTimeout(fermetureAnnonce);
+    b.classList.remove("neuf");
     p.hidden = !p.hidden;
     if (!p.hidden) dessinerDeploiement();
   };
