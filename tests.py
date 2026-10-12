@@ -56,6 +56,8 @@ SUITES = [
     ("pupitre", "test_pupitre.py", "py", "conversations parallèles : baux micro et parole", False),
     # Quatre suites existaient sans jamais être lancées par cette commande : elles passaient,
     # mais elles ne protégeaient rien — un test qu'on ne lance pas est un test qui n'existe pas.
+    ("assistant", "test_assistant.py", "py",
+     "« Hey Claude » : les verrous qui empechent la facture de monter", False),
     ("complexite", "test_complexite.py", "py",
      "l'effort choisi d'après la demande, et la décision rendue visible", False),
     ("actions", "test_actions.py", "py", "ce que la page peut commander à l'agent", False),
