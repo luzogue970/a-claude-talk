@@ -22,3 +22,8 @@ conversations/
 # voices/, 268 Mo de voix Piper gardees pour la synthese locale a venir.
 tts/
 _essai_auto.md
+
+# Mesures de couverture : un artefact local, jamais partagé
+.coverage
+.coverage.*
+htmlcov/
