@@ -206,6 +206,10 @@ class Voix(Agent):
         # caractères, alors que refaire le tour coûterait tout le travail.
         self._lecture = None
         self._paroles: dict[str, str] = {}
+        # Compteur a part, et monotone. Deduire la cle de len(_paroles) marchait tant
+        # que rien n'etait elague : passe 40 reponses, la taille ne bougeait plus et
+        # toutes les suivantes reprenaient « p41 », en s'ecrasant l'une l'autre.
+        self._n_paroles = 0
         self._id_parole: str | None = None
         # Marque le tour suivant comme tapé plutôt que dicté. Posé par la commande texte du
         # tableau, lu et effacé par llm_node — pour qu'UNE seule ligne « toi » soit publiée
@@ -828,7 +832,8 @@ class Voix(Agent):
         morceaux = []
         # Un identifiant par réponse : sans lui, « relire » ne pourrait viser que la dernière,
         # alors que ce qu'on veut relire est souvent celle d'avant.
-        cle = f"p{len(self._paroles) + 1}"
+        self._n_paroles += 1
+        cle = f"p{self._n_paroles}"
         self._id_parole = cle
         async for bout in self.porte_parole.dire_flux(journal_):
             morceaux.append(bout)
