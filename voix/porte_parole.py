@@ -89,7 +89,9 @@ Ta reponse ecrite, a rendre a l'oral :
 # Tokens whose presence has to be justified: identifiers, versions, precise numbers.
 # A bare small integer is excluded because a legitimate count ("trois fichiers") is
 # derived from the journal rather than quoted from it.
-DUR = re.compile(r"\b(?:[A-Za-z_][A-Za-z0-9_]*[._][A-Za-z0-9_]+|\d[\d.,]*\d|\d{2,})\b")
+# The dotted group repeats: without it "c.a.d" was cut down to "c.a", which the
+# common-words filter below could no longer recognise, and the sentence was dropped.
+DUR = re.compile(r"\b(?:[A-Za-z_][A-Za-z0-9_]*(?:[._][A-Za-z0-9_]+)+|\d[\d.,]*\d|\d{2,})\b")
 MOTS_COURANTS = re.compile(r"^(?:c\.a\.d|etc|p\.ex)$", re.I)
 
 

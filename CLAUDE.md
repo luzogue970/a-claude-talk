@@ -30,3 +30,20 @@ redémarre le service qui le sert, et relance le serveur Expo Go pour que le té
 reçoive le nouveau code. La carte affiche ensuite la version, sa date, et le nombre de
 commits écrits depuis — en orange quand il y en a. Zéro commit depuis, c'est que ce
 qui tourne est bien ce qui est écrit.
+
+## La commande unique des tests : `./tests.py`
+
+La règle TU/TI/TF est posée globalement. Ici, elle se lance d'une seule façon :
+
+```
+./tests.py              # tout, y compris les suites lentes
+./tests.py --rapide     # sans ce qui appelle Azure ou le réseau
+./tests.py -k micro     # une suite ou un motif
+./tests.py --liste      # ce qui existe, et ce que chaque suite protège
+```
+
+**Toute suite nouvelle s'inscrit dans la liste `SUITES` de `tests.py`.** Quatre suites ont
+déjà vécu hors de cette liste : elles passaient, et ne protégeaient rien.
+
+Le dernier champ du tuple dit si la suite est **lente** (réseau, API payante) — elle sort
+alors du passage rapide, jamais du passage complet.

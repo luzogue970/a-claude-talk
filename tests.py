@@ -58,6 +58,10 @@ SUITES = [
     # mais elles ne protégeaient rien — un test qu'on ne lance pas est un test qui n'existe pas.
     ("assistant", "test_assistant.py", "py",
      "« Hey Claude » : les verrous qui empechent la facture de monter", False),
+    ("porte-parole", "test_porte_parole.py", "py",
+     "le débrief parlé : rien d'inventé n'atteint le haut-parleur", False),
+    ("quota", "test_quota.py", "py",
+     "les fenêtres de quota : lisibles, prononçables, et jamais fatales", False),
     ("complexite", "test_complexite.py", "py",
      "l'effort choisi d'après la demande, et la décision rendue visible", False),
     ("actions", "test_actions.py", "py", "ce que la page peut commander à l'agent", False),

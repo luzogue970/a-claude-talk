@@ -124,6 +124,13 @@ class Quota:
         self._lu_a = time.monotonic()
         self._reporter(ECART_MINIMUM)
 
+        # Mesure par test : une charge qui n'est PAS un objet (liste, chaine) levait une
+        # AttributeError et faisait tomber l'agent. L'endpoint est interne et non documente :
+        # il a le droit de changer de forme, nous n'avons pas le droit de tomber.
+        if not isinstance(donnees, dict):
+            self._signaler("quota : reponse inattendue de l'API")
+            return False
+
         fenetres = []
         for cle, libelle, taille in FENETRES:
             bloc = donnees.get(cle)
