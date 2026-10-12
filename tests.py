@@ -70,6 +70,8 @@ SUITES = [
      "le travail qui continue après la réponse, et qu'on doit voir", False),
     ("permission", "test_permission.py", "py",
      "ce qui passe sans demander, ce qui demande, et ce qui bascule", False),
+    ("hey-claude", "test_assistant_conversation.py", "py",
+     "« Hey Claude » : une conversation qui traîne facture la pièce entière", False),
     ("complexite", "test_complexite.py", "py",
      "l'effort choisi d'après la demande, et la décision rendue visible", False),
     ("actions", "test_actions.py", "py", "ce que la page peut commander à l'agent", False),
