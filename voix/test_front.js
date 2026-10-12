@@ -301,6 +301,10 @@ globalThis.navigator = {
       // application le tient, et c est exactement le cas qu on veut pouvoir reproduire.
       const piste = { stop() {}, muted: !!globalThis.microMuet,
                       readyState: globalThis.microFini ? "ended" : "live" };
+      // Retenues : l'OS peut reprendre le micro APRES l'ouverture — c'est exactement ce qui
+      // arrive quand le telephone passe sur une autre application — et un test doit pouvoir
+      // tuer la piste en cours de route, pas seulement a l'ouverture.
+      globalThis.pistesMicro.push(piste);
       return Promise.resolve({ getTracks: () => [piste], getAudioTracks: () => [piste] });
     },
   },
@@ -319,13 +323,22 @@ globalThis.sockets = [];
 // vers /audio — et ce que la page fait de la reponse.
 globalThis.isSecureContext = true;
 globalThis.enregistreurs = [];
+globalThis.pistesMicro = [];
+// recorderZombie reproduit l'onglet gele : l'enregistreur accepte stop() et ne rappelle
+// JAMAIS onstop. C'est le cas qui bloquait le micro jusqu'au rechargement de la page, et
+// aucun talon ne savait le produire — d'ou un bug invisible aux tests.
+// (Pas d'accent grave dans ce fichier : le talon vit dans un template literal.)
+globalThis.recorderZombie = false;
 globalThis.MediaRecorder = function (flux, opts) {
   const self = this;
   this.mimeType = (opts && opts.mimeType) || "audio/webm";
-  this.etat = "inactive";
-  this.start = () => { self.etat = "recording"; };
+  // state et pas etat : c'est le nom du vrai MediaRecorder, et le code s'en sert pour
+  // savoir si l'enregistrement tient encore debout.
+  this.state = "inactive";
+  this.start = () => { self.state = "recording"; };
   this.stop = () => {
-    self.etat = "inactive";
+    if (globalThis.recorderZombie) return;        // gele : ni etat, ni donnees, ni onstop
+    self.state = "inactive";
     if (self.ondataavailable) self.ondataavailable({ data: { size: 1234, type: self.mimeType } });
     if (self.onstop) self.onstop();
   };

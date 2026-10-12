@@ -5099,6 +5099,9 @@ let enregistreur = null, fluxMicro = null, morceauxAudio = [], minuterieVocal = 
 let vocalEnCours = false, vocalEnvoi = false, veilleLiaisonVocal = null;
 let debutVocal = 0;   // quand l'enregistrement en cours a commence
 let DELAI_SESSION_AUDIO = 60;   // le repit laisse a iOS pour rendre sa session audio
+// Le temps laisse a `onstop` avant de considerer l'enregistreur perdu. `let` : un test
+// verifie le deblocage sans avoir a dormir une seconde et demie.
+let DELAI_GARDE_ARRET = 1500, gardeArret = null;
 // L'enregistrement qui n'a pas pu partir. Il est GARDE : quelqu'un vient de parler trente
 // secondes, et jeter ça parce que le reseau a hoquete est la pire chose que cette page
 // puisse faire. Il repart tout seul au retour de la liaison.
@@ -5372,6 +5375,8 @@ async function demarrerVocal() {
     // peut-etre la seule qu'on aura eue.
     niveauInstantane();
     const muetMesure = micromuet();
+    clearTimeout(gardeArret);
+    gardeArret = null;
     libererMicro();
     vocalEnCours = false;
     majBoutonDictee();
@@ -5444,6 +5449,65 @@ function interrompreVocal(pourquoi) {
   arreterVocal();            // onstop garde l'enregistrement et tentera l'envoi
 }
 
+// --- le micro doit survivre a un aller-retour hors de la page -----------------------------
+//
+// Le defaut repare ici : on dicte, on bascule ailleurs sur le telephone, on revient — et le
+// bouton ne repond plus. L'onglet a ete GELE. L'OS a repris le micro, MediaRecorder est mort
+// sans jamais emettre `onstop`, et `vocalEnCours` est reste a `true`. Le bouton proposait
+// donc « arreter et envoyer » ; l'appui appelait `stop()` sur un enregistreur qui ne
+// repondrait plus jamais, et rien ne se debloquait. Seul un rechargement de la page — quitter
+// la conversation et y revenir — remettait les compteurs a zero.
+//
+// Trois reparations, parce que le defaut a trois portes :
+//   1. PARTIR proprement : quitter la page pendant un enregistrement l'arrete et l'envoie.
+//      Ce qui a ete dit avant le depart est sauve, et aucun zombie ne reste derriere.
+//   2. REVENIR propre : au retour, un enregistrement qui se croit en cours alors que son flux
+//      ou son enregistreur est mort est solde sur-le-champ.
+//   3. Ne jamais dependre de `onstop` : un enregistreur qui ne rend pas la main est double
+//      par un garde-temps, sinon le point 1 herite exactement du meme blocage.
+
+// Le flux capte-t-il encore vraiment ? Une piste `ended` ne reviendra pas, et un enregistreur
+// qui n'est plus `recording` ne rendra plus de donnees.
+function dicteeVivante() {
+  if (!vocalEnCours) return true;
+  const etat = enregistreur && enregistreur.state;
+  if (etat && etat !== "recording" && etat !== "paused") return false;
+  const pistes = (fluxMicro && fluxMicro.getAudioTracks && fluxMicro.getAudioTracks()) || [];
+  if (!pistes.length) return false;
+  return pistes.some(t => t.readyState !== "ended");
+}
+
+// Solder un enregistrement mort. On NE tente PAS de recuperer le son : ce qui a ete capte
+// avant le gel est au mieux un fragment, et le presenter comme une phrase complete serait
+// pire que de le perdre. Ce qu'on garantit, c'est que le bouton redevient utilisable tout de
+// suite — sans rechargement.
+function assainirDictee() {
+  if (!vocalEnCours || dicteeVivante()) return false;
+  clearInterval(veilleLiaisonVocal);
+  veilleLiaisonVocal = null;
+  if (enregistreur) { try { enregistreur.onstop = null; enregistreur.stop(); } catch (_) {} }
+  libererMicro();
+  vocalEnCours = false;
+  silencePrevenu = false;
+  majBoutonDictee();
+  noteBarre("l'enregistrement s'est arrêté pendant que tu étais ailleurs — "
+            + "le micro est de nouveau prêt, appuie pour reparler", true);
+  return true;
+}
+
+if (typeof addEventListener === "function") {
+  // Partir : on ferme nous-memes, pendant qu'on le peut encore. `hidden` arrive AVANT le gel
+  // sur telephone, `pagehide` couvre la fermeture et le cache arriere/avant.
+  addEventListener("visibilitychange", () => {
+    if (typeof document === "undefined") return;
+    if (document.visibilityState === "hidden") { if (vocalEnCours) arreterVocal(); return; }
+    // Revenir : le filet. Si la sortie n'a pas pu se faire — onglet tue sans preavis — c'est
+    // ici que le blocage se defait.
+    assainirDictee();
+  });
+  addEventListener("pagehide", () => { if (vocalEnCours) arreterVocal(); });
+}
+
 function arreterVocal() {
   clearInterval(veilleLiaisonVocal);
   veilleLiaisonVocal = null;
@@ -5453,6 +5517,19 @@ function arreterVocal() {
   // le plus.
   if (vocalEnCours) sonMicro(false);
   if (!enregistreur) { vocalEnCours = false; libererMicro(); majBoutonDictee(); return; }
+  // Un enregistreur gele ne JETTE pas : il accepte `stop()` et ne rappelle jamais. Sans ce
+  // garde-temps, le `catch` ci-dessous ne sert a rien et l'etat reste bloque pour de bon.
+  const mort = enregistreur;
+  clearTimeout(gardeArret);
+  gardeArret = setTimeout(() => {
+    gardeArret = null;
+    if (!vocalEnCours || enregistreur !== mort) return;
+    libererMicro();
+    vocalEnCours = false;
+    majBoutonDictee();
+    noteBarre("le micro n'a pas rendu la main — il est réinitialisé, appuie pour reparler",
+              true);
+  }, DELAI_GARDE_ARRET);
   try { enregistreur.stop(); }          // onstop fait le reste
   catch (_) { libererMicro(); vocalEnCours = false; majBoutonDictee(); }
 }

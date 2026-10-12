@@ -2263,7 +2263,7 @@ async function testerRelaisVocal() {
        'l ouverture fait un petit son qui MONTE : ' + JSON.stringify(notes));
   dire(lecteur.src === '', 'et la lecture a rendu la session audio AVANT le micro : '
        + 'sinon, sur iOS, le micro capte du silence sans rien signaler');
-  dire(enregistreurs.length === 1 && enregistreurs[0].etat === 'recording', 'et l enregistrement demarre');
+  dire(enregistreurs.length === 1 && enregistreurs[0].state === 'recording', 'et l enregistrement demarre');
   dire(btnDicter.getAttribute('aria-pressed') === 'true', 'le bouton le montre');
   dire(/j.écoute/.test(document.getElementById('note-barre').textContent || ''),
        'et la barre dit quoi faire : ' + document.getElementById('note-barre').textContent);
@@ -2271,7 +2271,7 @@ async function testerRelaisVocal() {
   // Appuyer encore : l enregistrement s arrete et PART vers le PC.
   notes.length = 0;
   btnDicter.onclick(); await pause();
-  dire(enregistreurs[0].etat === 'inactive', 'un second appui arrete l enregistrement');
+  dire(enregistreurs[0].state === 'inactive', 'un second appui arrete l enregistrement');
   dire(notes.length === 2 && notes[1] < notes[0],
        'la fermeture fait le meme son a l envers, qui DESCEND : ' + JSON.stringify(notes));
   dire(requetes.length === 1 && /\/audio$/.test(requetes[0].url),
@@ -2401,6 +2401,66 @@ async function testerRelaisVocal() {
   dire(microDemandes === 0 && /https/.test(document.getElementById('note-barre').textContent || ''),
        'en http, on explique au lieu de tenter : ' + document.getElementById('note-barre').textContent);
   isSecureContext = true; noteBarre(null);
+
+  // ---- le micro survit a un aller-retour hors de la page ----------------------------------
+  // Le defaut vecu : on parle, on bascule sur une autre application du telephone, on revient
+  // sur la meme conversation — et le micro ne repond plus. Il fallait QUITTER la conversation
+  // et y revenir, c est-a-dire recharger la page, pour le retrouver. Trois cas, trois portes.
+  titre('micro : partir de la page et revenir');
+  brancher(); ouvrirSock(); await pause();
+  DELAI_GARDE_ARRET = 10;        // le deblocage se verifie, le delai ne se dort pas
+
+  // 1. PARTIR pendant qu on parle : l enregistrement s arrete tout seul et PART. Ce qu on a
+  //    dit avant de basculer est sauve, et il ne reste aucun enregistreur derriere.
+  recorderZombie = false;
+  noteBarre(null); enregistreurs.length = 0; requetes.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(vocalEnCours === true, 'on parle');
+  document.visibilityState = 'hidden';
+  declencher('visibilitychange'); await pause();
+  dire(vocalEnCours === false, 'basculer ailleurs ferme l enregistrement au lieu de le geler');
+  dire(requetes.length === 1 && /\/audio$/.test(requetes[0].url),
+       'et ce qui a ete dit part quand meme vers le PC');
+  document.visibilityState = 'visible';
+  declencher('visibilitychange'); await pause();
+  dire(btnDicter.getAttribute('aria-pressed') === 'false',
+       'au retour, le bouton est pret — sans rien recharger');
+
+  // 2. L onglet est TUE sans preavis : pas de `hidden`, donc la sortie propre n a pas eu lieu.
+  //    Au retour, un enregistrement se croit en cours alors que l OS a repris le micro. C est
+  //    LE cas qui bloquait tout : `onstop` ne viendra jamais, et le bouton proposait
+  //    « arreter » sur un enregistreur mort.
+  noteBarre(null); enregistreurs.length = 0; requetes.length = 0; pistesMicro.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(vocalEnCours === true, 'un enregistrement est en cours quand on part');
+  pistesMicro.forEach(t => { t.readyState = 'ended'; });   // l OS a repris le micro
+  recorderZombie = true;                                   // et l enregistreur ne rend rien
+  declencher('visibilitychange'); await pause();           // on revient, visible
+  dire(vocalEnCours === false,
+       'au retour, un enregistrement mort est solde au lieu de bloquer le bouton');
+  dire(btnDicter.getAttribute('aria-pressed') === 'false', 'le bouton redevient utilisable');
+  dire(/de nouveau prêt/.test(document.getElementById('note-barre').textContent || ''),
+       'et on dit pourquoi : ' + document.getElementById('note-barre').textContent);
+
+  // 3. Et surtout : on doit pouvoir REPARLER tout de suite. Un deblocage qui laisse le micro
+  //    inutilisable n a rien debloque.
+  recorderZombie = false; microDemandes = 0; noteBarre(null);
+  btnDicter.onclick(); await pause();
+  dire(microDemandes === 1 && vocalEnCours === true,
+       'et on repart aussitot : le micro se rouvre sans recharger la page');
+  btnDicter.onclick(); await pause();
+
+  // 4. Un enregistreur qui accepte `stop()` et ne rappelle jamais. Sans garde-temps, le
+  //    bouton restait sur « arreter » pour toujours — meme en restant sur la page.
+  noteBarre(null); enregistreurs.length = 0; recorderZombie = false;
+  btnDicter.onclick(); await tick();
+  recorderZombie = true;                  // il gele juste avant qu on relache
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === false,
+       'un enregistreur qui ne rend pas la main est abandonne au bout du garde-temps');
+  dire(/réinitialisé/.test(document.getElementById('note-barre').textContent || ''),
+       'et le dit : ' + document.getElementById('note-barre').textContent);
+  recorderZombie = false; noteBarre(null); DELAI_GARDE_ARRET = 1500;
 
   // ---- annuler un vocal en cours d envoi --------------------------------------------------
   // On vient de parler, on s entend dire une betise, on se ravise. Il faut pouvoir revenir
