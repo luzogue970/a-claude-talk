@@ -2175,6 +2175,10 @@ const GROUPES = [
     { g: "permission", lib: "permission",  quoi: "une autorisation demandée, et ta réponse" },
   ]},
   { nom: "Système", aide: "l'état de la machinerie — utile quand quelque chose cloche", genres: [
+    // Le fil porte des messages que la machine insère sous le rôle « user » : fin de tâche
+    // de fond, résumé de compactage, commande locale. Ils s'affichaient en « toi », et
+    // signaient donc à ta place. Genre à part, parce qu'ils ne sont ni toi ni Claude.
+    { g: "systeme",     lib: "machine", quoi: "ce que la machine a inséré dans le fil : fin de tâche de fond, compactage, commande locale" },
     { g: "session",     lib: "session", quoi: "l'identifiant de session, celui qui sert à reprendre" },
     { g: "reprise",     lib: "reprise", quoi: "le rechargement d'une conversation précédente" },
     { g: "quota_seuil", lib: "quota",   quoi: "franchissement d'un palier de rate limit" },

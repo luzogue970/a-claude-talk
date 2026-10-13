@@ -811,6 +811,13 @@ def tout_genre_affiche_a_un_filtre():
         texte = (racine / fichier).read_text(encoding="utf-8")
         publies |= set(re.findall(r'(?:publier|_voir)\(\s*"([a-z_]+)"', texte))
 
+    # La relecture d'une session publie elle aussi des lignes de flux, mais en dictionnaires
+    # et non par `_voir` : sans cette passe, tout le chemin de reprise echappait au controle.
+    # Il n'a tenu que par accident — « toi » et « outil » existent aussi en direct. Un genre
+    # qui n'aurait existe qu'au rejeu serait ne invisible, sans qu'aucun test le voie.
+    rejeu = (racine / "journal.py").read_text(encoding="utf-8")
+    publies |= set(re.findall(r'"genre":\s*"([a-z_]+)"', rejeu))
+
     page = (racine / "tableau.py").read_text(encoding="utf-8")
     declares = set(re.findall(r'\{\s*g:\s*"([a-z_]+)"', page))
     # Les genres traites avant `ajouter()` ne deviennent jamais une ligne du flux : ils
