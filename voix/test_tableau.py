@@ -571,12 +571,22 @@ async def l_etat_se_lit_sans_page():
         dire(d["etat"] == "thinking", "l'etat de l'agent aussi")
         dire(d["session"]["titre"] == "refonte des cartes", "et le titre de la conversation")
 
-        t.publier("travail", actif=False)
+        dire(d["fin"] == 0, "tant que le tour dure, aucune fin n'est datee")
+
+        t.publier("travail", actif=False, reponse="Les cartes sont refaites, relis la deuxième.")
         async with aiohttp.ClientSession() as s:
             async with s.get(url + "/etat.json") as r:
                 d2 = _json.loads(await r.text())
         dire(d2["travail"] is False, "la fin du travail se lit aussitot — c'est le signal attendu")
         dire(d2["inactif"] >= 0, f"et l'inactivite est mesuree ({d2['inactif']} s)")
+        # Un superviseur qui ne passe que toutes les quinze secondes manquait les tours
+        # plus courts : il n'avait jamais vu le travail commencer. Une date de fin qui
+        # change se voit a n'importe quelle cadence.
+        import time as _time
+        dire(abs(d2["fin"] - _time.time()) < 5,
+             f"la fin du dernier tour est datee en temps d'horloge ({d2['fin']:.0f})")
+        dire(d2["reponse"].startswith("Les cartes sont refaites"),
+             "et un extrait de la reponse voyage avec, pour une notification qui dit quoi")
 
         # L'entretien ne fait pas une session active. La consommation des moteurs se
         # republie toutes les vingt secondes : si elle comptait, une session oubliee

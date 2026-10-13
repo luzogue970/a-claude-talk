@@ -2841,6 +2841,46 @@ async function testerReouverture() {
 // ---- ce qui ne se verifie qu'apres une echeance -----------------------------------------
 // Deux comportements ne sont vrais QUE dans le temps : une sonde sans reponse, et le renvoi
 // d'un message apres le rejeu. Les verifier en synchrone reviendrait a tester autre chose.
+// ---- les taches de fond se detaillent au toucher ----------------------------------------
+// Mesure du 13 octobre 2026 : un workflow de six agents tournait sur insnap, et la page du
+// telephone n'en disait rien — le detail n'existait qu'au survol, qui n'existe pas au doigt.
+titre('tâches de fond : le téléphone voit QUOI tourne, pas seulement QUE ça tourne');
+encours.clear();
+tachesFond = [];
+fondOuvert = false;
+emettre({ genre: 'fond', taches: [{ id: 'wf9', nom: 'Workflow', cible: 'Veille terrain',
+  depuis: Date.now() / 1000 - 90,
+  agents: [
+    { id: 'a1', nom: 'veille:snapchat', phase: 'Veille', etat: 'fini' },
+    { id: 'a2', nom: 'veille:discord', phase: 'Veille', etat: 'en cours' },
+    { id: 'a3', nom: 'mesure:snap', phase: 'Mesure', etat: 'en cours' } ] }] });
+const pastilleFond = zoneActivite.innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+dire(/1 en arrière-plan/.test(pastilleFond), 'la pastille dit qu une tâche tourne : ' + pastilleFond);
+dire(/2\/3 agents/.test(pastilleFond),
+     'et compte les agents encore en cours sur le total : ' + pastilleFond);
+const panneauFond = document.getElementById('fond-detail');
+dire(panneauFond.hidden === true, 'le panneau reste fermé tant qu on ne touche pas la pastille');
+basculerFond();
+dire(panneauFond.hidden === false, 'un toucher sur la pastille l ouvre');
+const texteFond = panneauFond.textContent.replace(/\s+/g, ' ').trim();
+dire(/veille:snapchat/.test(texteFond) && /veille:discord/.test(texteFond) && /mesure:snap/.test(texteFond),
+     'et il nomme chaque agent : ' + texteFond);
+dire(/Mesure/.test(texteFond) && /fini/.test(texteFond) && /en cours/.test(texteFond),
+     'avec sa phase et son état');
+dire(/Veille terrain/.test(texteFond) && /depuis 2 min/.test(texteFond),
+     'la tâche elle-même est nommée, avec son âge');
+dire(/<li class="fini">/.test(panneauFond.innerHTML) && /<li class="encours">/.test(panneauFond.innerHTML),
+     'un agent fini se distingue de ceux qui tournent');
+emettre({ genre: 'fond', taches: [] });
+dire(panneauFond.hidden === true && !/arrière-plan/.test(zoneActivite.innerHTML),
+     'plus rien ne tourne : la pastille et le panneau disparaissent ensemble');
+emettre({ genre: 'fond', taches: [{ id: 'b1', nom: 'Bash', cible: 'npm test', depuis: Date.now() / 1000 }] });
+dire(/1 en arrière-plan/.test(zoneActivite.innerHTML) && !/agent/.test(zoneActivite.innerHTML),
+     'une commande en fond sans agent ne parle pas d agents');
+dire(panneauFond.hidden === false && /npm test/.test(panneauFond.textContent),
+     'et le panneau, laissé ouvert, se rouvre avec la tâche suivante');
+fondOuvert = false; tachesFond = []; majActivite();
+
 setTimeout(() => {
   titre('sonde sans reponse, et message renvoye');
 

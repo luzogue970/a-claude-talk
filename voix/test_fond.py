@@ -242,6 +242,118 @@ def un_outil_ordinaire_traverse_sans_rien_allumer():
     dire(w._tableau.dernier("outil")["fond"] is False, "la ligne dit explicitement « pas en fond »")
 
 
+# --- 3. les outils qui travaillent en fond sans le dire ----------------------------------
+#
+# Mesure du 13 octobre 2026 : un workflow de six agents a tourné vingt minutes sur la
+# conversation insnap sans qu'une seule pastille s'allume. `Agent` et `Workflow` ne posent
+# pas `run_in_background` ; seul leur retour dit qu'ils continuent.
+
+def un_agent_delegue_s_allume_sans_le_drapeau():
+    print("\n=== un agent délégué s'allume même sans « run_in_background » ===")
+    w = neuf()
+    w._attente_fond["toolu_a"] = ("Agent", "Explorer les tests")
+    w._fond_resultat("toolu_a", "Async agent launched successfully.\nagentId: a9f0c1b2\n"
+                                "Use TaskOutput to read its result.")
+    dire(taches(w) == ["a9f0c1b2"],
+         f"l'agent lancé en fond est suivi sous son identifiant : {taches(w)}")
+
+    w2 = neuf()
+    w2._attente_fond["toolu_b"] = ("Agent", "Relire le module")
+    w2._fond_resultat("toolu_b", "Voici mon rapport : tout est conforme, rien à signaler.")
+    dire(w2._fond == {} and w2._tableau.tous("fond") == [],
+         "un agent au premier plan rend son rapport : il a fini, rien ne s'allume")
+
+    w3 = neuf()
+    w3._attente_fond["toolu_c"] = ("Workflow", "Veille terrain")
+    w3._fond_resultat("toolu_c", "Workflow launched in background. Task ID: w7c7dxs4d\n"
+                                 "Summary: six veilles\nTranscript dir: /tmp/nulle-part/wf_1\n"
+                                 "Script file: /tmp/x.js")
+    dire(taches(w3) == ["w7c7dxs4d"],
+         f"un workflow est suivi sous l'identifiant de sa tâche : {taches(w3)}")
+    dire(w3._suivis == {},
+         "hors boucle d'événements, pas de lecteur de journal — et pas de plantage")
+
+
+def les_agents_d_un_workflow_se_lisent_dans_son_journal():
+    print("\n=== les agents d'un workflow se lisent dans son journal ===")
+    from worker import agents_du_journal
+    journal = (
+        '{"type":"launched"}\n'
+        '{"type":"started","key":"k1","agentId":"a1","label":"veille:snapchat","phase":"Veille"}\n'
+        '{"type":"started","key":"k2","agentId":"a2","label":"veille:discord","phase":"Veille"}\n'
+        '{"type":"result","key":"k1","agentId":"a1","result":{"verdict":"ok"}}\n'
+        '{"type":"started","key":"k3","agentId":"a3","label":"mesure:snap","phase":"Mesure"}\n'
+        '{"type":"failed","key":"k2","error":"boom"}\n'
+        '{"type":"started","key":"k4","agentId":"a4","lab'
+    )
+    agents = agents_du_journal(journal)
+    dire([a["nom"] for a in agents] == ["veille:snapchat", "veille:discord", "mesure:snap"],
+         f"chaque agent démarré est nommé par son libellé : {[a['nom'] for a in agents]}")
+    dire([a["etat"] for a in agents] == ["fini", "échoué", "en cours"],
+         f"et porte son état — fini, échoué, en cours : {[a['etat'] for a in agents]}")
+    dire(agents[2]["phase"] == "Mesure", "la phase de l'orchestration est dite")
+    dire(len(agents) == 3, "la dernière ligne, coupée au milieu, n'est ni comptée ni fatale")
+    dire(agents_du_journal("") == [] and agents_du_journal("pas du json\n[]\n") == [],
+         "un journal vide ou illisible ne donne aucun agent, sans erreur")
+
+
+def le_workflow_montre_ses_agents_puis_s_eteint():
+    print("\n=== fonctionnel : je vois les agents du workflow tourner, puis finir ===")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        journal = Path(d) / "journal.jsonl"
+        journal.write_text('{"type":"launched"}\n{"type":"started","key":"k1","agentId":"a1",'
+                           '"label":"veille:snapchat","phase":"Veille"}\n', encoding="utf-8")
+        w = neuf()
+        w.PAS_SUIVI = 0.05
+
+        async def scenario():
+            # Tour 1 : Claude lance un workflow — sans drapeau — et termine son tour.
+            w.client = FauxClient([
+                AssistantMessage(content=[ToolUseBlock(
+                    id="toolu_w", name="Workflow",
+                    input={"script": "export const meta = {}"})], model="opus"),
+                UserMessage(content=[ToolResultBlock(
+                    tool_use_id="toolu_w",
+                    content=f"Workflow launched in background. Task ID: wf9\n"
+                            f"Summary: veille\nTranscript dir: {d}\nScript file: x.js")]),
+                AssistantMessage(content=[TextBlock(text="Je lance la veille.")], model="opus"),
+                fin(),
+            ])
+            await w._drainer_boucle()
+            await asyncio.sleep(0.15)
+            dire(w.occupe is False and taches(w) == ["wf9"],
+                 "le tour est fini et le workflow reste allumé")
+            agents = w._tableau.dernier("fond")["taches"][0]["agents"]
+            dire([a["nom"] for a in agents] == ["veille:snapchat"],
+                 f"la page sait déjà quel agent tourne : {[a['nom'] for a in agents]}")
+
+            # L'orchestration avance : un agent finit, un autre démarre.
+            with journal.open("a", encoding="utf-8") as f:
+                f.write('{"type":"result","key":"k1","agentId":"a1","result":{}}\n'
+                        '{"type":"started","key":"k2","agentId":"a2","label":"mesure:snap",'
+                        '"phase":"Mesure"}\n')
+            await asyncio.sleep(0.2)
+            agents = w._tableau.dernier("fond")["taches"][0]["agents"]
+            dire([(a["nom"], a["etat"]) for a in agents]
+                 == [("veille:snapchat", "fini"), ("mesure:snap", "en cours")],
+                 "sans rien demander, la page voit le premier fini et le second en cours")
+
+            # Tour 2 : la notification de fin arrive, un tour plus tard.
+            w.client = FauxClient([
+                UserMessage(content="<task-notification><task-id>wf9</task-id>"
+                                    "<status>completed</status></task-notification>"),
+                AssistantMessage(content=[TextBlock(text="La veille est finie.")], model="opus"),
+                fin(2),
+            ])
+            await w._drainer_boucle()
+            dire(taches(w) == [], "la notification éteint la pastille")
+            dire(w._suivis == {}, "et arrête le lecteur du journal avec elle")
+
+        asyncio.run(scenario())
+
+
 def main():
     la_tache_s_ouvre_sur_son_PROPRE_identifiant()
     sans_identifiant_lisible_on_retombe_sur_celui_de_l_outil()
@@ -252,6 +364,9 @@ def main():
     le_parcours_entier_d_un_travail_en_fond()
     une_notification_en_simple_chaine_est_vue_aussi()
     un_outil_ordinaire_traverse_sans_rien_allumer()
+    un_agent_delegue_s_allume_sans_le_drapeau()
+    les_agents_d_un_workflow_se_lisent_dans_son_journal()
+    le_workflow_montre_ses_agents_puis_s_eteint()
     print("\nTOUT VERT" if ok else "\nDES ECHECS")
     sys.exit(0 if ok else 1)
 

@@ -9,6 +9,7 @@ last paragraph of text.
 """
 
 import asyncio
+import json
 import re
 import time
 import logging
@@ -261,8 +262,58 @@ class Journal:
                 f"les dernières : " + ", ".join(lignes[-3:]))
 
 
+# Les outils qui travaillent en fond SANS le dire dans leurs arguments. `Agent` et
+# `Workflow` ne posent pas `run_in_background` : le premier rend « Async agent launched
+# successfully … agentId: … », le second « Workflow launched in background. Task ID: … ».
+# Mesure du 13 octobre 2026 : un workflow de six agents a tourne vingt minutes sur la
+# conversation insnap sans qu'une seule pastille s'allume — la page le donnait pour fini.
+FOND_IMPLICITE = ("Agent", "Workflow")
+
+# Ce que le retour immediat d'un outil de fond dit de l'identifiant de la tache. C'est CET
+# identifiant que portera la notification de fin, jamais celui de l'outil.
+_MARQUE_FOND = re.compile(r"\(ID: ([A-Za-z0-9_-]+)\)|agentId: ([A-Za-z0-9_-]+)"
+                          r"|Task ID: ([A-Za-z0-9_-]+)")
+_DOSSIER_FOND = re.compile(r"Transcript dir: (\S+)")
+
+_ETATS_AGENT = {"result": "fini", "failed": "échoué"}
+
+
+def agents_du_journal(texte: str) -> list[dict]:
+    """Les agents d'un workflow, lus dans son `journal.jsonl` : qui tourne, qui a fini.
+
+    Le CLI y ecrit une ligne par evenement — `started` avec le libelle et la phase de
+    l'agent, puis `result` ou `failed`. On ne lit que les lignes TERMINEES : la derniere
+    peut etre en cours d'ecriture, et un JSON coupe au milieu n'est pas une erreur, c'est
+    une ligne qu'on relira au prochain passage.
+    """
+    agents: dict[str, dict] = {}
+    par_cle: dict[str, str] = {}
+    for ligne in texte.split("\n")[:-1]:
+        try:
+            e = json.loads(ligne)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        genre = e.get("type")
+        if genre == "started":
+            ident = str(e.get("agentId") or e.get("key") or len(agents))
+            par_cle[str(e.get("key"))] = ident
+            agents[ident] = {"id": ident, "nom": str(e.get("label") or "agent"),
+                             "phase": str(e.get("phase") or ""), "etat": "en cours"}
+        elif genre in _ETATS_AGENT:
+            ident = str(e.get("agentId") or par_cle.get(str(e.get("key"))) or "")
+            if ident in agents:
+                agents[ident]["etat"] = _ETATS_AGENT[genre]
+    return list(agents.values())
+
+
 class Worker:
     """A long-lived Claude Code session plus an event queue the voice layer drains."""
+
+    # Cadence de relecture du journal d'un workflow. Deux secondes : un agent qui finit se
+    # voit sans attendre, et relire quelques lignes coute moins qu'un battement de la page.
+    PAS_SUIVI = 2.0
 
     def __init__(self, on_permission=None, on_question=None, tableau=None,
                  conversation=None):
@@ -274,6 +325,9 @@ class Worker:
         # tout l'interet, la notification de fin arrive apres.
         self._fond: dict[str, dict] = {}
         self._attente_fond: dict[str, tuple[str, str]] = {}
+        # Un lecteur par workflow : il relit le journal de l'orchestration pour dire
+        # quels agents tournent. S'arrete avec la tache, jamais avant.
+        self._suivis: dict[str, asyncio.Task] = {}
         self._on_permission = on_permission
         self._on_question = on_question
         self._tableau = tableau
@@ -312,14 +366,21 @@ class Worker:
 
     def _fond_publier(self):
         self._voir("fond", taches=[
-            {"id": c, "nom": t["nom"], "cible": t["cible"], "depuis": t["depuis"]}
+            {"id": c, "nom": t["nom"], "cible": t["cible"], "depuis": t["depuis"],
+             "agents": t.get("agents") or []}
             for c, t in self._fond.items()
         ])
 
-    def _fond_ouvrir(self, cle: str, nom: str, cible: str):
+    def _fond_ouvrir(self, cle: str, nom: str, cible: str, journal: str = ""):
         if cle in self._fond:
             return
         self._fond[cle] = {"nom": nom, "cible": cible, "depuis": time.time()}
+        if journal:
+            try:
+                self._suivis[cle] = asyncio.get_running_loop().create_task(
+                    self._fond_suivre(cle, Path(journal) / "journal.jsonl"))
+            except RuntimeError:
+                pass   # hors boucle : on saura QUE ca tourne, pas qui
         self._fond_publier()
 
     def _fond_fermer(self, *cles: str) -> bool:
@@ -327,9 +388,32 @@ class Worker:
         for cle in cles:
             if cle and self._fond.pop(cle, None) is not None:
                 parti = True
+            if suivi := self._suivis.pop(cle, None):
+                suivi.cancel()
         if parti:
             self._fond_publier()
         return parti
+
+    async def _fond_suivre(self, cle: str, journal: Path):
+        """Relire le journal d'un workflow tant que la tache est ouverte.
+
+        Savoir QU'un workflow tourne suffit a ne pas repondre trop tot ; savoir QUELS agents
+        tournent, et lesquels ont fini, c'est ce qu'on venait voir sur la page. Le journal
+        est petit — une ligne par agent — et se relit entier : plus simple qu'un curseur,
+        et une ligne coupee au milieu n'est jamais perdue, seulement relue.
+        """
+        dernier: list[dict] | None = None
+        limite = time.monotonic() + 6 * 3600
+        while cle in self._fond and time.monotonic() < limite:
+            try:
+                agents = agents_du_journal(journal.read_text(encoding="utf-8"))
+            except OSError:
+                agents = []
+            if agents != dernier:
+                dernier = agents
+                self._fond[cle]["agents"] = agents
+                self._fond_publier()
+            await asyncio.sleep(self.PAS_SUIVI)
 
     def _fond_resultat(self, tool_id: str, texte: str):
         """Le retour immediat d'un outil lance en fond : il porte l'identifiant de la tache.
@@ -343,9 +427,17 @@ class Worker:
         if not attendu:
             return
         nom, cible = attendu
-        m = re.search(r"\(ID: ([A-Za-z0-9_-]+)\)|agentId: ([A-Za-z0-9_-]+)", texte or "")
-        cle = (m.group(1) or m.group(2)).strip() if m else tool_id
-        self._fond_ouvrir(cle, nom, cible)
+        m = _MARQUE_FOND.search(texte or "")
+        if m:
+            cle = next(g for g in m.groups() if g).strip()
+        elif nom in FOND_IMPLICITE:
+            # Un agent lance au premier plan rend son rapport, pas un identifiant : il a
+            # deja fini, il n'y a rien a suivre.
+            return
+        else:
+            cle = tool_id
+        d = _DOSSIER_FOND.search(texte or "")
+        self._fond_ouvrir(cle, nom, cible, journal=d.group(1) if d else "")
 
     def _fond_notifie(self, texte: str):
         """Une notification de fin, qui arrive un tour plus tard — ou jamais."""
@@ -697,7 +789,7 @@ class Worker:
                         # de suite, le travail continue ». On ne peut pas encore ouvrir la
                         # ligne — l'identifiant de la tache n'existera qu'au retour.
                         en_fond = bool(args.get("run_in_background"))
-                        if en_fond:
+                        if en_fond or block.name in FOND_IMPLICITE:
                             self._attente_fond[block.id] = (block.name, entree[1])
                         self._voir("outil", nom=block.name, cible=entree[1], args=args,
                                    id=block.id, fond=en_fond)
@@ -746,7 +838,10 @@ class Worker:
                 for refus in message.permission_denials or []:
                     self.journal.refus.append(str(getattr(refus, "tool_name", refus)))
                 self.occupe = False
-                self._voir("travail", actif=False)
+                # L'extrait voyage avec l'etat : c'est ce qu'une notification de fin de
+                # tour peut montrer sans ouvrir la page.
+                reponse = " ".join(self.journal.textes[-1].split()) if self.journal.textes else ""
+                self._voir("travail", actif=False, reponse=reponse[:200])
                 await self._rendre_le_modele()
                 # La raison part avec le bilan, pas dans une ligne separee : cherchee, elle
                 # l'est au moment ou l'on regarde pourquoi le tour s'est termine comme ca.
@@ -1167,5 +1262,8 @@ class Worker:
     async def stop(self):
         if self._pompe:
             self._pompe.cancel()
+        for suivi in self._suivis.values():
+            suivi.cancel()
+        self._suivis.clear()
         if self.client:
             await self.client.disconnect()

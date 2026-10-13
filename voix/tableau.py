@@ -562,11 +562,21 @@ class Tableau:
         for genre, e in etat.items():
             if genre not in BRUIT:
                 dernier = max(dernier, e.get("t") or 0.0)
+        travail = etat.get("travail") or {}
+        # La fin du dernier tour, en temps d'horloge : un superviseur qui ne passe que
+        # toutes les quinze secondes manquait les tours plus courts que ca — il n'avait
+        # jamais vu « travail » vrai, donc jamais vu sa fin. Une date qui change, elle, se
+        # voit a n'importe quelle cadence. Zero tant qu'un tour est en cours.
+        fin = 0.0
+        if not travail.get("actif") and travail.get("t") is not None:
+            fin = round(time.time() - (time.monotonic() - self._t0) + float(travail["t"]), 1)
         return web.json_response({
             "projet": valeurs.get("projet", ""),
             "port": self.port,
             "etat": (etat.get("etat") or {}).get("vers", ""),
-            "travail": bool((etat.get("travail") or {}).get("actif")),
+            "travail": bool(travail.get("actif")),
+            "fin": fin,
+            "reponse": str(travail.get("reponse") or "")[:200],
             "micro": bool((etat.get("micro") or {}).get("actif")),
             "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
             # Une question posée et pas encore répondue. Publié ici parce que c'est ce que
@@ -1688,6 +1698,17 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 .act.fond::before{border-top-color:#d2b7ff}
 .puce-fond{margin-left:6px;padding:0 5px;border-radius:4px;font-size:.72em;
   background:#8957e530;color:#d2b7ff;border:1px solid var(--permission);white-space:nowrap}
+/* La pastille se touche : au survol le detail est dans l'infobulle, mais un telephone n'a
+   pas de survol, et c'est la qu'on regarde le plus souvent ce qui tourne. */
+.act.fond{cursor:pointer}
+#fond-detail{margin:6px 10px 0;padding:6px 10px;border:1px solid var(--permission);
+  border-radius:8px;background:#8957e514;font-size:.86em;line-height:1.5}
+#fond-detail .tache+.tache{margin-top:6px;padding-top:6px;border-top:1px solid #ffffff14}
+#fond-detail ul{margin:2px 0 0;padding-left:16px}
+#fond-detail li.encours{color:#d2b7ff}
+#fond-detail li.fini{opacity:.55}
+#fond-detail li.echoue{color:#f08080}
+#fond-detail small{opacity:.7;margin-left:4px}
 #travail::before{content:"⟳ ";display:inline-block;animation:tourne 1.1s linear infinite}
 /* Un indicateur qui tourne AFFIRME qu'il se passe quelque chose. Liaison coupee, on ne sait
    plus : il s'arrete, et perd sa couleur, plutot que de continuer a jouer l'activite. */
@@ -2006,6 +2027,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     </span>
   </div>
 </header>
+<!-- Ce que chaque tache de fond fait, et pour un workflow, ses agents un par un. Sur un
+     telephone le survol n'existe pas : c'est le toucher sur la pastille qui ouvre ce
+     panneau, et il se referme seul quand plus rien ne tourne. -->
+<div id="fond-detail" hidden></div>
 <main id="flux"></main>
 <button id="bas">↓ suivre</button>
 <div id="saisie-barre">
@@ -2685,6 +2710,7 @@ function battre(nom) {
 }
 
 const zoneActivite = document.getElementById("activite");
+const zoneFond = document.getElementById("fond-detail");
 const LIB_ACT = { stt: "transcription", pensee: "réflexion", voix: "parole" };
 // Sur un moteur sans texte en direct, l'attente de transcription est la seule chose qui se
 // passe pendant plusieurs secondes. Sans ce libellé, la page semble figée puis du texte
@@ -2707,14 +2733,55 @@ function majActivite() {
   if (tachesFond.length) {
     const n = tachesFond.length;
     // Le detail au survol : savoir QUE ca tourne suffit a ne pas repondre trop tot, savoir
-    // QUOI tourne evite d'avoir a le demander.
+    // QUOI tourne evite d'avoir a le demander. Un workflow en plus compte ses agents :
+    // « 2/6 » dit d'un coup d'oeil ou en est l'orchestration.
     const detail = tachesFond
       .map(t => (t.nom || "tâche") + (t.cible ? " · " + t.cible : "")).join("\n");
-    bouts.unshift('<span class="act fond" title="' + detail.replace(/"/g, "&quot;")
-      + '">' + n + ' en arrière-plan</span>');
+    const agents = tachesFond.flatMap(t => t.agents || []);
+    const actifs = agents.filter(a => a.etat === "en cours").length;
+    const lib = n + " en arrière-plan" + (agents.length
+      ? " · " + actifs + "/" + agents.length + (agents.length > 1 ? " agents" : " agent") : "");
+    bouts.unshift('<span class="act fond" role="button" title="' + detail.replace(/"/g, "&quot;")
+      + '">' + lib + '</span>');
   }
   zoneActivite.innerHTML = bouts.join("");
+  majFondDetail();
   majCogitation();
+}
+
+// Le panneau sous l'en-tete : ouvert au toucher de la pastille, ferme de lui-meme quand
+// plus rien ne tourne. Il nomme chaque tache, et pour un workflow chacun de ses agents avec
+// sa phase et son etat — c'est ce qu'on venait voir, sans descendre dans le flux.
+let fondOuvert = false;
+function basculerFond() { fondOuvert = !fondOuvert; majFondDetail(); }
+function depuisTexte(epoque) {
+  if (!epoque) return "";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - epoque));
+  if (s < 60) return "depuis " + s + " s";
+  if (s < 3600) return "depuis " + Math.round(s / 60) + " min";
+  return "depuis " + (s / 3600).toFixed(1).replace(/\.0$/, "") + " h";
+}
+function majFondDetail() {
+  if (!zoneFond) return;
+  if (!fondOuvert || !tachesFond.length) { zoneFond.hidden = true; zoneFond.innerHTML = ""; return; }
+  zoneFond.innerHTML = tachesFond.map(t => {
+    const agents = (t.agents || []).map(a => {
+      const classe = a.etat === "fini" ? "fini" : a.etat === "échoué" ? "echoue" : "encours";
+      return '<li class="' + classe + '">' + ech(a.nom)
+        + (a.phase ? ' <small>' + ech(a.phase) + '</small>' : '')
+        + ' <small>' + ech(a.etat) + '</small></li>';
+    }).join("");
+    return '<div class="tache"><b>' + ech(t.nom || "tâche") + '</b>'
+      + (t.cible ? ' · ' + ech(t.cible) : '') + ' <small>' + depuisTexte(t.depuis) + '</small>'
+      + (agents ? '<ul>' + agents + '</ul>' : '') + '</div>';
+  }).join("");
+  zoneFond.hidden = false;
+}
+if (zoneActivite && zoneActivite.addEventListener) {
+  zoneActivite.addEventListener("click", e => {
+    const cible = e && e.target && e.target.closest ? e.target.closest(".fond") : null;
+    if (cible) basculerFond();
+  });
 }
 
 // Les deltas s'agrègent dans une seule ligne : un jeton par ligne serait illisible et
