@@ -2960,6 +2960,139 @@ setTimeout(() => {
     dire(!envoyes.some(o => o.cmd === 'texte' && o.texte === 'deuxieme message'),
          'un message dont l echo revient dans le rejeu n est PAS reposte');
 
+
+// ---- le bandeau de lecture : pause, reprise, retour au debut ------------------------------
+// On lance une lecture d une minute, et il faut pouvoir l arreter net sans la perdre : le
+// telephone sonne, quelqu un parle. Avant, la seule issue etait « couper », donc tout
+// reecouter depuis le debut — autant dire ne pas reecouter.
+async function testerBandeauLecture() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  // Des microtaches, et surtout PAS un tick : la doublure audio fait finir le son au
+  // premier tour de boucle. Pour verifier une pause, il faut appuyer pendant que ca joue.
+  const microtaches = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+  titre('bandeau de lecture : mettre en pause, reprendre, revenir au debut');
+
+  couperLectureLocale(); noteBarre(null);
+  const barre = document.getElementById('lecture-barre');
+  const bPause = document.getElementById('lec-pause');
+  const bDebut = document.getElementById('lec-debut');
+  const bCouper = document.getElementById('lec-couper');
+  const jauge = document.getElementById('lecture-jauge');
+  dire(!!barre && barre.hidden, 'rien ne se lit : le bandeau ne mange aucune place');
+
+  recevoir({ genre: '_histoire', evenements: [
+    { genre: 'texte', texte: 'Premiere phrase du debrief. Deuxieme phrase, plus longue, qui tient la lecture.',
+      n: 99500, h: '09:00', passe: true },
+  ] });
+  const ligne = dernier;
+  const ecouter = ligne.zoneEcoute.children[0];
+
+  // --- la lecture par Azure : un vrai son, donc une vraie pause ---------------------------
+  joues.length = 0; requetes.length = 0; azureMarche = true;
+  ecouter.onclick();
+  await microtaches();
+  dire(!barre.hidden, 'des qu une lecture part, le bandeau se pose par-dessus le flux');
+  dire(!bPause.hidden && /pause/.test(bPause.textContent),
+       'avec un bouton pause en evidence : ' + bPause.textContent);
+  dire(/debut/.test(bDebut.textContent.normalize('NFD').replace(/[̀-ͯ]/g, '')),
+       'un bouton pour revenir au debut : ' + bDebut.textContent);
+  dire(/couper/.test(bCouper.textContent), 'et un bouton pour couper : ' + bCouper.textContent);
+  dire(lecteur.paused === false, 'et le son joue pour de bon');
+
+  lecteur.currentTime = 5;
+  if (lecteur.ontimeupdate) lecteur.ontimeupdate();
+  const trait = jauge.querySelector('i');
+  dire(!jauge.hidden && parseFloat(trait.style.width) > 40 && parseFloat(trait.style.width) < 45,
+       'la jauge dit ou on en est : ' + trait.style.width);
+
+  bPause.onclick();
+  dire(lecteur.paused === true, 'appuyer sur pause suspend VRAIMENT le son');
+  dire(/reprendre/.test(bPause.textContent),
+       'et le meme bouton propose de reprendre : ' + bPause.textContent);
+  await tick(); await tick();
+  dire(!barre.hidden && lectureLocale,
+       'une lecture en pause ne se termine pas toute seule : le bandeau reste la');
+
+  bPause.onclick();
+  dire(lecteur.paused === false, 'rappuyer relance le son');
+  dire(lecteur.currentTime === 5, 'la ou on s etait arrete, et pas au debut');
+  dire(/pause/.test(bPause.textContent) && !/reprendre/.test(bPause.textContent),
+       'le bouton redevient « pause »');
+
+  joues.length = 0; requetes.length = 0;
+  lecteur.currentTime = 7;
+  bDebut.onclick();
+  dire(lecteur.currentTime === 0, '« au debut » rembobine');
+  dire(joues.length === 1 && lecteur.paused === false, 'et la lecture repart');
+  dire(requetes.filter(r => /preparer$/.test(r.url)).length === 0,
+       'sans redemander la synthese : le son est deja la, et il est deja paye');
+
+  bCouper.onclick();
+  dire(barre.hidden && !lectureLocale, '« couper » arrete tout et rend la place a la page');
+  dire(!lecteur.src,
+       'et rend la session audio : sinon le micro ouvert ensuite n enregistrerait que du silence');
+
+  // --- le piege iOS : une lecture EN PAUSE tient encore la session audio -------------------
+  // C est le cas qui ne se voyait pas. L element est en pause, le son s est tu, tout a l air
+  // termine — mais la categorie « lecture » est toujours posee, et la dictee qui suit rend
+  // trente secondes de silence que seul le PC signale.
+  joues.length = 0; azureMarche = true;
+  ecouter.onclick();
+  await microtaches();
+  bPause.onclick();
+  // Couper puis relancer aussitot, c est le geste meme du bandeau. La promesse de la
+  // lecture coupee se resolvait en retard et annonçait « plus rien ne se lit » : le son de
+  // la NOUVELLE jouait, et le bandeau venait de disparaitre.
+  dire(!barre.hidden && lectureLocale,
+       'couper puis relancer dans la foulee : la nouvelle lecture tient le bandeau');
+  dire(lecteur.paused && !barre.hidden, 'une lecture mise en pause, et on decide de dicter');
+  const microAvant = microAccorde;
+  microAccorde = false;            // la demande est refusee : on ne teste que l ordre
+  DELAI_SESSION_AUDIO = 0;
+  await demarrerVocal();
+  dire(!lecteur.src, 'dicter rend la session audio meme si la lecture etait en pause');
+  dire(barre.hidden && !lectureLocale, 'et le bandeau s efface : on ne lit plus, on parle');
+  microAccorde = microAvant; noteBarre(null);
+
+  // --- la voix du navigateur : meme bandeau, memes gestes ---------------------------------
+  azureMarche = false; dit.length = 0; synthEtat.length = 0;
+  ecouter.onclick();
+  await microtaches();
+  dire(!barre.hidden, 'sans Azure, la voix du navigateur donne le meme bandeau');
+  dire(jauge.hidden, 'mais pas de jauge : cette voix-la ne dit pas combien de temps elle parle');
+  bPause.onclick();
+  dire(synthEtat[synthEtat.length - 1] === 'pause', 'pause suspend la synthese du navigateur');
+  bPause.onclick();
+  dire(synthEtat[synthEtat.length - 1] === 'reprise', 'et rappuyer la reprend');
+
+  dit.length = 0;
+  bDebut.onclick();
+  dire(dit.some(t => /Premiere phrase/.test(t)), 'revenir au debut redit la premiere phrase');
+  dire(!barre.hidden && lectureLocale,
+       'et le bandeau NE disparait PAS sous le doigt — la lecture annulee n annonce pas la fin');
+  couperLectureLocale();
+  dire(barre.hidden, 'couper la synthese du navigateur range le bandeau aussi');
+  azureMarche = true;
+
+  // --- assis devant la machine : c est elle qui parle, on ne peut que l interrompre --------
+  const hoteVrai = location.hostname;
+  location.hostname = '127.0.0.1';
+  if (typeof socket === 'object' && socket) socket.readyState = 1;
+  lectureEnCours = 'p9'; majBoutonsLecture();
+  dire(!barre.hidden, 'une lecture sur les haut-parleurs du PC montre le bandeau elle aussi');
+  dire(bPause.hidden,
+       'mais sans bouton pause : un flux deja parti ne se suspend pas, et un faux bouton mentirait');
+  envoyes.length = 0;
+  bDebut.onclick();
+  const rel = envoyes.find(o => o.cmd === 'relire');
+  dire(rel && rel.id === 'p9', '« au debut » redemande CETTE lecture au PC : ' + JSON.stringify(rel));
+  bCouper.onclick();
+  dire(envoyes.some(o => o.cmd === 'couper_lecture'), 'et « couper » la coupe');
+  lectureEnCours = null; majBoutonsLecture();
+  dire(barre.hidden, 'la lecture finie, le bandeau rend la place sans qu on y touche');
+  location.hostname = hoteVrai; majBoutonsLecture();
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -2967,6 +3100,7 @@ setTimeout(() => {
       .then(testerEcritEnMorceaux)
       .then(testerLiaisonQuiNAboutitPas)
       .then(testerReouverture)
+      .then(testerBandeauLecture)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

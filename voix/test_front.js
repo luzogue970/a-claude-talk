@@ -464,7 +464,12 @@ globalThis.Audio = function (src) {
   const self = this;
   this.src = src || "";
   this.ended = false;
-  this.pause = () => {};
+  // paused, currentTime, duration : ce qu il faut pour que le bandeau de lecture existe
+  // vraiment. Un talon ou pause() ne fait rien laisserait passer un bouton pause decoratif.
+  this.paused = true;
+  this.currentTime = 0;
+  this.duration = 12;
+  this.pause = () => { self.paused = true; };
   // Rendre la session audio : sur iOS, un element en pause avec une source chargee garde la
   // categorie « lecture », et le micro ouvert par-dessus capte du silence. Le talon doit donc
   // savoir se vider, sinon le test ne verrait pas la difference.
@@ -473,7 +478,13 @@ globalThis.Audio = function (src) {
   this.play = () => {
     // Ce qu on joue est le src DU MOMENT : l element est reutilise, son src change.
     globalThis.joues.push(self.src);
-    setTimeout(() => { self.ended = true; if (self.onended) self.onended(); }, 0);
+    self.paused = false;
+    // Un son en pause ne se termine pas tout seul : sans ce garde-fou, le talon declarerait
+    // la lecture finie une boucle plus tard et le bandeau disparaitrait sous le doigt.
+    setTimeout(() => {
+      if (self.paused) return;
+      self.ended = true; if (self.onended) self.onended();
+    }, 0);
     return Promise.resolve();
   };
 };
@@ -494,9 +505,25 @@ globalThis.speechSynthesis = {
   getVoices: () => [{ lang: "fr-FR", name: "Amelie", localService: true },
                     { lang: "en-US", name: "Samantha", localService: true }],
   addEventListener: () => {},
-  speak(u) { if ((u.text || "").trim()) globalThis.dit.push(u.text.trim()); },
-  cancel() { globalThis.dit.push("[coupe]"); },
+  speak(u) {
+    if ((u.text || "").trim()) globalThis.dit.push(u.text.trim());
+    globalThis.__enFile.push(u);
+  },
+  // cancel() declenche onend sur ce qui etait en file — c est le vrai navigateur, et c est
+  // le piege : relancer une lecture annonçait la fin de la precedente, donc rangeait le
+  // bandeau a l instant meme ou le son repartait.
+  cancel() {
+    globalThis.dit.push("[coupe]");
+    const file = globalThis.__enFile.splice(0);
+    file.forEach(u => { if (u.onend) u.onend(); });
+  },
+  // La synthese du navigateur sait se suspendre : le bandeau doit s en servir quand Azure
+  // est muet, sinon le bouton pause ne marcherait que la moitie du temps.
+  pause() { globalThis.synthEtat.push("pause"); },
+  resume() { globalThis.synthEtat.push("reprise"); },
 };
+globalThis.synthEtat = [];
+globalThis.__enFile = [];
 globalThis.WebSocket = function () {
   // CONNECTING, comme dans un navigateur : une socket neuve n'est pas immediatement
   // utilisable. Le test la promeut explicitement en OPEN quand il veut simuler la reussite

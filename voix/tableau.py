@@ -1358,6 +1358,26 @@ main{padding:14px 16px calc(var(--barre) + 30px);max-width:1100px;margin:0 auto}
    donnait l'impression d'une fenetre coupee — et sur un portable, la zone la plus basse est
    celle qu'on atteint le moins bien. */
 body{overflow-x:hidden}
+/* Le bandeau de lecture. Pose juste au-dessus de la barre de saisie, assez haut pour se
+   toucher sans viser : trois boutons de 48 px, c'est la taille d'un pouce, et c'est la
+   mesure qui compte ici — on appuie en marchant, en reunion, une main occupee. */
+#lecture-barre{position:fixed;bottom:var(--barre);left:0;right:0;z-index:7;
+  background:#10171fef;backdrop-filter:blur(10px);border-top:1px solid #2f4a37;
+  border-bottom:1px solid var(--bord);padding:8px 12px 10px}
+#lecture-barre[hidden]{display:none}
+#lecture-jauge{height:3px;border-radius:2px;background:#ffffff14;overflow:hidden;margin-bottom:8px}
+#lecture-jauge i{display:block;height:100%;width:0;background:var(--voix);border-radius:2px}
+#lecture-jauge[hidden]{display:none}
+#lecture-cmds{display:flex;gap:8px;justify-content:center;max-width:520px;margin:0 auto}
+#lecture-cmds button{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--bord);
+  background:#161e18;color:var(--texte);font-size:15px;font-weight:600;letter-spacing:.2px}
+/* Le bouton qui compte : celui qu'on cherche du pouce sans regarder. */
+#lec-pause{border-color:var(--voix);color:#7ee08d;background:#16271c;flex:1.5}
+#lec-couper{color:#d98f8f}
+#lecture-cmds button[hidden]{display:none}
+@media (max-width: 520px) {
+  #lecture-cmds button{font-size:14px;min-height:46px}
+}
 #saisie-barre{position:fixed;bottom:0;left:0;right:0;z-index:6;
   background:linear-gradient(to top,#0e1116 62%,#0e1116e0);backdrop-filter:blur(10px);
   border-top:1px solid var(--bord);
@@ -2033,6 +2053,17 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 <div id="fond-detail" hidden></div>
 <main id="flux"></main>
 <button id="bas">↓ suivre</button>
+<!-- Pendant une lecture, c'est la seule chose qu'on cherche. Le bandeau se pose AU-DESSUS
+     de la barre de saisie et couvre le flux : couvrir du texte est le prix, et il est
+     volontairement payé — on ne lit pas la conversation pendant qu'on l'écoute. -->
+<div id="lecture-barre" hidden>
+  <div id="lecture-jauge"><i></i></div>
+  <div id="lecture-cmds">
+    <button id="lec-debut" type="button" title="reprendre cette lecture depuis le début"></button>
+    <button id="lec-pause" type="button" title="mettre la lecture en pause"></button>
+    <button id="lec-couper" type="button" title="arrêter cette lecture"></button>
+  </div>
+</div>
 <div id="saisie-barre">
   <!-- Une PILE, et pas trois éléments flottants au même endroit. Ils étaient tous ancrés à
        « bottom:100% » : la note d'historique se dessinait par-dessus l'extrémité droite de la
@@ -5033,6 +5064,11 @@ function jouer(src) {
     lecteur.onended = () => fini("ok");
     lecteur.onerror = () => fini("erreur");
     lecteur.src = src;
+    // Mettre en pause PENDANT qu'Azure synthetise est le cas le plus frequent : la lecture
+    // part, on s'apercoit qu'on ne peut pas ecouter, on appuie — et le son n'est pas encore
+    // la. Jouer quand meme a son arrivee annulerait l'appui, ce qui se lit comme un bouton
+    // qui ne marche pas.
+    if (lectureEnPause) return;
     const p = lecteur.play();
     if (p && p.catch) p.catch(() => fini("erreur"));
   });
@@ -5067,7 +5103,15 @@ function direIci(texte, derniere) {
   u.rate = 1.05;
   // Seule la DERNIERE phrase rend le bouton a son etat normal : le faire sur chacune le
   // ferait clignoter entre deux phrases, comme si la lecture s'arretait sans arret.
-  if (derniere) u.onend = () => { lectureLocale = false; majBoutonLecture(); };
+  //
+  // La generation : `speechSynthesis.cancel()` declenche `onend` sur ce qui etait en file.
+  // Sans ce garde-fou, reprendre au debut s'annonçait comme une fin de lecture — le bandeau
+  // disparaissait a l'instant meme ou la lecture repartait.
+  const gen = genLecture;
+  if (derniere) u.onend = () => {
+    if (gen !== genLecture) return;
+    lectureLocale = false; lectureEnPause = false; majBoutonLecture();
+  };
   // speak() EMPILE : la file est tenue par le navigateur, donc enchainer les phrases ne
   // demande aucun ordonnanceur de notre cote.
   speechSynthesis.speak(u);
@@ -5080,10 +5124,27 @@ function direIci(texte, derniere) {
 // Azure prend le texte entier, et le decoupe mieux que nous puisqu'il l'a lu.
 async function lireTexte(texte) {
   if (!texte) return false;
-  if (await lireParAzure(texte)) { lectureLocale = false; majBoutonLecture(); return true; }
+  // Ce qui se lit est retenu : sans le texte, « reprendre au debut » n'a rien a reprendre
+  // quand c'est la synthese du navigateur qui parle — elle ne se rembobine pas.
+  genLecture++;
+  // La generation est prise ICI et relue apres chaque attente. Couper une lecture puis en
+  // relancer une aussitot — le geste le plus courant du bandeau — laissait la promesse de
+  // l'ancienne se resoudre en retard et annoncer « plus rien ne se lit » : le son de la
+  // NOUVELLE jouait, et le bandeau avait disparu.
+  const gen = genLecture;
+  texteEnLecture = texte;
+  lectureEnPause = false;
+  lectureParAzure = true;
+  majBarreLecture();
+  const azure = await lireParAzure(texte);
+  if (gen !== genLecture) return true;   // une autre lecture a pris la main entre-temps
+  if (azure) { lectureLocale = false; lectureEnPause = false;
+               majBoutonLecture(); return true; }
+  lectureParAzure = false;
   const phrases = decouperPhrases(texte);
   if (!phrases.length) return false;
   phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
+  majBarreLecture();
   return true;
 }
 
@@ -5113,10 +5174,128 @@ function majBoutonLecture() {
     b.title = lectureLocale ? "arrêter la lecture"
                             : "lire la dernière réponse sur cet appareil";
   }
+  majBarreLecture();
 }
+
+// --- le bandeau de lecture : pause, reprise, retour au début -----------------------------
+//
+// Une lecture qu'on ne peut pas suspendre est une lecture qu'on coupe — et la reprendre,
+// c'est la réentendre depuis le début. Sur un débrief d'une minute, on ne le fait pas : on
+// laisse parler, ou on perd la réponse. Les commandes existaient pourtant, mais accrochées
+// à la ligne de la réponse : il fallait la retrouver dans un flux qui défile, pendant que
+// ça parle, sur un téléphone.
+//
+// D'où un bandeau fixe, au-dessus de la barre de saisie. Il couvre du flux, et c'est le prix
+// assumé : pendant une lecture, c'est la seule chose qu'on cherche.
+let lectureEnPause = false;    // suspendue ici, et reprenable où elle en est
+let lectureParAzure = true;    // le son joue dans l'élément audio — donc pause et rembobinage
+let texteEnLecture = "";       // ce qui se lit, pour le reprendre au début sans le rechercher
+let genLecture = 0;            // la lecture courante : ce qui vient d'avant ne la commande pas
+
+// Le bandeau vaut pour la lecture D'ICI, et pour celle du PC quand on est devant le PC. Sur
+// un appareil distant, la lecture du PC a ses propres boutons sur sa ligne : y ajouter un
+// bandeau qui pilote des haut-parleurs d'une autre pièce tromperait sur ce qu'on commande.
+function lectureAMontrer() {
+  if (lectureLocale) return "ici";
+  if (lectureEnCours && !lireDeCeCote()) return "pc";
+  return "";
+}
+
+function majBarreLecture() {
+  const barre = document.getElementById("lecture-barre");
+  if (!barre) return;
+  const ou = lectureAMontrer();
+  barre.hidden = !ou;
+  if (!ou) return;
+  const bp = document.getElementById("lec-pause");
+  const bd = document.getElementById("lec-debut");
+  const bc = document.getElementById("lec-couper");
+  // Le PC ne sait pas suspendre : sa voix est un flux déjà parti, qu'on ne peut
+  // qu'interrompre. Un bouton pause qui couperait pour de bon serait un mensonge.
+  if (bp) {
+    bp.hidden = ou !== "ici";
+    bp.textContent = lectureEnPause ? "▶  reprendre" : "⏸  pause";
+    bp.title = lectureEnPause ? "reprendre là où on s'est arrêté"
+                              : "mettre la lecture en pause";
+  }
+  if (bd) bd.textContent = "⏮  au début";
+  if (bc) bc.textContent = "⏹  couper";
+  const jauge = document.getElementById("lecture-jauge");
+  // La jauge n'a de sens que pour un son dont on connaît la durée. La synthèse du navigateur
+  // n'en donne aucune : une barre immobile ferait croire à une lecture bloquée.
+  if (jauge) jauge.hidden = ou !== "ici" || !lectureParAzure;
+}
+
+function majJaugeLecture() {
+  const jauge = document.getElementById("lecture-jauge");
+  if (!jauge || jauge.hidden || !lecteur) return;
+  const duree = Number(lecteur.duration);
+  const ou = Number(lecteur.currentTime);
+  const part = (isFinite(duree) && duree > 0 && isFinite(ou)) ? Math.min(100, ou / duree * 100) : 0;
+  const trait = jauge.querySelector && jauge.querySelector("i");
+  if (trait && trait.style) trait.style.width = part.toFixed(1) + "%";
+}
+
+function basculerPauseLecture() {
+  if (!lectureLocale) return;
+  lectureEnPause = !lectureEnPause;
+  if (lectureParAzure && lecteur) {
+    try {
+      // `lecteur.pause()` et NON `arreterAudio()` : celui-ci décroche `onended`, et la
+      // promesse de lecture ne se résoudrait plus jamais.
+      if (lectureEnPause) lecteur.pause();
+      else { const p = lecteur.play(); if (p && p.catch) p.catch(() => {}); }
+    } catch (_) {}
+  } else {
+    try { lectureEnPause ? speechSynthesis.pause() : speechSynthesis.resume(); } catch (_) {}
+  }
+  majBarreLecture();
+}
+
+function relancerLectureDebut() {
+  if (!lectureLocale) return;
+  lectureEnPause = false;
+  if (lectureParAzure && lecteur) {
+    // Rembobiner, sans toucher à la source ni aux rappels : la session audio d'iOS reste
+    // acquise, donc le son repart sans nouvel appui et sans nouvelle synthèse Azure.
+    try { lecteur.currentTime = 0; } catch (_) {}
+    try { const p = lecteur.play(); if (p && p.catch) p.catch(() => {}); } catch (_) {}
+  } else if (texteEnLecture) {
+    genLecture++;
+    try { speechSynthesis.cancel(); } catch (_) {}
+    const phrases = decouperPhrases(texteEnLecture);
+    phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
+  }
+  majJaugeLecture();
+  majBarreLecture();
+}
+
+function couperDepuisBandeau() {
+  if (lectureLocale) { couperLectureLocale(); libererSessionAudio(); return; }
+  envoyerCmd({ cmd: "couper_lecture" });
+}
+
+function reprendreDepuisBandeau() {
+  if (lectureLocale) { relancerLectureDebut(); return; }
+  // Côté PC, « au début » est une relecture : le texte est gardé par l'agent, et une
+  // seconde synthèse ne coûte que des caractères.
+  envoyerCmd({ cmd: "relire", id: lectureEnCours || undefined });
+}
+
+(() => {
+  const bp = document.getElementById("lec-pause");
+  const bd = document.getElementById("lec-debut");
+  const bc = document.getElementById("lec-couper");
+  if (bp) bp.onclick = basculerPauseLecture;
+  if (bd) bd.onclick = reprendreDepuisBandeau;
+  if (bc) bc.onclick = couperDepuisBandeau;
+  if (lecteur) lecteur.ontimeupdate = majJaugeLecture;
+})();
 
 function couperLectureLocale() {
   lectureLocale = false;
+  lectureEnPause = false;
+  genLecture++;
   arreterAudio();
   try { speechSynthesis.cancel(); } catch (_) {}
   majBoutonLecture();
@@ -5798,6 +5977,7 @@ function majBoutonsLecture() {
   // Il coupe la lecture du PC : inutile sur un appareil distant, ou le haut-parleur de la
   // barre coupe deja ce qui joue ici.
   if (bc) bc.hidden = !lectureEnCours || lireDeCeCote();
+  majBarreLecture();
   for (const [id, ligne] of lignesVoix) {
     const z = ligne.zoneLecture;
     if (!z) continue;
