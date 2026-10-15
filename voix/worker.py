@@ -268,6 +268,9 @@ class Journal:
 # Mesure du 13 octobre 2026 : un workflow de six agents a tourne vingt minutes sur la
 # conversation insnap sans qu'une seule pastille s'allume — la page le donnait pour fini.
 FOND_IMPLICITE = ("Agent", "Workflow")
+# Ce qu'on inscrit au journal d'un tour que personne n'a demande : le bilan parle doit
+# pouvoir dire d'ou il sort, sinon il repond a une question qui n'a pas ete posee.
+RELANCE_DE_FOND = "(une tâche de fond s'est terminée)"
 
 # Ce que le retour immediat d'un outil de fond dit de l'identifiant de la tache. C'est CET
 # identifiant que portera la notification de fin, jamais celui de l'outil.
@@ -321,6 +324,9 @@ class Worker:
         self.events: asyncio.Queue = asyncio.Queue()
         self.journal = Journal()
         self.occupe = False
+        # Un arret demande : tant qu'il n'a pas rendu son bilan, les messages qui trainent
+        # encore dans le tube ne doivent pas rallumer le travail qu'on vient d'eteindre.
+        self.arret_demande = False
         # Ce qui tourne encore quand le tour est fini. Survit d'un tour a l'autre : c'est
         # tout l'interet, la notification de fin arrive apres.
         self._fond: dict[str, dict] = {}
@@ -773,6 +779,19 @@ class Worker:
                            tours=(self.reprise or {}).get("tours") if repris else 0)
                 if self._conv:
                     self._conv.note_session(sid)
+            # Un tour peut repartir SANS qu'on ait rien envoye. Quand une tache de fond se
+            # termine, Claude Code glisse lui-meme une `<task-notification>` et redonne la
+            # parole au modele : mesure prise le 15 octobre 2026 sur la conversation insnap
+            # — reponse a 15:44:03, fin de tache a 15:44:33, nouveau Bash a 15:44:36. Le
+            # travail n'etant allume que par `envoyer()`, tout ce tour-la se deroulait avec
+            # l'indicateur eteint : la page montrait Claude en train de reflechir pendant
+            # que le tableau affichait « prête » — et la notification de fin etait deja
+            # partie. La conversation etait annoncee finie alors qu'elle ne l'etait pas.
+            if (isinstance(message, AssistantMessage) and not self.occupe
+                    and not self.arret_demande and not self.pompe_morte):
+                self.journal = Journal(question=RELANCE_DE_FOND)
+                self.occupe = True
+                self._voir("travail", actif=True)
             if isinstance(message, StreamEvent):
                 self._delta(message)
             elif isinstance(message, AssistantMessage):
@@ -838,6 +857,7 @@ class Worker:
                 for refus in message.permission_denials or []:
                     self.journal.refus.append(str(getattr(refus, "tool_name", refus)))
                 self.occupe = False
+                self.arret_demande = False
                 # L'extrait voyage avec l'etat : c'est ce qu'une notification de fin de
                 # tour peut montrer sans ouvrir la page.
                 reponse = " ".join(self.journal.textes[-1].split()) if self.journal.textes else ""
@@ -1015,6 +1035,7 @@ class Worker:
                        texte="liaison morte — on la relance avant d'envoyer")
             if not await self.debloquer():
                 return
+        self.arret_demande = False
         if not self.occupe:
             self.journal = Journal(question=texte)
             self.occupe = True
@@ -1204,6 +1225,7 @@ class Worker:
         repond pas en trois secondes, il est injoignable et c'est « débloque » qu'il faut.
         """
         self.occupe = False
+        self.arret_demande = True
         self._voir("travail", actif=False)
         if not self.client:
             return

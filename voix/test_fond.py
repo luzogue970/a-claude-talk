@@ -30,7 +30,7 @@ os.environ.setdefault("VOIX_WORKDIR", str(Path(__file__).resolve().parent.parent
 from claude_agent_sdk import (AssistantMessage, ResultMessage, TextBlock, ToolResultBlock,
                               ToolUseBlock, UserMessage)
 
-from worker import Worker
+from worker import RELANCE_DE_FOND, Worker
 
 ok = True
 
@@ -354,6 +354,87 @@ def le_workflow_montre_ses_agents_puis_s_eteint():
         asyncio.run(scenario())
 
 
+
+# --- 4. le tour que personne n'a demandé ---------------------------------------------------
+
+def un_tour_relance_par_une_tache_de_fond_rallume_le_travail():
+    print("\n=== une tâche de fond qui se termine redonne la parole au modèle ===")
+    # Mesuré le 15 octobre 2026 sur la conversation insnap : réponse à 15:44:03, fin de la
+    # tâche à 15:44:33, nouveau Bash à 15:44:36. L'indicateur n'étant allumé que par
+    # `envoyer()`, tout ce tour-là se déroulait éteint — le tableau affichait « prête »
+    # pendant que la page montrait Claude en train de travailler.
+    w = neuf()
+    w.occupe = False
+    drainer(w, [AssistantMessage(content=[TextBlock(text="Je reprends là où j'en étais.")],
+                                 model="opus")])
+    etats = [d["actif"] for g, d in w._tableau.publies if g == "travail"]
+    dire(etats[:1] == [True],
+         f"la conversation se rallume toute seule : elle n'est PAS prête ({etats})")
+    dire(w.journal.question == RELANCE_DE_FOND,
+         f"et le bilan dit d'où sort ce tour : {w.journal.question!r}")
+
+
+def un_message_qui_traine_apres_un_arret_ne_rallume_rien():
+    print("\n=== ce qui arrive encore APRÈS « arrête » ===")
+
+    class ClientQuiRepond:
+        async def interrupt(self):
+            return None
+
+    w = neuf()
+    w.client = ClientQuiRepond()
+    w.occupe = True
+    asyncio.run(w.interrompre())
+    w._tableau.publies.clear()
+    # Le tube n'est pas vide quand on appuie sur « arrête » : le dernier bloc du modèle
+    # arrive souvent après. Le rallumer ferait repartir un indicateur qu'on vient
+    # volontairement d'éteindre, et le bouton passerait pour cassé.
+    drainer(w, [AssistantMessage(content=[TextBlock(text="...je disais donc")], model="opus")])
+    dire(w._tableau.tous("travail") == [],
+         "un reste de message ne rallume pas un tour qu'on vient d'arrêter")
+    dire(w.occupe is False, "et la conversation reste rendue")
+
+
+def le_parcours_entier_d_une_relance_automatique():
+    print("\n=== fonctionnel : répondre, puis repartir sans qu'on ait rien dit ===")
+    w = neuf()
+    w.occupe = True       # un tour demandé par nous, en cours
+
+    drainer(w, [
+        AssistantMessage(content=[ToolUseBlock(
+            id="toolu_1", name="Bash",
+            input={"command": "npm test", "run_in_background": True})], model="opus"),
+        UserMessage(content=[ToolResultBlock(
+            tool_use_id="toolu_1", content="Command running in background (ID: bd42)")]),
+        AssistantMessage(content=[TextBlock(text="Version poussée. Je te dis quand c'est bon.")],
+                         model="opus"),
+        fin(),
+    ])
+    dire([d["actif"] for g, d in w._tableau.publies if g == "travail"] == [False],
+         "le tour rend la main : c'est là que la notification « c'est fini » part")
+
+    # Trente secondes plus tard, la tâche se termine : Claude Code glisse la notification
+    # et le modèle reprend la parole. Personne n'a rien envoyé.
+    w._tableau.publies.clear()
+    drainer(w, [
+        UserMessage(content=[TextBlock(
+            text="<task-notification><task-id>bd42</task-id><status>completed</status>"
+                 "</task-notification>")]),
+        AssistantMessage(content=[ToolUseBlock(
+            id="toolu_2", name="Bash", input={"command": "curl -I https://exemple"})],
+            model="opus"),
+        AssistantMessage(content=[TextBlock(text="C'est en ligne : version 0.20.0.")],
+                         model="opus"),
+        fin(2),
+    ])
+    etats = [d["actif"] for g, d in w._tableau.publies if g == "travail"]
+    dire(etats == [True, False],
+         f"la conversation se rallume pour ce tour-là, puis se rend vraiment : {etats}")
+    dire(w._tableau.dernier("travail").get("reponse", "").startswith("C'est en ligne"),
+         "et c'est CETTE réponse-là que la notification de fin montrera")
+    dire(taches(w) == [], "la tâche de fond s'est éteinte au passage")
+
+
 def main():
     la_tache_s_ouvre_sur_son_PROPRE_identifiant()
     sans_identifiant_lisible_on_retombe_sur_celui_de_l_outil()
@@ -367,6 +448,9 @@ def main():
     un_agent_delegue_s_allume_sans_le_drapeau()
     les_agents_d_un_workflow_se_lisent_dans_son_journal()
     le_workflow_montre_ses_agents_puis_s_eteint()
+    un_tour_relance_par_une_tache_de_fond_rallume_le_travail()
+    un_message_qui_traine_apres_un_arret_ne_rallume_rien()
+    le_parcours_entier_d_une_relance_automatique()
     print("\nTOUT VERT" if ok else "\nDES ECHECS")
     sys.exit(0 if ok else 1)
 
