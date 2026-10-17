@@ -966,13 +966,24 @@ class Voix(Agent):
         morceaux, pour_la_page = [], []
         for q in questions:
             libelle_q = str(q.get("question") or "").strip()
-            options = [str(o.get("label") or "").strip()
+            # L'option voyage ENTIERE vers la page : son intitule et sa description. La
+            # description etait jetee ici, et c'est elle qui porte le compromis — « garde
+            # l'historique mais double le temps de build ». Sans elle, on choisit entre deux
+            # etiquettes sans savoir ce qu'elles engagent, ce qui est exactement ce que la
+            # question cherchait a eviter.
+            options = [{"titre": str(o.get("label") or "").strip(),
+                        "detail": str(o.get("description") or "").strip()}
                        for o in (q.get("options") or []) if o.get("label")]
             if not libelle_q:
                 continue
-            morceaux.append(libelle_q + (" " + " ou ".join(options) + " ?" if options else ""))
+            titres = [o["titre"] for o in options]
+            morceaux.append(libelle_q + (" " + " ou ".join(titres) + " ?" if titres else ""))
             pour_la_page.append({"question": libelle_q, "options": options,
-                                 "entete": str(q.get("header") or "").strip()})
+                                 "entete": str(q.get("header") or "").strip(),
+                                 # Plusieurs reponses possibles : la page doit le savoir,
+                                 # sinon le premier toucher ferme un choix qui en acceptait
+                                 # trois.
+                                 "multi": bool(q.get("multiSelect"))})
         if not morceaux:
             self.question_en_cours = None
             return None

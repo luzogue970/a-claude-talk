@@ -3093,6 +3093,137 @@ async function testerBandeauLecture() {
   location.hostname = hoteVrai; majBoutonsLecture();
 }
 
+// ============================================================================================
+// Repondre a une question en la TOUCHANT. Le geste exact du telephone : Claude propose, on
+// appuie, la phrase part. Ce qui se passait avant : il fallait retaper l'intitule d'une
+// option au clavier, sans savoir ce que la page en ferait.
+async function testerQuestionnaire() {
+  titre('questions a choix : on repond du pouce, pas du clavier');
+
+  const panneau = document.getElementById('questionnaire');
+  const libelle = document.getElementById('q-libelle');
+  const entete = document.getElementById('q-entete');
+  const rang = document.getElementById('q-rang');
+  const zone = document.getElementById('q-options');
+  const bAutre = document.getElementById('q-autre');
+  const bValider = document.getElementById('q-valider');
+  const bRouvrir = document.getElementById('q-rouvrir');
+
+  fermerQuestionnaire();
+  dire(!!panneau && panneau.hidden, 'aucune question en vol : le panneau ne couvre rien');
+
+  const UNE = {
+    genre: 'attente_reponse', actif: true, id: 'qA', n: 99700, texte: 'On garde quoi ?',
+    questions: [{ question: 'On garde quel fichier ?', entete: 'Fichier', multi: false,
+                  options: [{ titre: 'Remplacer', detail: 'le fichier actuel disparait' },
+                            { titre: 'Nouveau fichier', detail: 'les deux restent' }] }],
+  };
+
+  socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+  recevoir(UNE);
+  dire(!panneau.hidden, 'une question qui attend ouvre le panneau, sans qu on le demande');
+  dire(libelle.textContent === 'On garde quel fichier ?', 'la question est lisible en clair');
+  dire(entete.textContent === 'Fichier', 'avec son en-tete : ' + entete.textContent);
+  dire(rang.textContent === '', 'une seule question : pas de « 1 / 1 », qui ne dirait rien');
+  dire(zone.children.length === 2, 'une cible par option, et pas une de plus');
+  const premier = zone.children[0];
+  dire(/Remplacer/.test(premier.textContent),
+       'chaque cible porte son intitule : ' + premier.textContent);
+  // La description etait JETEE par l'agent. C'est pourtant elle qui porte le compromis :
+  // sans elle on choisit entre deux etiquettes sans savoir ce qu'elles engagent.
+  dire(/le fichier actuel disparait/.test(premier.textContent),
+       'et ce qu elle engage, sous l intitule');
+
+  // --- toucher une option repond, et la phrase part comme un message tape -----------------
+  zone.children[1].onclick();
+  const parti = envoyes.find(o => o.cmd === 'texte');
+  dire(parti && parti.texte === 'Nouveau fichier',
+       'toucher une option envoie SON intitule, tel quel : ' + JSON.stringify(parti && parti.texte));
+  dire(panneau.hidden, 'et le panneau se range : la question est repondue');
+  dire(champ.value === '', 'la barre de saisie est rendue propre derriere');
+
+  // --- plusieurs reponses possibles : un toucher coche, il faut valider --------------------
+  const MULTI = {
+    genre: 'attente_reponse', actif: true, id: 'qB', n: 99701, texte: 'Quelles suites ?',
+    questions: [{ question: 'Qu est-ce qu on branche ?', entete: 'Suites', multi: true,
+                  options: [{ titre: 'les unitaires' }, { titre: 'les fonctionnels' },
+                            { titre: 'les lentes' }] }],
+  };
+  envoyes.length = 0;
+  recevoir(MULTI);
+  zone.children[0].onclick();
+  dire(envoyes.every(o => o.cmd !== 'texte'),
+       'un premier toucher ne ferme PAS un choix qui en acceptait trois');
+  dire(/les unitaires/.test(zone.children[0].textContent) && zone.children[0].className.indexOf('coche') >= 0,
+       'il coche, et ca se voit : ' + zone.children[0].className);
+  zone.children[1].onclick();
+  zone.children[1].onclick();
+  dire(zone.children[1].className.indexOf('coche') < 0, 'retoucher une option la decoche');
+  zone.children[2].onclick();
+  dire(!bValider.hidden && /2/.test(bValider.textContent),
+       'le bouton valider dit combien sont retenues : ' + bValider.textContent);
+  bValider.onclick();
+  const multi = envoyes.find(o => o.cmd === 'texte');
+  dire(multi && multi.texte === 'les unitaires, les lentes',
+       'valider envoie les choix retenus, dans l ordre ou on les a touches : '
+       + JSON.stringify(multi && multi.texte));
+
+  // --- quatre questions d un coup : on les enchaine avant d envoyer quoi que ce soit -------
+  const DEUX = {
+    genre: 'attente_reponse', actif: true, id: 'qC', n: 99702, texte: 'deux choses',
+    questions: [
+      { question: 'Quel moteur ?', entete: 'Moteur', options: [{ titre: 'Azure' }, { titre: 'local' }] },
+      { question: 'On pousse ?', entete: 'Push', options: [{ titre: 'oui' }, { titre: 'plus tard' }] },
+    ],
+  };
+  envoyes.length = 0;
+  recevoir(DEUX);
+  dire(rang.textContent === '1 / 2', 'a plusieurs, on sait ou on en est : ' + rang.textContent);
+  zone.children[0].onclick();
+  dire(envoyes.every(o => o.cmd !== 'texte'),
+       'repondre a la premiere n envoie rien : Claude redemanderait le reste');
+  dire(rang.textContent === '2 / 2' && libelle.textContent === 'On pousse ?',
+       'le panneau passe a la suivante');
+  zone.children[1].onclick();
+  const deux = envoyes.find(o => o.cmd === 'texte');
+  dire(deux && deux.texte === 'Moteur : Azure\nPush : plus tard',
+       'et les deux reponses partent ensemble, chacune sous son en-tete : '
+       + JSON.stringify(deux && deux.texte));
+
+  // --- « autre reponse » : on ecrit a cote de la liste, sans perdre la liste ---------------
+  envoyes.length = 0;
+  recevoir(Object.assign({}, UNE, { n: 99710 }));
+  bAutre.onclick();
+  dire(panneau.hidden === false && !bRouvrir.hidden && zone.hidden,
+       'le panneau se replie pour laisser ecrire, et garde le chemin du retour');
+  dire(envoyes.every(o => o.cmd !== 'texte'),
+       'rien n est envoye : « autre » n est pas une reponse, c est une intention');
+  bRouvrir.onclick();
+  dire(!zone.hidden && zone.children.length === 2, 'et les propositions reviennent intactes');
+
+  // --- la question survit a une reconnexion, sans perdre ce qui est deja coche -------------
+  recevoir(Object.assign({}, MULTI, { n: 99711 }));
+  zone.children[0].onclick();
+  // L etat est republie tel quel a chaque reconnexion, et un telephone qu on met dans sa
+  // poche en recoit plusieurs : la republication passe donc par ouvrirQuestionnaire, pas
+  // par le filtre de doublons du flux.
+  ouvrirQuestionnaire(MULTI);
+  dire(!panneau.hidden && zone.children[0].className.indexOf('coche') >= 0,
+       'revenir sur la page ne decoche pas ce qu on avait deja choisi');
+
+  // --- repondre a la VOIX ferme le panneau : l attente s eteint cote agent -----------------
+  recevoir({ genre: 'attente_reponse', actif: false, id: 'qB', n: 99712 });
+  dire(panneau.hidden,
+       'une reponse dite a voix haute range le panneau : il n attend plus personne');
+
+  // --- une question sans option ne fabrique pas un panneau vide ----------------------------
+  recevoir({ genre: 'attente_reponse', actif: true, id: 'qD', n: 99713,
+             texte: 'tu en penses quoi ?', questions: [{ question: 'tu en penses quoi ?', options: [] }] });
+  dire(panneau.hidden,
+       'une question ouverte se repond en parlant : pas de panneau qui couvre pour rien');
+  fermerQuestionnaire();
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -3101,6 +3232,7 @@ async function testerBandeauLecture() {
       .then(testerLiaisonQuiNAboutitPas)
       .then(testerReouverture)
       .then(testerBandeauLecture)
+      .then(testerQuestionnaire)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

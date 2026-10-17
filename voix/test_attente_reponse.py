@@ -79,7 +79,16 @@ class AgentFactice:
 
 QUESTIONS = [{"question": "Je remplace le fichier ou j'en crée un nouveau ?",
               "header": "Fichier",
-              "options": [{"label": "Remplacer"}, {"label": "Nouveau fichier"}]}]
+              "options": [{"label": "Remplacer",
+                           "description": "le fichier actuel disparaît"},
+                          {"label": "Nouveau fichier",
+                           "description": "les deux restent côte à côte"}],
+              "multiSelect": False}]
+
+MULTIPLE = [{"question": "Qu'est-ce qu'on branche ?",
+             "header": "Suites",
+             "options": [{"label": "les unitaires"}, {"label": "les fonctionnels"}],
+             "multiSelect": True}]
 
 
 async def principal():
@@ -102,6 +111,21 @@ async def principal():
             dire("Je remplace" in str(ouvertures[0].get("texte")),
                  "avec le texte de la question, pour une page qui se connecte après")
 
+            # Ce que la page reçoit décide de ce qu'on peut TOUCHER. Les descriptions
+            # étaient jetées ici, et « multiSelect » avec : on choisissait entre deux
+            # étiquettes sans savoir ce qu'elles engagent, et le premier toucher fermait un
+            # choix qui en acceptait trois.
+            posees = (ouvertures[0].get("questions") or [{}])[0]
+            opts = posees.get("options") or []
+            dire([o.get("titre") for o in opts] == ["Remplacer", "Nouveau fichier"],
+                 "chaque option arrive avec son intitulé, dans l'ordre proposé")
+            dire(opts and opts[0].get("detail") == "le fichier actuel disparaît",
+                 "et avec ce qu'elle engage — c'est sur ça qu'on tranche")
+            dire(posees.get("multi") is False,
+                 "une question à réponse unique se déclare comme telle")
+            dire(posees.get("entete") == "Fichier",
+                 "l'en-tête voyage aussi : c'est le titre du panneau")
+
             print("\n=== et elle est écrite sur le disque, pour survivre à la fermeture ===")
             sur_disque = journal.question_en_attente(WorkerFactice.session_id)
             dire(bool(sur_disque), "la question est retrouvable par son identifiant de session")
@@ -119,6 +143,16 @@ async def principal():
                  "l'état d'attente est éteint")
             dire(journal.question_en_attente(WorkerFactice.session_id) is None,
                  "et le disque est nettoyé : on ne la retrouvera pas au prochain lancement")
+
+            print("\n=== plusieurs réponses possibles : la page doit le savoir ===")
+            m = AgentFactice()
+            tm = asyncio.create_task(poser(m, MULTIPLE))
+            await asyncio.sleep(0.05)
+            posee_m = [d for d in m.etats("attente_reponse") if d.get("actif")][0]
+            dire((posee_m.get("questions") or [{}])[0].get("multi") is True,
+                 "« multiSelect » traverse jusqu'à la page")
+            m.question_en_cours.set_result("les deux")
+            await tm
 
             print("\n=== « arrête » est la porte de sortie de l'attente sans fin ===")
             b = AgentFactice()

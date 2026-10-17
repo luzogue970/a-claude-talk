@@ -1422,7 +1422,9 @@ body{overflow-x:hidden}
 /* Le bandeau de lecture. Pose juste au-dessus de la barre de saisie, assez haut pour se
    toucher sans viser : trois boutons de 48 px, c'est la taille d'un pouce, et c'est la
    mesure qui compte ici — on appuie en marchant, en reunion, une main occupee. */
-#lecture-barre{position:fixed;bottom:var(--barre);left:0;right:0;z-index:7;
+#pile-bas{position:fixed;bottom:var(--barre);left:0;right:0;z-index:7;
+  display:flex;flex-direction:column}
+#lecture-barre{
   background:#10171fef;backdrop-filter:blur(10px);border-top:1px solid #2f4a37;
   border-bottom:1px solid var(--bord);padding:8px 12px 10px}
 #lecture-barre[hidden]{display:none}
@@ -1439,6 +1441,40 @@ body{overflow-x:hidden}
 @media (max-width: 520px) {
   #lecture-cmds button{font-size:14px;min-height:46px}
 }
+
+/* Le questionnaire. Mêmes mesures que le bandeau de lecture — 52 px par cible, pleine
+   largeur — parce que c'est la même main dans la même situation : on répond en marchant.
+   La liste défile si elle dépasse : quatre options avec descriptions ne doivent pas
+   repousser la barre de saisie hors de l'écran. */
+#questionnaire{background:#131a24f2;backdrop-filter:blur(10px);
+  border-top:1px solid #3a4a63;padding:10px 12px 12px}
+#questionnaire[hidden]{display:none}
+#q-tete{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--permission)}
+#q-rang{color:#7b8696;letter-spacing:.2px}
+#q-libelle{font-size:15px;line-height:1.4;margin:6px 0 10px;color:#ffd9a8}
+#q-options{display:flex;flex-direction:column;gap:8px;max-height:44vh;overflow-y:auto;
+  max-width:620px;margin:0 auto}
+#q-options button{width:100%;min-height:52px;text-align:left;padding:9px 14px;
+  border-radius:12px;border:1px solid var(--bord);background:#161e28;color:var(--texte);
+  font:inherit;cursor:pointer;display:flex;flex-direction:column;gap:3px}
+#q-options button:hover{background:#1d2735}
+/* Coché : la bordure ET une pastille. La couleur seule ne suffit pas au soleil, sur un
+   téléphone tenu de biais. */
+#q-options button.coche{border-color:var(--toi);background:#18242f;
+  box-shadow:0 0 0 2px #4f9dde22}
+#q-options .q-titre{font-size:14.5px;font-weight:600}
+#q-options .q-detail{font-size:12.5px;line-height:1.35;color:#9aa5b3}
+#q-pied{display:flex;gap:8px;max-width:620px;margin:10px auto 0}
+#q-pied button{flex:1;min-height:46px;border-radius:12px;border:1px solid var(--bord);
+  background:#161e28;color:#9aa5b3;font:inherit;font-size:14px;cursor:pointer}
+#q-pied button[hidden]{display:none}
+#q-valider{border-color:var(--toi);color:#9fcdf2;background:#17222e;font-weight:600}
+/* Replié : le questionnaire ne garde qu'une ligne, pour laisser voir le flux et la barre
+   pendant qu'on écrit une réponse libre — sans perdre le chemin du retour aux propositions. */
+#q-rouvrir{width:100%;min-height:40px;border-radius:10px;border:1px dashed var(--bord);
+  background:transparent;color:#8d97a5;font:inherit;font-size:13px;cursor:pointer}
+#q-rouvrir[hidden]{display:none}
 #saisie-barre{position:fixed;bottom:0;left:0;right:0;z-index:6;
   background:linear-gradient(to top,#0e1116 62%,#0e1116e0);backdrop-filter:blur(10px);
   border-top:1px solid var(--bord);
@@ -2117,12 +2153,35 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 <!-- Pendant une lecture, c'est la seule chose qu'on cherche. Le bandeau se pose AU-DESSUS
      de la barre de saisie et couvre le flux : couvrir du texte est le prix, et il est
      volontairement payé — on ne lit pas la conversation pendant qu'on l'écoute. -->
-<div id="lecture-barre" hidden>
-  <div id="lecture-jauge"><i></i></div>
-  <div id="lecture-cmds">
-    <button id="lec-debut" type="button" title="reprendre cette lecture depuis le début"></button>
-    <button id="lec-pause" type="button" title="mettre la lecture en pause"></button>
-    <button id="lec-couper" type="button" title="arrêter cette lecture"></button>
+<!-- Une pile, parce que deux bandeaux peuvent valoir en même temps : Claude lit sa question
+     à voix haute PENDANT qu'elle attend une réponse. Fixés chacun à « bottom:var(--barre) »,
+     ils se recouvraient — et c'est le questionnaire, celui qui attend un geste, qui
+     disparaissait sous l'autre. -->
+<div id="pile-bas">
+  <!-- Répondre en TOUCHANT, pas en écrivant. Une question à choix multiples arrivait ici
+       sous forme de phrase : il fallait retaper l'intitulé d'une option, à une lettre près
+       ou pas, sans savoir ce que la page en ferait. Les choix sont maintenant des cibles de
+       52 px, la description de chacun est lisible sous son intitulé, et « autre réponse »
+       reste là pour ce que l'oral fait de mieux — répondre à côté de la liste. -->
+  <div id="questionnaire" hidden>
+    <div id="q-tete">
+      <span id="q-entete"></span><span id="q-rang"></span>
+    </div>
+    <div id="q-libelle"></div>
+    <div id="q-options"></div>
+    <div id="q-pied">
+      <button id="q-autre" type="button" title="répondre librement, en écrivant ou à la voix">✎ autre réponse…</button>
+      <button id="q-valider" type="button" hidden>valider</button>
+    </div>
+    <button id="q-rouvrir" type="button" hidden>▸ revoir les propositions</button>
+  </div>
+  <div id="lecture-barre" hidden>
+    <div id="lecture-jauge"><i></i></div>
+    <div id="lecture-cmds">
+      <button id="lec-debut" type="button" title="reprendre cette lecture depuis le début"></button>
+      <button id="lec-pause" type="button" title="mettre la lecture en pause"></button>
+      <button id="lec-couper" type="button" title="arrêter cette lecture"></button>
+    </div>
   </div>
 </div>
 <div id="saisie-barre">
@@ -2648,7 +2707,8 @@ function corps(e) {
       // Les options sont AFFICHÉES même si la réponse est libre. À l'oral on répond ce
       // qu'on veut, mais savoir entre quoi et quoi Claude hésite change la réponse qu'on
       // donne — et c'est l'information qu'une réponse parlée ferait perdre.
-      const opts = (e.questions || []).flatMap(q => q.options || []);
+      const opts = (e.questions || []).flatMap(q => q.options || [])
+        .map(o => (typeof o === "string" ? o : ((o && o.titre) || ""))).filter(Boolean);
       const choix = opts.length
         ? ` <span class="opts">${opts.map(o => `<span class="opt">${ech(o)}</span>`).join("")}</span>`
         : "";
@@ -4319,6 +4379,156 @@ composer.onsubmit = ev => {
   window.scrollTo(0, document.body.scrollHeight);
 };
 
+// --- répondre à une question en la touchant ----------------------------------------------
+// Une question d'AskUserQuestion arrive avec ses options et, pour chacune, ce qu'elle
+// engage. Tout ça finissait en une phrase dans le flux, et il fallait retaper l'intitulé
+// d'une option au clavier — le geste le plus coûteux du téléphone, pour l'information la
+// plus facile à rendre tactile.
+//
+// Ce qu'on répond reste du TEXTE LIBRE côté agent : toucher une option ne fait qu'écrire
+// la phrase à notre place. C'est ce qui permet de garder « autre réponse » sans chemin de
+// code séparé, et c'est aussi ce qui fait qu'une réponse dictée continue de marcher
+// exactement comme avant.
+const questionnaire = document.getElementById("questionnaire");
+const qEntete = document.getElementById("q-entete");
+const qRangEl = document.getElementById("q-rang");
+const qLibelle = document.getElementById("q-libelle");
+const qOptions = document.getElementById("q-options");
+const qPied = document.getElementById("q-pied");
+const btnQAutre = document.getElementById("q-autre");
+const btnQValider = document.getElementById("q-valider");
+const btnQRouvrir = document.getElementById("q-rouvrir");
+
+let questionPosee = null;   // { id, questions: [...] } — la question en attente
+let qRang = 0;              // laquelle des questions on remplit
+let qReponses = [];         // ce qui est déjà choisi, une entrée par question
+let qCoches = [];           // la sélection en cours, quand la question en accepte plusieurs
+let qReplie = false;        // replié : on écrit une réponse libre, les choix attendent
+
+// Les options ont voyagé en simples chaînes avant de porter leur description. Une page
+// rouverte sur une vieille conversation rejoue ces événements-là : elle doit les afficher,
+// pas les perdre.
+function qTitre(o) { return typeof o === "string" ? o : ((o && o.titre) || ""); }
+function qDetail(o) { return typeof o === "string" ? "" : ((o && o.detail) || ""); }
+
+function ouvrirQuestionnaire(e) {
+  const qs = (e.questions || []).filter(q => (q.options || []).length);
+  // Une question sans option ne se touche pas : elle se répond en parlant, et un panneau
+  // vide ne ferait que couvrir le flux.
+  if (!qs.length) { fermerQuestionnaire(); return; }
+  // Rouvrir LA MÊME question ne remet pas les compteurs à zéro : l'état est republié à
+  // chaque reconnexion, et un téléphone qu'on met dans sa poche en reçoit plusieurs. Sans
+  // ce test, deux options cochées sur trois disparaissaient en revenant sur la page.
+  if (questionPosee && questionPosee.id === (e.id || "")) { majQuestionnaire(); return; }
+  questionPosee = { id: e.id || "", questions: qs };
+  qRang = 0; qReponses = []; qCoches = []; qReplie = false;
+  majQuestionnaire();
+}
+
+function fermerQuestionnaire() {
+  questionPosee = null; qRang = 0; qReponses = []; qCoches = []; qReplie = false;
+  majQuestionnaire();
+}
+
+function majQuestionnaire() {
+  if (!questionnaire) return;
+  questionnaire.hidden = !questionPosee;
+  if (!questionPosee) { qOptions.textContent = ""; return; }
+  const q = questionPosee.questions[qRang] || {};
+  // Replié, il ne reste que la porte du retour : on est en train d'écrire autre chose.
+  btnQRouvrir.hidden = !qReplie;
+  qEntete.hidden = qLibelle.hidden = qOptions.hidden = qPied.hidden = qReplie;
+  if (qReplie) return;
+
+  qEntete.textContent = q.entete || "Claude te demande";
+  // Le rang n'a de sens qu'à plusieurs : « 1 / 1 » est du bruit.
+  qRangEl.textContent = questionPosee.questions.length > 1
+    ? `${qRang + 1} / ${questionPosee.questions.length}` : "";
+  qLibelle.textContent = q.question || "";
+  qOptions.textContent = "";
+  (q.options || []).forEach(o => {
+    const titre = qTitre(o), detail = qDetail(o);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "q-opt" + (qCoches.includes(titre) ? " coche" : "");
+    b.setAttribute("data-titre", titre);
+    const t = document.createElement("span");
+    t.className = "q-titre";
+    t.textContent = (q.multi ? (qCoches.includes(titre) ? "☑ " : "☐ ") : "") + titre;
+    b.appendChild(t);
+    if (detail) {
+      const d = document.createElement("span");
+      d.className = "q-detail";
+      d.textContent = detail;
+      b.appendChild(d);
+    }
+    b.onclick = () => choisirOption(titre);
+    qOptions.appendChild(b);
+  });
+  // Valider n'apparaît que là où il sert : un choix unique part au toucher, sans deuxième
+  // geste. Le faire valider aussi doublerait le nombre de touches pour le cas courant.
+  btnQValider.hidden = !q.multi;
+  btnQValider.disabled = q.multi && qCoches.length === 0;
+  btnQValider.textContent = qCoches.length > 1 ? `valider (${qCoches.length})` : "valider";
+}
+
+function choisirOption(titre) {
+  if (!questionPosee) return;
+  const q = questionPosee.questions[qRang] || {};
+  if (q.multi) {
+    const i = qCoches.indexOf(titre);
+    if (i >= 0) qCoches.splice(i, 1); else qCoches.push(titre);
+    majQuestionnaire();
+    return;
+  }
+  repondreQuestion([titre]);
+}
+
+// Une entrée par question, et on passe à la suivante tant qu'il en reste. Les réponses ne
+// partent qu'une fois TOUTES les questions traitées : AskUserQuestion en pose jusqu'à
+// quatre d'un coup, et répondre à la première seule laisse Claude redemander le reste.
+function repondreQuestion(choix) {
+  if (!questionPosee) return;
+  qReponses[qRang] = choix;
+  if (qRang + 1 < questionPosee.questions.length) {
+    qRang++; qCoches = [];
+    majQuestionnaire();
+    return;
+  }
+  const texte = composerReponse();
+  fermerQuestionnaire();
+  envoyerReponseQuestion(texte);
+}
+
+function composerReponse() {
+  const qs = questionPosee.questions;
+  const dit = i => (qReponses[i] || []).join(", ");
+  // Une seule question : la réponse est l'intitulé, rien autour. C'est ce que Claude
+  // attend, et c'est aussi ce qui se relit le mieux dans le flux.
+  if (qs.length === 1) return dit(0);
+  return qs.map((q, i) => `${q.entete || q.question} : ${dit(i)}`).join("\n");
+}
+
+// Le même chemin qu'un message tapé : la réponse passe par la barre de saisie et par
+// `composer.onsubmit`. Pas de commande dédiée — le serveur route déjà toute phrase vers la
+// question en attente, et un second chemin aurait sa propre façon de se tromper.
+function envoyerReponseQuestion(texte) {
+  if (!texte) return;
+  champ.value = texte;
+  majEnvoyer();
+  composer.onsubmit({ preventDefault() {} });
+}
+
+if (btnQValider) btnQValider.onclick = () => { if (qCoches.length) repondreQuestion(qCoches.slice()); };
+if (btnQAutre) btnQAutre.onclick = () => {
+  // On ne REFUSE pas la question : on range les propositions le temps d'écrire. L'attente
+  // reste ouverte côté agent, et la phrase tapée la dénouera comme n'importe quelle autre.
+  qReplie = true;
+  majQuestionnaire();
+  champ.focus();
+};
+if (btnQRouvrir) btnQRouvrir.onclick = () => { qReplie = false; majQuestionnaire(); };
+
 // Le point d'entree unique de tout ce qui arrive du serveur. Nomme, et hors de
 // ws.onmessage, pour deux raisons : le routage est la partie la plus facile a casser en
 // ajoutant un genre, et un harnais qui appelle `ajouter()` directement ne le traverse pas —
@@ -4356,6 +4566,14 @@ function recevoir(e, etat = false) {
         ? (e.message ? enVol.findIndex(m => m.texte === e.message) : (enVol.length ? 0 : -1))
         : -1;
       if (i >= 0) rendreMessage(i, e.texte); else noteBarre(e.texte, true);
+    }
+    // Le questionnaire suit l'ÉTAT d'attente, pas la ligne de flux : c'est l'état qui est
+    // rejoué à la reconnexion et qui survit au relancement, donc c'est lui qui sait encore,
+    // dix minutes plus tard, qu'une question attend quelqu'un. On ne sort pas : la ligne a
+    // sa place dans le flux comme avant.
+    if (e.genre === "attente_reponse" && !enRejeu) {
+      if (e.actif) ouvrirQuestionnaire(e);
+      else if (!questionPosee || questionPosee.id === (e.id || "")) fermerQuestionnaire();
     }
     if (e.genre === "modeles") { remplirModeles(e.liste || [], e.actuel); return; }
     if (e.genre === "efforts") { remplirEfforts(e.liste || [], e.actuel); return; }
