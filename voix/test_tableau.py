@@ -544,6 +544,81 @@ async def l_etat_survit_a_l_eviction():
         await t.arreter()
 
 
+async def le_dernier_echange_survit_a_tout():
+    """On doit TOUJOURS pouvoir relire sa derniere question et la derniere reponse.
+
+    Le symptome, signale le 17 octobre 2026 : on rouvre la page et le fil ne dit plus de quoi
+    on parlait — ni ce qu'on avait demande, ni ce qui avait ete repondu. Une conversation
+    qu'on ne peut pas resituer en deux secondes sur un telephone est une conversation perdue :
+    on repose la question, ou pire, on repond a cote.
+
+    Le flux de la page est une fenetre glissante, et il le reste : c'est ce qui empeche une
+    session de deux jours de remplir la memoire du navigateur. Mais l'echange en cours, lui,
+    est tenu a part et remis en tete du rejeu quand la fenetre l'a laisse filer.
+    """
+    print("\n=== la derniere question et la derniere reponse ne se perdent jamais ===")
+    import json
+    from tableau import Tableau, MEMOIRE
+
+    t = Tableau(port=7894, ouvrir=False)
+    url = await t.demarrer()
+    try:
+        t.publier("toi", texte="relis la carte et dis-moi ce qui cloche", tape=True)
+        # La reponse arrive en fragments, comme en direct : un evenement par poignee de
+        # caracteres. Ce qu'on veut relire est une reponse, pas un morceau de reponse.
+        for bout in ("La carte ", "affiche une version ", "vieille de onze jours."):
+            t.publier("texte", texte=bout, suite=True)
+        dire(t.dernier_echange["question"] == "relis la carte et dis-moi ce qui cloche",
+             "la question posee est retenue hors du flux")
+        dire(t.dernier_echange["reponse"] == "La carte affiche une version vieille de onze jours.",
+             f"et la reponse est recollee entiere : {t.dernier_echange['reponse']!r}")
+
+        # Un outil au milieu d'une reponse ne la coupe pas en deux : au retour, on la lit
+        # d'un seul tenant, et c'est bien ce qu'on veut relire.
+        t.publier("outil", nom="Bash", cible="git log", id="t1")
+        t.publier("texte", texte=" Onze jours, c'est quatre-vingt-un commits.", suite=True)
+        dire(t.dernier_echange["reponse"].endswith("quatre-vingt-un commits."),
+             "ce qui s'ecrit apres un outil appartient encore a la meme reponse")
+
+        dire(t._rappels(list(t.histoire)) == [],
+             "tant que le flux porte l'echange, rien n'est rappele : pas de redite")
+
+        # Une session qui dure : la fenetre glissante finit par avaler l'echange.
+        for i in range(MEMOIRE + 300):
+            t.publier("outil", nom="Bash", cible=f"c{i}", id=f"t{i}")
+        dire(not any(e["genre"] in ("toi", "texte") for e in t.histoire),
+             "apres une longue session, le flux garde en memoire a bien perdu l'echange")
+
+        lignes = []
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                while True:
+                    try:
+                        m = await asyncio.wait_for(ws.receive(), timeout=2)
+                    except asyncio.TimeoutError:
+                        break
+                    if m.type is not aiohttp.WSMsgType.TEXT:
+                        break
+                    d = json.loads(m.data)
+                    if d.get("genre") == "_histoire":
+                        lignes += d["evenements"]
+        mes_mots = [e for e in lignes if e["genre"] == "toi"]
+        reponses = [e for e in lignes if e["genre"] == "texte"]
+        dire(len(mes_mots) == 1 and mes_mots[0]["texte"].startswith("relis la carte"),
+             "une page ouverte apres coup retrouve MA derniere question")
+        dire(len(reponses) == 1 and "quatre-vingt-un commits" in reponses[0]["texte"],
+             "et la derniere reponse recue, entiere")
+        dire(mes_mots[0].get("rappel") and reponses[0].get("rappel"),
+             "marquees comme rappel : la page peut dire que ce sont des retrouvailles")
+
+        # Changer de conversation efface le rappel : le rappeler au-dessus de la nouvelle
+        # ferait croire qu'on y a deja parle.
+        t.vider()
+        dire(t._rappels([]) == [], "une conversation neuve ne rappelle pas celle d'avant")
+    finally:
+        await t.arreter()
+
+
 async def l_etat_se_lit_sans_page():
     """« Qui travaille encore ? » doit se lire sans ouvrir la page.
 
@@ -1092,6 +1167,7 @@ async def principal():
     un_moteur_sans_direct_est_annonce()
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()
+    await le_dernier_echange_survit_a_tout()
     await le_serveur_ecoute_pendant_qu_il_rejoue()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1

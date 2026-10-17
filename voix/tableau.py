@@ -42,6 +42,9 @@ log = logging.getLogger("voix.tableau")
 # Assez pour contenir un historique rejoue (jusqu'a 400 lignes) SANS chasser la session en
 # cours : une page ouverte en cours de route doit montrer les deux.
 MEMOIRE = 3000
+# De quoi tenir une question dictee comme une reponse longue : le champ de saisie est
+# borne a 4 000 caracteres, un debrief depasse rarement 8 000.
+ECHANGE_MAX = 12000
 
 # Les genres qui decrivent un ETAT plutot qu'un instant. Ils survivent a l'eviction du flux et
 # sont renvoyes a chaque nouvelle connexion, avant l'historique.
@@ -107,6 +110,14 @@ class Tableau:
         self._commandes_en_attente: list[tuple[str, dict]] = []
         self._on_commande = on_commande
         self.histoire: deque = deque(maxlen=MEMOIRE)
+        # Le dernier echange, tenu A PART du flux. Quoi qu'il arrive au flux — fenetre
+        # glissante, conversation compactee, page rouverte trois jours plus tard — on doit
+        # toujours pouvoir relire DEUX choses : la derniere question posee et la derniere
+        # reponse recue. C'est le minimum pour savoir ou l'on en est, et c'est precisement
+        # ce qu'on perdait : un flux tronque peut rendre une page qui ne dit plus de quoi
+        # on parlait.
+        self.dernier_echange: dict[str, str] = {"question": "", "reponse": "",
+                                                "hq": "", "hr": ""}
         # Une file bornee par client, servie par un seul ecrivain. La version precedente
         # creait une tache asyncio PAR evenement et PAR client, sans jamais les attendre :
         # sur une session de deux jours avec des deltas de reflexion, ca faisait des dizaines
@@ -153,6 +164,51 @@ class Tableau:
         plus laquelle on lit — ni a quelle conversation appartient un message qu'on relit.
         """
         self.histoire.clear()
+        # L'echange retenu part avec : il appartient a la conversation qu'on quitte, et le
+        # rappeler au-dessus de la nouvelle ferait croire qu'on y a deja parle.
+        self.dernier_echange = {"question": "", "reponse": "", "hq": "", "hr": ""}
+
+    def _noter_echange(self, e: dict):
+        """Retenir la question posee et la reponse ecrite depuis.
+
+        La reponse arrive en fragments — un evenement par poignee de caracteres — et on les
+        recolle ici : ce qu'on veut relire est une reponse, pas un morceau de reponse. Elle
+        se referme sur la question SUIVANTE et sur rien d'autre : un outil au milieu d'une
+        reponse ne la coupe pas en deux, puisqu'au retour on la lit d'un seul tenant.
+        """
+        genre, texte = e.get("genre"), (e.get("texte") or "")
+        if genre == "toi":
+            self.dernier_echange = {"question": texte[:ECHANGE_MAX], "reponse": "",
+                                    "hq": e.get("h", ""), "hr": ""}
+        elif genre == "texte" and texte:
+            deja = self.dernier_echange["reponse"]
+            if deja and not e.get("suite"):
+                deja += "\n\n"
+            self.dernier_echange["reponse"] = (deja + texte)[:ECHANGE_MAX]
+            self.dernier_echange["hr"] = e.get("h", "")
+
+    def _rappels(self, passe: list[dict]) -> list[dict]:
+        """Ce qu'il faut remettre en tete du rejeu pour que la page sache de quoi on parle.
+
+        Rien n'est ajoute quand le flux contient deja l'echange — le cas normal. Ces lignes
+        ne sont donc pas une redite : elles n'apparaissent que la ou il y avait un trou.
+        """
+        q = (self.dernier_echange.get("question") or "").strip()
+        r = (self.dernier_echange.get("reponse") or "").strip()
+        rappels: list[dict] = []
+        place = -1
+        for i, e in enumerate(passe):
+            if e.get("genre") == "toi" and (e.get("texte") or "").strip() == q:
+                place = i
+        if q and place < 0:
+            rappels.append({"genre": "toi", "texte": q, "n": 0, "t": 0.0,
+                            "h": self.dernier_echange.get("hq", ""),
+                            "tape": True, "rappel": True})
+        apres = passe[place + 1:] if place >= 0 else passe
+        if r and not any(e.get("genre") == "texte" for e in apres):
+            rappels.append({"genre": "texte", "texte": r, "n": 0, "t": 0.0,
+                            "h": self.dernier_echange.get("hr", ""), "rappel": True})
+        return rappels
 
     def publier(self, genre: str, **donnees):
         """Never awaited by callers: the voice path must not block on the UI."""
@@ -170,6 +226,7 @@ class Tableau:
             **donnees,
         }
         self.histoire.append(evenement)
+        self._noter_echange(evenement)
         charge = json.dumps(evenement, ensure_ascii=False, default=str)
         if genre in ETATS:
             # AVANT le retour « aucun client » : l'etat de demarrage est publie alors que le
@@ -698,6 +755,10 @@ class Tableau:
                     await ws.send_str(f'{{"genre": "_etat", "evenement": {charge}}}')
 
             passe = list(self.histoire)
+            # Le filet : si le flux garde en memoire a perdu l'echange en cours — fenetre
+            # glissante, reprise, conversation compactee — on le remet en tete plutot que
+            # de rendre une page qui ne dit plus de quoi on parlait.
+            passe = self._rappels(passe) + passe
             for i in range(0, len(passe) or 1, 200):
                 # Le verrou est repris A CHAQUE LOT, pas garde pour tout le rejeu : entre
                 # deux lots, une reponse de liaison peut passer. C'est ce qui permet a une
