@@ -10,12 +10,18 @@ vérifient aussi le reste, qui est du français lu à voix haute : « 1 h 09 » 
 import asyncio
 import os
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 import quota as mq
-from quota import ECART_MINIMUM, REPLI_MAX, Quota, _quand
+from quota import ECART_MINIMUM, REPLI_MAX, Quota, _quand, fenetres_du_partage
+
+# Aucun test ne doit lire le vrai relevé partagé du socle : il est frais ou périmé selon
+# l'heure, et un test qui change d'avis selon l'heure ne teste rien. Ceux qui en veulent un
+# le posent eux-mêmes.
+mq.PARTAGE = Path("/ce-fichier-n-existe-pas/socle-usage.json")
 
 ok = True
 
@@ -320,6 +326,66 @@ def main():
     le_repli_protege_l_endpoint_qui_nous_sert()
     sans_jeton_on_ne_sort_pas_sur_le_reseau()
     le_garde_fou_vaut_aussi_pour_les_appelants_presses()
+    on_lit_ce_que_le_tableau_a_deja_paye()
+    sans_tableau_allume_l_agent_se_debrouille()
+
+def on_lit_ce_que_le_tableau_a_deja_paye():
+    """Le point d'usage du compte tolere une poignee d'appels par quart d'heure.
+
+    Mesure du 17 octobre 2026 : cinq processus l'interrogeaient toutes les cinq minutes
+    — le tableau de bord et quatre agents — soit soixante appels par heure. Le tableau
+    vivait en 429 permanent et affichait « 100 % utilise » alors que le compte etait a
+    6 %. Chaque agent avait raison tout seul ; l'ensemble avait tort.
+    """
+    maintenant = datetime.now(timezone.utc)
+    ms = maintenant.timestamp() * 1000
+    plus_tard = (maintenant + timedelta(hours=3)).isoformat()
+    frais = {"horodatage": ms - 60_000, "limites": [
+        {"genre": "session", "pourcent": 6, "remiseAZero": plus_tard, "modele": None},
+        {"genre": "weekly_scoped", "pourcent": 96, "remiseAZero": plus_tard, "modele": "Fable"},
+    ]}
+
+    f = fenetres_du_partage(frais, ms)
+    dire(f is not None and len(f) == 2,
+             "un releve frais du tableau evite un appel de plus au compte")
+    dire(f[0]["cle"] == "session" and f[0]["pct"] == 6,
+             "le pourcentage lu est bien celui que le tableau a releve")
+    dire(f[1]["cle"] == "semaine Fable",
+             "une limite qui ne vaut que pour un modele le dit dans son nom")
+
+    vieux = dict(frais, horodatage=ms - 20 * 60_000)
+    dire(fenetres_du_partage(vieux, ms) is None,
+             "un releve de vingt minutes ne sert plus : on va le chercher soi-meme")
+
+    # Le defaut du 17 octobre, vu de l'autre bout : afficher un chiffre dont la fenetre
+    # est deja retombee a zero fait croire le forfait epuise et arreter de travailler.
+    retombe = {"horodatage": ms - 60_000, "limites": [
+        {"genre": "session", "pourcent": 100,
+         "remiseAZero": (maintenant - timedelta(hours=2)).isoformat(), "modele": None}]}
+    dire(fenetres_du_partage(retombe, ms) is None,
+             "une fenetre remise a zero depuis deux heures n'affiche plus son ancien 100 %")
+
+    for absurde in (None, [], "", {"limites": []}, {"horodatage": "hier"},
+                    {"horodatage": ms, "limites": [None, 3, {"genre": "inconnu"}]},
+                    {"horodatage": ms, "limites": [{"genre": "session", "pourcent": None,
+                                                    "remiseAZero": "pas une date"}]}):
+        try:
+            fenetres_du_partage(absurde, ms)
+        except Exception as e:
+            dire(False, f"un releve partage abime fait tomber l'agent : {absurde!r} -> {e}")
+            break
+    else:
+        dire(True, "un releve partage abime ou vide ne fait jamais tomber l'agent")
+
+
+def sans_tableau_allume_l_agent_se_debrouille():
+    """Le partage est un raccourci, pas une dependance : seul, l'agent doit s'en sortir."""
+    q = Quota()
+    mq.PARTAGE = Path("/nulle/part/socle-usage.json")
+    dire(q._lire_partage() is None,
+             "sans releve partage sur le disque, on repart sur l'appel direct")
+
+
     print("\nTOUT VERT" if ok else "\nDES ECHECS")
     sys.exit(0 if ok else 1)
 

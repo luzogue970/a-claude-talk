@@ -24,6 +24,70 @@ import aiohttp
 URL = "https://api.anthropic.com/api/oauth/usage"
 CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
 
+# Le releve partage, ecrit par le tableau de bord du socle toutes les cinq minutes.
+#
+# Le point d'usage du compte est severement limite : deux appels en un quart d'heure
+# suffisent a decrocher un 429. Le 17 octobre 2026 nous etions CINQ a l'interroger
+# toutes les cinq minutes — le tableau et quatre agents — soit soixante appels par
+# heure. Resultat : 429 permanent, et un chiffre fige a 100 % affiche pendant des
+# heures alors que le compte etait a 6 %. Chaque agent avait raison tout seul et
+# l'ensemble avait tort.
+#
+# On lit donc ce que le tableau a deja paye. L'appel direct reste, en repli : sans
+# tableau allume, un agent doit pouvoir se debrouiller.
+PARTAGE = Path.home() / ".cache" / "socle-usage.json"
+PARTAGE_FRAIS = 420.0   # sept minutes : le tableau releve toutes les cinq
+
+# Le tableau nomme les fenetres comme l'API les nomme aujourd'hui ; l'agent les nomme
+# comme l'API les nommait hier. La correspondance vit ici, en un seul endroit.
+GENRES = {
+    "session": ("session", "fenêtre glissante de 5 heures"),
+    "weekly_all": ("semaine", "fenêtre glissante de 7 jours"),
+    "weekly_scoped": ("semaine", "fenêtre de 7 jours, un modèle seulement"),
+}
+
+
+def fenetres_du_partage(brut: dict, maintenant_ms: float, frais_s: float = PARTAGE_FRAIS):
+    """Les fenetres lisibles dans le releve partage, ou None s'il ne sert a rien.
+
+    Fonction pure : c'est la regle, et elle se teste sans fichier ni reseau.
+    Un releve plus vieux que la fenetre qu'il decrit ne dit plus rien de vrai — c'est
+    exactement ce qui affichait « 100 % » deux heures apres une remise a zero.
+    """
+    if not isinstance(brut, dict):
+        return None
+    horodatage = brut.get("horodatage")
+    if not isinstance(horodatage, (int, float)):
+        return None
+    if maintenant_ms - horodatage > frais_s * 1000:
+        return None
+    fenetres = []
+    for limite in brut.get("limites") or []:
+        if not isinstance(limite, dict):
+            continue
+        libelle, taille = GENRES.get(limite.get("genre"), (limite.get("genre"), ""))
+        if not libelle:
+            continue
+        if limite.get("modele"):
+            libelle = f"{libelle} {limite['modele']}"
+        reset_iso = limite.get("remiseAZero") or ""
+        # La fenetre s'est-elle deja remise a zero depuis ce releve ? Alors son chiffre
+        # est faux, et se taire vaut mieux que mentir.
+        if reset_iso:
+            try:
+                if datetime.fromisoformat(reset_iso).timestamp() * 1000 <= maintenant_ms:
+                    continue
+            except ValueError:
+                pass
+        fenetres.append({
+            "cle": libelle,
+            "pct": float(limite.get("pourcent") or 0),
+            "reset": _quand(reset_iso),
+            "reset_iso": reset_iso,
+            "taille": taille,
+        })
+    return fenetres or None
+
 # Only the windows worth a glance. seven_day_opus is null on a Team seat — the weekly
 # bucket covers every model there — so it is shown only when the account reports it.
 # Le libelle dit la FONCTION de la fenetre, pas sa taille. « 5h » laissait croire qu'il
@@ -90,6 +154,19 @@ class Quota:
         reading is kept rather than cleared — a slightly stale percentage beats a blank."""
         if not force and time.monotonic() < self._pas_avant:
             return bool(self.fenetres)
+        # Ce que le tableau a deja paye, d'abord. Voir PARTAGE : a cinq interrogateurs
+        # pour un point d'usage qui en tolere un, personne n'obtenait plus rien.
+        partage = self._lire_partage()
+        if partage is not None:
+            self._echecs = 0
+            self._lu_a = time.monotonic()
+            self._reporter(ECART_MINIMUM)
+            self.fenetres = partage
+            for f in partage:
+                self._alerter(f["cle"], f["pct"])
+            if self.tableau:
+                self.tableau.publier("quota", fenetres=partage)
+            return True
         jeton = _jeton()
         if not jeton:
             self._reporter(ECART_MINIMUM)
@@ -151,6 +228,17 @@ class Quota:
         if self.tableau and fenetres:
             self.tableau.publier("quota", fenetres=fenetres)
         return bool(fenetres)
+
+    def _lire_partage(self):
+        """Le releve du tableau, s'il est frais. Jamais une exception : c'est un repli."""
+        try:
+            brut = json.loads(PARTAGE.read_text())
+        except Exception:
+            return None
+        try:
+            return fenetres_du_partage(brut, time.time() * 1000)
+        except Exception:
+            return None
 
     def _signaler(self, message: str):
         """Complain once, not on every retry: the dashboard is for signal."""
