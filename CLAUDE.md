@@ -47,3 +47,25 @@ déjà vécu hors de cette liste : elles passaient, et ne protégeaient rien.
 
 Le dernier champ du tuple dit si la suite est **lente** (réseau, API payante) — elle sort
 alors du passage rapide, jamais du passage complet.
+
+## Les réglages généraux : `reglages.json`, et l'environnement garde le dernier mot
+
+Chaque réglage avait sa variable d'environnement, posée au lancement par un script
+shell du dépôt *tableau*. Changer le modèle par défaut demandait d'éditer ce script,
+puis de relancer chaque conversation.
+
+`voix/reglages.py` lit `~/.config/claude-talk/reglages.json` au tout début de
+`config.py`, juste après les secrets et avant la première lecture d'environnement.
+Le tableau de bord l'écrit depuis son onglet Dev.
+
+- **`os.environ.setdefault`**, même règle que les secrets : une variable posée à la
+  main gagne. Une variable **vide** ne gagne pas — c'est un oubli, et `float("")`
+  faisait tomber l'import sans nommer ni la variable ni le script fautif.
+- Le fichier stocke **l'identifiant du modèle** (`claude-opus-5`), pas la clé courte,
+  parce que c'est ce que `VOIX_WORKER_MODEL` attend. Embarquer la table des modèles
+  dans `reglages.py` l'aurait mise en double de `config.MODELES` ;
+  `config.cle_du_modele()` fait la traduction là où on en a besoin — et la commande
+  `modele` accepte donc les deux formes.
+- **`POST /commande`** sur le serveur de l'agent rejoue le chemin de la WebSocket,
+  garde-fou de `_executer` compris. C'est par là que le tableau change le modèle ou
+  l'effort d'une conversation déjà ouverte, sans qu'elle ait rien à relancer.

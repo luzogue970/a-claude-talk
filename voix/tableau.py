@@ -377,6 +377,40 @@ class Tableau:
     async def _page(self, _req):
         return web.Response(text=_page_html(), content_type="text/html")
 
+    async def _commande(self, requete):
+        """Executer un ordre venu d'ailleurs que de la page — meme chemin, sans WebSocket.
+
+        Le tableau de bord doit pouvoir changer le modele ou l'effort de TOUTES les
+        conversations d'un coup, depuis sa page de configuration. Il parle a chaque agent en
+        HTTP comme il le fait deja pour `/etat.json` ; lui faire ouvrir une WebSocket par
+        session pour un seul message aurait demande une dependance de plus cote serveur, et
+        une liaison a surveiller pour rien.
+
+        On passe par `_executer`, donc par le meme garde-fou que la page : une commande qui
+        leve est nommee dans les logs et publiee en « erreur », elle n'emporte rien avec elle.
+
+        Pas de jeton de deduplication ici, volontairement : c'est une requete HTTP, elle a
+        une reponse. L'appelant sait si elle est passee, ce qui est precisement ce que le
+        jeton fabriquait a la main au-dessus d'une socket sans accuse.
+        """
+        try:
+            ordre = await requete.json()
+        except (ValueError, TypeError):
+            return web.json_response({"erreur": "JSON attendu"}, status=400)
+        if not isinstance(ordre, dict):
+            return web.json_response({"erreur": "objet JSON attendu"}, status=400)
+        nom = ordre.pop("cmd", None)
+        if not nom or not isinstance(nom, str):
+            return web.json_response({"erreur": "champ « cmd » attendu"}, status=400)
+        ordre.pop("jeton", None)
+        if not self._on_commande:
+            # L'agent finit de demarrer. On garde l'ordre pour lui — et on le DIT, parce que
+            # « recu » tout court laisserait croire a un effet deja obtenu.
+            self._commandes_en_attente.append((nom, ordre))
+            return web.json_response({"recu": True, "differee": True})
+        await self._executer(nom, ordre)
+        return web.json_response({"recu": True, "differee": False})
+
     async def _image(self, requete):
         """Recevoir une photo, et rendre son chemin.
 
@@ -978,6 +1012,7 @@ class Tableau:
         app.router.add_get("/", self._page)
         app.router.add_get("/flux", self._flux)
         app.router.add_get("/etat.json", self._etat)
+        app.router.add_post("/commande", self._commande)
         app.router.add_post("/image", self._image)
         app.router.add_post("/audio", self._audio)
         app.router.add_post("/parler", self._parler)

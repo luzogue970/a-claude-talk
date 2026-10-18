@@ -6,6 +6,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+import reglages
+
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS = Path.home() / ".config" / "claude-talk" / "secrets.env"
 
@@ -37,6 +39,11 @@ def _load_secrets():
 
 
 _load_secrets()
+
+# Les reglages generaux, poses APRES les secrets et AVANT la premiere lecture d'environnement
+# de ce module — tout ce qui suit s'en sert. `setdefault` des deux cotes, donc une variable
+# deja presente gagne : le fichier est un DEFAUT partage, pas une consigne.
+reglages.appliquer()
 
 
 def claude_binary():

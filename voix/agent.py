@@ -1630,7 +1630,11 @@ async def entrypoint(ctx: JobContext):
                     pass
                 raise
         elif nom == "modele":
-            cle = str(donnees.get("cle") or "")
+            # « opus » depuis la page, « claude-opus-5 » depuis le tableau de bord : les
+            # reglages generaux stockent l'identifiant, parce que c'est lui que
+            # VOIX_WORKER_MODEL attend. cle_du_modele rend la cle courte et laisse passer
+            # ce qu'elle ne reconnait pas, donc une seule ligne suffit a accepter les deux.
+            cle = config.cle_du_modele(str(donnees.get("cle") or ""))
             # From the page the choice is deliberate, so it sticks until changed again.
             libelle = await worker.changer_modele(cle, temporaire=False)
             if libelle:
@@ -1859,6 +1863,19 @@ async def entrypoint(ctx: JobContext):
                 tableau.publier("effort", cle=config.cle_de_effort(worker.effort),
                                 niveau=worker.effort,
                                 libelle=config.EFFORTS.get(worker.effort, ("", ""))[1])
+        elif nom == "effort_auto":
+            # L'ajustement automatique de l'effort, coupe ou retabli pour cette session.
+            # Lu a chaque tour au travers du module (config.EFFORT_AUTO), donc il n'y a rien
+            # a reconstruire : le tour suivant obeit deja.
+            config.EFFORT_AUTO = bool(donnees.get("actif", True))
+            if config.EFFORT_AUTO:
+                # Retablir l'ajustement sans lever le verrou pose par un choix manuel ne
+                # ferait rien de visible — l'interrupteur paraitrait mort. Rallumer, c'est
+                # rendre la main.
+                agent._effort_manuel = False
+            tableau.publier("effort_auto", actif=config.EFFORT_AUTO)
+            tableau.publier("ordre", texte=("ajustement automatique de l'effort "
+                                            + ("rétabli" if config.EFFORT_AUTO else "coupé")))
         elif nom == "retenir":
             agent.retenir = bool(donnees.get("actif"))
             tableau.publier("retenir", actif=agent.retenir)
