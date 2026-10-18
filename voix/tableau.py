@@ -56,6 +56,10 @@ ETATS = frozenset({
     # recharge pendant qu'une tache tourne, elle doit la retrouver — sinon la conversation
     # a de nouveau l'air finie, ce qui est tout le defaut qu'on corrige.
     "fond",
+    # Les delegues en cours. Meme raison que « fond », et la meme mesure : une page
+    # rechargee pendant qu'un agent travaille doit le retrouver, sinon elle affirme que
+    # rien ne tourne au moment precis ou l'on vient verifier que quelque chose tourne.
+    "agents",
     # La dictee retenue : ce qui attend dans la barre. Un ETAT, parce qu'une seule compte —
     # la derniere — et qu'elle doit etre vide une fois consommee. Rejouee comme un simple
     # evenement, chaque vieille dictee de l'historique revenait remplir la barre a la
@@ -1830,6 +1834,24 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
 #fond-detail li.fini{opacity:.55}
 #fond-detail li.echoue{color:#f08080}
 #fond-detail small{opacity:.7;margin-left:4px}
+/* Un delegue : une ligne, et une seule, qui dit ce qu'il fait MAINTENANT. Le reste se
+   deplie au toucher — c'est ce qu'on vient chercher quand la ligne ne suffit plus. */
+#fond-detail .agent{display:block;width:100%;text-align:left;background:none;border:0;
+  padding:4px 0;color:inherit;font:inherit;cursor:pointer}
+#fond-detail .agent+.agent,#fond-detail .agent+.tache,#fond-detail .tache+.agent{
+  margin-top:6px;padding-top:6px;border-top:1px solid #ffffff14}
+#fond-detail .agent .fait{display:block;color:#d2b7ff;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#fond-detail .agent .fait::before{content:"↳ ";opacity:.6}
+#fond-detail .agent .plie{float:right;opacity:.5;margin-left:8px}
+#fond-detail .chemin{margin:4px 0 0;padding-left:16px;opacity:.75}
+#fond-detail .chemin li{list-style:"· ";white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+/* Une action d'un delegue, dans le flux. Sans cette marque elle est identique a une action
+   du tour principal : on lisait le travail de l'agent comme si Claude le faisait lui-meme,
+   ce qui est exactement ce qui rendait un run incomprehensible. */
+.ev.delegue{border-left:2px solid var(--permission);background:#8957e50a}
+.ev.delegue .badge::after{content:" délégué";color:#d2b7ff;opacity:.8}
 #travail::before{content:"⟳ ";display:inline-block;animation:tourne 1.1s linear infinite}
 /* Un indicateur qui tourne AFFIRME qu'il se passe quelque chose. Liaison coupee, on ne sait
    plus : il s'arrete, et perd sa couleur, plutot que de continuer a jouer l'activite. */
@@ -2880,6 +2902,13 @@ let sttDirect = true;
 // Volontairement HORS de `encours` : cette liste-la ne doit pas etre videe par la fin du
 // tour. Elle ne se referme que sur la notification de fin, qui arrive plus tard.
 let tachesFond = [];
+// Les delegues en cours. Separe de `tachesFond` : un agent au PREMIER plan n'est pas une
+// tache de fond — le tour l'attend — mais c'est pendant ces minutes-la qu'on se demande le
+// plus ce qui se passe, et c'etait precisement le moment ou la page ne disait rien.
+let agentsEnCours = [];
+// Quels agents sont dépliés dans le panneau, par identifiant. Un ensemble plutôt qu'un
+// booléen : avec six agents, tout déplier remplit l'écran et on ne lit plus rien.
+const agentsDeplies = new Set();
 function majActivite() {
   const outils = [...encours.keys()].filter(c => c.startsWith("outil:")).length;
   const bouts = [];
@@ -2905,6 +2934,15 @@ function majActivite() {
     bouts.unshift('<span class="act fond" role="button" title="' + detail.replace(/"/g, "&quot;")
       + '">' + lib + '</span>');
   }
+  if (agentsEnCours.length) {
+    const n = agentsEnCours.length;
+    // En tete, avant les taches de fond : c'est la question la plus pressante quand
+    // plusieurs choses tournent — qui travaille, et sur quoi.
+    bouts.unshift('<span class="act fond delegues" role="button" title="'
+      + agentsEnCours.map(a => (a.nom || "agent") + (a.fait ? " · " + a.fait : ""))
+          .join("\n").replace(/"/g, "&quot;")
+      + '">' + n + (n > 1 ? " agents" : " agent") + '</span>');
+  }
   zoneActivite.innerHTML = bouts.join("");
   majFondDetail();
   majCogitation();
@@ -2924,8 +2962,28 @@ function depuisTexte(epoque) {
 }
 function majFondDetail() {
   if (!zoneFond) return;
-  if (!fondOuvert || !tachesFond.length) { zoneFond.hidden = true; zoneFond.innerHTML = ""; return; }
-  zoneFond.innerHTML = tachesFond.map(t => {
+  if (!fondOuvert || (!tachesFond.length && !agentsEnCours.length)) {
+    zoneFond.hidden = true; zoneFond.innerHTML = ""; battreChrono(); return;
+  }
+  // Un agent par ligne : son nom, ce qu'il fait a cette seconde, son age et le nombre
+  // d'actions. C'est tout ce qu'on demande a la vue d'ensemble ; le chemin se deplie.
+  const blocsAgents = agentsEnCours.map(a => {
+    const ouvert = agentsDeplies.has(a.id);
+    const chemin = ouvert && (a.actions || []).length
+      ? '<ul class="chemin">' + a.actions.slice(-12).reverse()
+          .map(x => '<li>' + ech(x) + '</li>').join("") + '</ul>'
+      : "";
+    const compte = a.combien ? a.combien + (a.combien > 1 ? " actions" : " action") : "";
+    return '<button type="button" class="agent" data-agent="' + ech(a.id) + '">'
+      + '<span class="plie">' + (ouvert ? "▾" : "▸") + '</span>'
+      + '<b>' + ech(a.nom || "agent") + '</b>'
+      + (a.sorte ? ' <small>' + ech(a.sorte) + '</small>' : '')
+      + (a.fond ? ' <small>en fond</small>' : '')
+      + ' <small>' + ech(depuisTexte(a.depuis)) + (compte ? ' · ' + compte : '') + '</small>'
+      + '<span class="fait">' + ech(a.fait || "démarre…") + '</span>'
+      + chemin + '</button>';
+  }).join("");
+  zoneFond.innerHTML = blocsAgents + tachesFond.map(t => {
     const agents = (t.agents || []).map(a => {
       const classe = a.etat === "fini" ? "fini" : a.etat === "échoué" ? "echoue" : "encours";
       return '<li class="' + classe + '">' + ech(a.nom)
@@ -2937,11 +2995,34 @@ function majFondDetail() {
       + (agents ? '<ul>' + agents + '</ul>' : '') + '</div>';
   }).join("");
   zoneFond.hidden = false;
+  battreChrono();
+}
+
+// « depuis 3 min » n'avance que si quelque chose le fait avancer. Calcule au rendu, l'age
+// restait fige sur sa valeur du dernier evenement serveur : un agent qui reflechit dix
+// minutes sans appeler d'outil affichait « depuis 12 s » pendant dix minutes, et la page
+// donnait l'impression de s'etre arretee. Une seconde de battement, uniquement quand le
+// panneau est ouvert — rien ne tourne en vain derriere un panneau ferme.
+let chrono = null;
+function battreChrono() {
+  const utile = !!zoneFond && !zoneFond.hidden;
+  if (utile && !chrono) chrono = setInterval(majFondDetail, 1000);
+  else if (!utile && chrono) { clearInterval(chrono); chrono = null; }
 }
 if (zoneActivite && zoneActivite.addEventListener) {
   zoneActivite.addEventListener("click", e => {
     const cible = e && e.target && e.target.closest ? e.target.closest(".fond") : null;
     if (cible) basculerFond();
+  });
+}
+function basculerAgent(id) {
+  if (agentsDeplies.has(id)) agentsDeplies.delete(id); else agentsDeplies.add(id);
+  majFondDetail();
+}
+if (zoneFond && zoneFond.addEventListener) {
+  zoneFond.addEventListener("click", e => {
+    const cible = e && e.target && e.target.closest ? e.target.closest(".agent") : null;
+    if (cible) basculerAgent(cible.dataset.agent);
   });
 }
 
@@ -3028,6 +3109,7 @@ function ajouter(e) {
   } else {
     const ligne = document.createElement("div");
     ligne.className = `ev g-${e.genre}` + (e.passe ? " passe" : "")
+                    + (e.parent ? " delegue" : "")
                     + (enRejeu || e.passe ? "" : " neuve");
     ligne.dataset.g = e.genre;
     ligne.style.display = actifs.has(e.genre) ? "" : "none";
@@ -4656,6 +4738,16 @@ function recevoir(e, etat = false) {
       // Remplacement complet, jamais d'ajout : le serveur envoie la liste entiere a chaque
       // changement, donc une tache disparue disparait ici sans qu'on ait a la retirer.
       tachesFond = e.taches || [];
+      majActivite();
+      return;
+    }
+    if (e.genre === "agents") {
+      // Liste entiere a chaque changement, comme « fond » : un agent qui a fini disparait
+      // sans qu'on ait a le retirer, et une page rechargee repart de l'etat vrai.
+      agentsEnCours = e.liste || [];
+      for (const id of [...agentsDeplies]) {
+        if (!agentsEnCours.some(a => a.id === id)) agentsDeplies.delete(id);
+      }
       majActivite();
       return;
     }

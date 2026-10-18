@@ -70,6 +70,8 @@ SUITES = [
      "le débrief : ce qu'on lit et ce qu'on entend sortent du même flux", False),
     ("fond", "test_fond.py", "py",
      "le travail qui continue après la réponse, et qu'on doit voir", False),
+    ("delegues", "test_delegues.py", "py",
+     "les agents délégués : qui travaille, et sur quoi, pendant que ça travaille", False),
     ("permission", "test_permission.py", "py",
      "ce qui passe sans demander, ce qui demande, et ce qui bascule", False),
     ("hey-claude", "test_assistant_conversation.py", "py",

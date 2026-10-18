@@ -2920,6 +2920,69 @@ dire(panneauFond.hidden === false && /npm test/.test(panneauFond.textContent),
      'et le panneau, laissé ouvert, se rouvre avec la tâche suivante');
 fondOuvert = false; tachesFond = []; majActivite();
 
+// ---- les delegues : qui travaille, et sur quoi -----------------------------------------
+// Le SDK remonte les appels d outils d un sous-agent avec `parent_tool_use_id`, et la page
+// n en faisait rien : une ligne « Agent · explorer les tests » puis le silence, pendant que
+// le travail du delegue s affichait comme celui du tour principal.
+titre('agents délégués : un par ligne, ce qu il fait, et le chemin au toucher');
+encours.clear();
+agentsEnCours = []; agentsDeplies.clear(); tachesFond = []; fondOuvert = false;
+const maintenant = Date.now() / 1000;
+emettre({ genre: 'agents', liste: [
+  { id: 'ag1', nom: 'Lire les tests', sorte: 'Explore', depuis: maintenant - 130,
+    combien: 2, fait: 'lu test_fond.py', fond: false,
+    actions: ['lu test_tableau.py', 'lu test_fond.py'] },
+  { id: 'ag2', nom: 'Chiffrer la reprise', sorte: 'Plan', depuis: maintenant - 20,
+    combien: 1, fait: 'lancé Compter les lignes', fond: true,
+    actions: ['lancé Compter les lignes'] } ] });
+const pastilleAg = zoneActivite.innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+dire(/2 agents/.test(pastilleAg), 'la pastille dit combien d agents tournent : ' + pastilleAg);
+const panneauAg = document.getElementById('fond-detail');
+dire(panneauAg.hidden === true, 'le panneau reste fermé tant qu on ne touche pas');
+basculerFond();
+const texteAg = panneauAg.textContent.replace(/\s+/g, ' ').trim();
+dire(/Lire les tests/.test(texteAg) && /Chiffrer la reprise/.test(texteAg),
+     'ouvert, il nomme chaque agent : ' + texteAg);
+dire(/lu test_fond.py/.test(texteAg) && /lancé Compter les lignes/.test(texteAg),
+     'et dit ce que chacun fait à cette seconde');
+dire(/depuis 2 min/.test(texteAg) && /2 actions/.test(texteAg),
+     'avec son âge et son nombre d actions — « quand il tourne », sans descendre dans le flux');
+dire(/en fond/.test(texteAg), 'celui qui continue après le tour le dit');
+dire(!/test_tableau.py/.test(texteAg),
+     'le chemin reste replié : six agents dépliés rempliraient l écran et on ne lirait plus rien');
+
+basculerAgent('ag1');
+const deplie = panneauAg.textContent.replace(/\s+/g, ' ').trim();
+dire(/test_tableau.py/.test(deplie), 'un toucher sur la ligne déplie son chemin : ' + deplie);
+dire(deplie.indexOf('lu test_fond.py') < deplie.indexOf('lu test_tableau.py'),
+     'du plus récent au plus ancien : ce qu il fait maintenant est en haut');
+dire(/data-agent="ag1"/.test(panneauAg.innerHTML) && /data-agent="ag2"/.test(panneauAg.innerHTML),
+     'chaque ligne porte son identifiant, donc chacune se déplie séparément');
+
+emettre({ genre: 'agents', liste: [
+  { id: 'ag2', nom: 'Chiffrer la reprise', sorte: 'Plan', depuis: maintenant - 20,
+    combien: 1, fait: 'lancé Compter les lignes', fond: true, actions: [] } ] });
+dire(!/Lire les tests/.test(panneauAg.textContent) && /1 agent\b/.test(zoneActivite.innerHTML),
+     'celui qui a fini s efface, celui qui travaille reste');
+dire(agentsDeplies.has('ag1') === false,
+     'et son dépliage est oublié avec lui : un même identifiant réutilisé ne rouvre pas un panneau au hasard');
+
+emettre({ genre: 'agents', liste: [] });
+dire(panneauAg.hidden === true && !/agent/.test(zoneActivite.innerHTML),
+     'plus personne ne travaille : la pastille et le panneau partent ensemble');
+
+// La marque dans le flux : sans elle, l action du delegue est identique a celle du tour
+// principal, et on lit le travail de l agent comme si Claude le faisait lui-meme.
+flux.children.length = 0; dernier = null;
+ajouter({ n: 7311, genre: 'outil', nom: 'Read', cible: 'worker.py', h: '12:00:00' });
+const ligneSeule = flux.children[flux.children.length - 1];
+ajouter({ n: 7312, genre: 'outil', nom: 'Read', cible: 'tableau.py', h: '12:00:01',
+          parent: 'ag1' });
+const ligneDeleguee = flux.children[flux.children.length - 1];
+dire(!/delegue/.test(ligneSeule.className) && /delegue/.test(ligneDeleguee.className),
+     'une action déléguée se distingue dans le flux : ' + ligneDeleguee.className);
+agentsEnCours = []; agentsDeplies.clear(); fondOuvert = false; majActivite();
+
 setTimeout(() => {
   titre('sonde sans reponse, et message renvoye');
 

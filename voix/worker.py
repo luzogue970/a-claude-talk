@@ -272,6 +272,18 @@ FOND_IMPLICITE = ("Agent", "Workflow")
 # pouvoir dire d'ou il sort, sinon il repond a une question qui n'a pas ete posee.
 RELANCE_DE_FOND = "(une tâche de fond s'est terminée)"
 
+# Les outils qui DELEGUENT. Pendant qu'ils tournent, le SDK fait remonter les appels
+# d'outils du delegue dans le MEME flux, avec `parent_tool_use_id` renseigne — c'est
+# documente comme « enough for a progress heartbeat ». On ne regardait pas ce champ : les
+# actions du delegue s'affichaient comme celles du tour principal, melangees aux siennes,
+# et le delegue lui-meme n'existait nulle part. « Qu'est-ce que fabrique l'agent en
+# arriere-plan » n'etait donc pas une impression : l'information arrivait, et on la jetait.
+OUTILS_DELEGUES = ("Agent", "Task")
+# Ce qu'on garde du travail d'un agent. Au-dela, on oublie le debut : la page montre ce
+# qu'il fait MAINTENANT et le chemin recent, pas un journal complet qui repartirait en
+# entier vers le telephone a chaque nouvel outil.
+ACTIONS_GARDEES = 30
+
 # Ce que le retour immediat d'un outil de fond dit de l'identifiant de la tache. C'est CET
 # identifiant que portera la notification de fin, jamais celui de l'outil.
 _MARQUE_FOND = re.compile(r"\(ID: ([A-Za-z0-9_-]+)\)|agentId: ([A-Za-z0-9_-]+)"
@@ -334,6 +346,10 @@ class Worker:
         # Un lecteur par workflow : il relit le journal de l'orchestration pour dire
         # quels agents tournent. S'arrete avec la tache, jamais avant.
         self._suivis: dict[str, asyncio.Task] = {}
+        # Les delegations en cours, par identifiant de l'outil qui les a lancees. Comme
+        # `_fond`, ça survit au tour : un agent lance en arriere-plan travaille encore
+        # quand la reponse est deja partie.
+        self._agents: dict[str, dict] = {}
         self._on_permission = on_permission
         self._on_question = on_question
         self._tableau = tableau
@@ -396,6 +412,13 @@ class Worker:
                 parti = True
             if suivi := self._suivis.pop(cle, None):
                 suivi.cancel()
+            # La fiche du delegue s'eteint avec sa tache. Sans ça, un agent lance en fond
+            # resterait « en cours » pour toujours : son resultat d'outil est arrive au
+            # lancement, pas a la fin.
+            for tid, a in list(self._agents.items()):
+                if cle and a.get("fond") == cle:
+                    self._agents.pop(tid, None)
+                    self._agents_publier()
         if parti:
             self._fond_publier()
         return parti
@@ -421,8 +444,72 @@ class Worker:
                 self._fond_publier()
             await asyncio.sleep(self.PAS_SUIVI)
 
-    def _fond_resultat(self, tool_id: str, texte: str):
+    # ─── ce que font les delegues, pendant qu'ils le font ────────────────────────
+    #
+    # Un `Agent` rend la main cinq ou dix minutes plus tard. Entre les deux, la page
+    # montrait une ligne « Agent · explorer les tests » suivie du silence, puis une volee
+    # d'actions impossibles a distinguer de celles du tour principal. Deux manques en un :
+    # on ne savait pas QUI travaillait, et on ne savait pas SUR QUOI.
+
+    def _agents_publier(self):
+        self._voir("agents", liste=[
+            {"id": i, "nom": a["nom"], "sorte": a["sorte"], "depuis": a["depuis"],
+             "combien": a["combien"], "fait": a["actions"][-1] if a["actions"] else "",
+             "actions": list(a["actions"]), "fond": bool(a["fond"])}
+            for i, a in self._agents.items()
+        ])
+
+    def _agent_ouvrir(self, tool_id: str, args: dict, cible: str):
+        sorte = str(args.get("subagent_type") or "").strip()
+        self._agents[tool_id] = {
+            "nom": cible or sorte or "agent", "sorte": sorte,
+            "depuis": time.time(), "actions": [], "combien": 0, "fond": "",
+        }
+        self._agents_publier()
+
+    def _agent_agir(self, parent: str, nom: str, cible: str) -> bool:
+        """Une action remontee d'un delegue. Rend vrai quand elle lui a ete attribuee.
+
+        Fausse pour tout le reste, y compris pour un petit-fils — un agent lance par un
+        agent : son parent n'est pas une de nos fiches, et on prefere une action sans
+        proprietaire a une action rangee sous le mauvais."""
+        a = self._agents.get(parent)
+        if a is None:
+            return False
+        a["actions"].append(" ".join(
+            m for m in (VERBES.get(nom, nom), cible) if m).strip())
+        del a["actions"][:-ACTIONS_GARDEES]
+        a["combien"] += 1
+        self._agents_publier()
+        return True
+
+    def _agent_rendu(self, tool_id: str, fond: str = ""):
+        """Le retour de l'outil de delegation : l'agent a fini, ou il continue en fond."""
+        a = self._agents.get(tool_id)
+        if a is None:
+            return
+        if fond:
+            a["fond"] = fond    # il continue : c'est la notification de fin qui l'eteindra
+        else:
+            self._agents.pop(tool_id, None)
+        self._agents_publier()
+
+    def _agents_balayer(self):
+        """A la fin du tour, ce qui n'est pas en fond ne tourne plus.
+
+        Un tour interrompu, une erreur d'API, un resultat d'outil jamais recu : la fiche
+        resterait allumee indefiniment, et une pastille qui ment sur ce qui tourne est pire
+        que pas de pastille du tout."""
+        restants = {i: a for i, a in self._agents.items() if a["fond"]}
+        if len(restants) != len(self._agents):
+            self._agents = restants
+            self._agents_publier()
+
+    def _fond_resultat(self, tool_id: str, texte: str) -> str:
         """Le retour immediat d'un outil lance en fond : il porte l'identifiant de la tache.
+
+        Rend l'identifiant de la tache ouverte, ou une chaine vide quand rien ne continue :
+        l'appelant s'en sert pour savoir si la fiche du delegue doit rester allumee.
 
         Les deux identifiants ne sont pas les memes. L'outil a le sien (`toolu_...`), la
         tache de fond en recoit un autre a son demarrage — « (ID: bdjie0kr9) » pour une
@@ -431,7 +518,7 @@ class Worker:
         """
         attendu = self._attente_fond.pop(tool_id, None)
         if not attendu:
-            return
+            return ""
         nom, cible = attendu
         m = _MARQUE_FOND.search(texte or "")
         if m:
@@ -439,11 +526,12 @@ class Worker:
         elif nom in FOND_IMPLICITE:
             # Un agent lance au premier plan rend son rapport, pas un identifiant : il a
             # deja fini, il n'y a rien a suivre.
-            return
+            return ""
         else:
             cle = tool_id
         d = _DOSSIER_FOND.search(texte or "")
         self._fond_ouvrir(cle, nom, cible, journal=d.group(1) if d else "")
+        return cle
 
     def _fond_notifie(self, texte: str):
         """Une notification de fin, qui arrive un tour plus tard — ou jamais."""
@@ -810,11 +898,20 @@ class Worker:
             if isinstance(message, StreamEvent):
                 self._delta(message)
             elif isinstance(message, AssistantMessage):
+                # Renseigne UNIQUEMENT quand le message vient d'un delegue : c'est le
+                # seul moyen de distinguer son travail de celui du tour principal.
+                parent = getattr(message, "parent_tool_use_id", None) or ""
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
                         args = block.input or {}
                         entree = (block.name, _cible(block.name, args))
-                        self.journal.outils.append(entree)
+                        # Les actions d'un delegue vont a SA fiche, pas au journal du tour.
+                        # Le journal nourrit le bilan parle : « trente-trois actions » quand
+                        # trente viennent d'un agent qu'on a deja annonce dit la meme chose
+                        # deux fois, et noie les trois qui etaient les siennes.
+                        delegue = self._agent_agir(parent, block.name, entree[1])
+                        if not delegue:
+                            self.journal.outils.append(entree)
                         # L'identifiant voyage jusqu'a la page : c'est lui qui permet de
                         # rattacher le resultat a l'action et d'afficher un verdict plutot
                         # qu'une ligne dont on ne sait jamais si elle s'est terminee.
@@ -825,8 +922,10 @@ class Worker:
                         en_fond = bool(args.get("run_in_background"))
                         if en_fond or block.name in FOND_IMPLICITE:
                             self._attente_fond[block.id] = (block.name, entree[1])
+                        if block.name in OUTILS_DELEGUES and not delegue:
+                            self._agent_ouvrir(block.id, args, entree[1])
                         self._voir("outil", nom=block.name, cible=entree[1], args=args,
-                                   id=block.id, fond=en_fond)
+                                   id=block.id, fond=en_fond, parent=parent)
                         await self.events.put(("outil", entree))
                     elif isinstance(block, TextBlock) and block.text.strip():
                         self.journal.textes.append(block.text.strip())
@@ -851,9 +950,13 @@ class Worker:
                         # Publie meme sans texte : un outil qui ne renvoie rien reussit
                         # quand meme, et sans cet evenement son indicateur tournerait
                         # indefiniment sur la page.
-                        self._fond_resultat(block.tool_use_id, texte)
-                        self._voir("resultat", texte=texte[:1500],
-                                   id=block.tool_use_id, echec=bool(block.is_error))
+                        cle = self._fond_resultat(block.tool_use_id, texte)
+                        # L'outil de delegation a rendu : soit l'agent a fini et sa fiche
+                        # s'eteint, soit il continue en fond sous la cle qu'on vient d'ouvrir.
+                        self._agent_rendu(block.tool_use_id, cle)
+                        self._voir("resultat", texte=texte[:1500], id=block.tool_use_id,
+                                   echec=bool(block.is_error),
+                                   parent=getattr(message, "parent_tool_use_id", None) or "")
                     elif isinstance(block, TextBlock):
                         # Les notifications de fin de tache arrivent par la, sur le tour
                         # utilisateur, sans passer par le moindre outil.
@@ -873,6 +976,7 @@ class Worker:
                     self.journal.refus.append(str(getattr(refus, "tool_name", refus)))
                 self.occupe = False
                 self.arret_demande = False
+                self._agents_balayer()
                 # L'extrait voyage avec l'etat : c'est ce qu'une notification de fin de
                 # tour peut montrer sans ouvrir la page.
                 reponse = " ".join(self.journal.textes[-1].split()) if self.journal.textes else ""

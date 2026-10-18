@@ -926,6 +926,9 @@ def tout_genre_affiche_a_un_filtre():
         # pastille, pas une ligne. En faire du flux republierait la meme liste a chaque
         # ouverture et fermeture de tache, au milieu de la conversation.
         "fond",
+        # « agents » est la LISTE des delegues en cours : meme raison, et un agent qui mene
+        # trente actions republierait trente fois la meme liste dans la conversation.
+        "agents",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)
@@ -936,7 +939,7 @@ def tout_genre_affiche_a_un_filtre():
     # a vide les selecteurs de modele et de delai pendant des semaines.
     durables = {"config", "modeles", "efforts", "delais", "moteurs_stt", "moteur_actif",
                 "consommation", "conversations", "micro", "quota", "pupitre", "retenir",
-                "travail", "etat", "fond"}
+                "travail", "etat", "fond", "agents"}
     from tableau import ETATS
     oublies = sorted(durables - set(ETATS))
     dire(not oublies,
