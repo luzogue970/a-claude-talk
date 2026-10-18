@@ -3355,6 +3355,203 @@ async function testerQuestionnaire() {
   fermerQuestionnaire();
 }
 
+// ---- le son part TOUJOURS, ou il se replie : jamais un bouton muet ------------------------
+// Tous les defauts rassembles ici ont la meme signature a l usage : on appuie, rien ne sort,
+// et RECHARGER LA PAGE repare. C est la preuve qu il s agit d un etat que l application
+// aurait du defaire elle-meme. Chaque cas ci-dessous reproduit un de ces etats et verifie
+// qu il se defait tout seul.
+async function testerAudioToujours() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const dormir = ms => new Promise(r => setTimeout(r, ms));
+  titre('audio : un bouton « écouter » lit SA reponse, meme deux tours plus tard');
+  couperLectureLocale(); noteBarre(null);
+  azureMarche = true; parlerRedirige = false; parlerSansCle = false;
+  audioRefuse = false; audioUrlMorte = false; audioSansFin = false;
+  dire(lireDeCeCote(), 'le cas se joue bien depuis un appareil distant');
+
+  // Le defaut le plus couteux de la serie : la fermeture du bouton lisait la VARIABLE
+  // `ecrituresDuTour`, reassignee a chaque nouveau tour. Toucher « écouter » sur une reponse
+  // d il y a deux tours lisait donc la derniere — ou, si le tour en cours n avait encore
+  // rien ecrit, ne faisait rien du tout. Quitter la conversation et revenir reparait, parce
+  // que le rejeu reconstruisait les lignes une par une.
+  emettre({ genre: 'travail', actif: false });
+  emettre({ genre: 'toi', texte: 'premiere question' });
+  emettre({ genre: 'texte', texte: 'Reponse du tour un.' });
+  const tourUn = dernier;
+  emettre({ genre: 'toi', texte: 'deuxieme question' });
+  emettre({ genre: 'texte', texte: 'Reponse du tour deux.' });
+  const tourDeux = dernier;
+  dire(tourUn !== tourDeux, 'deux tours, deux lignes');
+  dire(!!tourUn.zoneEcoute && tourUn.zoneEcoute.hidden !== true,
+       'le bouton du tour un reste touchable quand le tour deux ecrit');
+
+  requetes.length = 0; joues.length = 0; dit.length = 0;
+  tourUn.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const luUn = versParler()[0] && JSON.parse(versParler()[0].opts.body).texte;
+  dire(/tour un/.test(luUn || '') && !/tour deux/.test(luUn || ''),
+       'et il lit le tour un, pas le dernier : ' + JSON.stringify(luUn || ''));
+  couperLectureLocale();
+
+  // Un tour reparti TOUT SEUL — une tache de fond qui se termine et redonne la parole au
+  // modele — ne passe par aucun « toi ». Sa premiere ligne ecrite venait donc masquer le
+  // bouton du tour precedent et collait les deux reponses.
+  emettre({ genre: 'travail', actif: true });
+  emettre({ genre: 'texte', texte: 'Reponse arrivee toute seule.' });
+  const fond = dernier;
+  dire(fond !== tourDeux, 'un tour reparti en fond ouvre sa propre ligne');
+  dire(tourDeux.zoneEcoute && tourDeux.zoneEcoute.hidden !== true,
+       'et ne vole pas le bouton du tour precedent');
+  requetes.length = 0;
+  tourDeux.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const luDeux = versParler()[0] && JSON.parse(versParler()[0].opts.body).texte;
+  dire(/tour deux/.test(luDeux || '') && !/toute seule/.test(luDeux || ''),
+       'qui lit toujours sa reponse a lui : ' + JSON.stringify(luDeux || ''));
+  couperLectureLocale();
+  emettre({ genre: 'travail', actif: false });
+
+  // ---- revenir sur la page ne laisse jamais une lecture fantome --------------------------
+  titre('audio : aucune lecture fantome apres une reconnexion');
+  // Le bonjour arrive par une socket NEUVE : c est tout l interet du cas, on se rebranche.
+  sockets.length = 0; brancher(); ouvrirSock();
+  const bonjour = d => socket.onmessage({ data: JSON.stringify(Object.assign(
+    { genre: '_bonjour', rejoue: 3, pret: true }, d)) });
+  emettre({ genre: 'lecture', actif: true, id: 'V1' });
+  dire(lectureEnCours === 'V1', 'une lecture declaree s affiche comme en cours');
+  bonjour({ travail: true, etat: 'thinking' });
+  dire(lectureEnCours === null,
+       'se rebrancher sur un agent qui travaille SANS parler depose la lecture');
+  emettre({ genre: 'lecture', actif: true, id: 'V2' });
+  bonjour({ travail: true, etat: 'speaking' });
+  dire(lectureEnCours === 'V2',
+       'mais se rebrancher pendant que ça parle vraiment ne coupe rien');
+  emettre({ genre: 'lecture', actif: false, id: 'V2' });
+
+  // ---- l attente « lecture en cours » ne s eternise pas -----------------------------------
+  titre('audio : un message retenu derriere une lecture finit toujours par se liberer');
+  enAttenteLecture = ['garde-moi ça']; majEnAttente();
+  emettre({ genre: 'toi', texte: 'une dictee sans rapport' });
+  dire(enAttenteLecture.length === 1,
+       'un « toi » etranger a la file n en retire pas la plus ancienne entree');
+  emettre({ genre: 'toi', texte: 'garde-moi ça' });
+  dire(enAttenteLecture.length === 0,
+       'et le bon « toi » la retire : le message est passe');
+
+  // Le garde-fou de 60 s eteint la pastille « parole ». Sans deposer la lecture avec elle,
+  // la page se contredisait : plus rien en cours en haut, et en bas un message qui attend.
+  const gardeVoix = GARDE.voix;
+  GARDE.voix = 5;
+  lectureEnCours = 'V3'; majBoutonsLecture();
+  enAttenteLecture = ['un message qui attend']; majEnAttente();
+  battre('voix');
+  await dormir(40);
+  dire(lectureEnCours === null && enAttenteLecture.length === 0,
+       'une parole qui ne finit jamais libere la lecture ET ce qu elle retenait');
+  GARDE.voix = gardeVoix;
+
+  // ---- changer de conversation n emporte pas la voix de la precedente --------------------
+  titre('audio : changer de conversation ne lit pas celle qu on quitte');
+  emettre({ genre: 'voix', texte: 'La reponse de la conversation qu on quitte. ', id: 'C1' });
+  recevoir({ genre: 'parole_fin', id: 'C1' });
+  dire(/qu on quitte/.test(texteReponse), 'la barre porte bien la reponse en cours');
+  lectureEnCours = 'C1'; majBoutonsLecture();
+  enAttenteLecture = ['en attente']; majEnAttente();
+  emettre({ genre: 'vider' });
+  dire(texteReponse === '' && lectureEnCours === null && enAttenteLecture.length === 0,
+       'changer de conversation remet la lecture a zero');
+  noteBarre(null);
+  document.getElementById('lire-ici').onclick();
+  await tick();
+  dire(/rien à lire/.test(document.getElementById('note-barre').textContent || ''),
+       'et le haut-parleur de la barre le dit au lieu de lire la conversation d avant');
+  noteBarre(null);
+  for (const k in echeances) clearTimeout(echeances[k]);
+
+  // ---- les pannes de l element audio : il y a TOUJOURS un repli --------------------------
+  titre('audio : quand le son ne part pas, la voix du navigateur prend le relais');
+  emettre({ genre: 'toi', texte: 'lis-moi ça' });
+  emettre({ genre: 'texte', texte: 'Un texte a lire malgre tout.' });
+  const cible = dernier;
+  const relancer = async () => {
+    couperLectureLocale();
+    joues.length = 0; dit.length = 0; tentatives.length = 0; requetes.length = 0;
+    cible.zoneEcoute.children[0].onclick();
+    await tick(); await tick(); await tick();
+  };
+  const repliEntendu = () => dit.some(x => /malgre tout/.test(x));
+
+  // 1. play() REJETE. C est le cas d iOS quand le geste utilisateur est perime : rien n est
+  //    leve sur l element, tout se joue sur la promesse — un code qui ne regarde que
+  //    `onerror` reste muet sans le savoir.
+  audioRefuse = true;
+  await relancer();
+  dire(tentatives.length > 0, 'la page a bien TENTE de jouer');
+  dire(joues.length === 0, 'et rien n est sorti du haut-parleur');
+  dire(repliEntendu(), 'alors le navigateur lit : ' + JSON.stringify(dit.slice(0, 2)));
+  audioRefuse = false;
+
+  // 2. L adresse rendue ne charge pas — une cle expiree, un 404. L element leve `onerror`
+  //    et ne jouera jamais rien.
+  audioUrlMorte = true;
+  await relancer();
+  await tick(); await tick();
+  dire(tentatives.some(x => /\/parler\//.test(x)), 'l adresse d Azure est bien tentee');
+  dire(repliEntendu(), 'une adresse morte bascule sur la voix du navigateur');
+  audioUrlMorte = false;
+
+  // 3. Le flux part et ne finit JAMAIS : ni `ended`, ni `error`. C est la forme la plus
+  //    proche du symptome decrit — le bouton reste « en lecture » pour de bon, et seul un
+  //    rechargement de la page rend le son utilisable.
+  const demarrage = DEMARRAGE_MAX;
+  DEMARRAGE_MAX = 10;
+  audioSansFin = true;
+  await relancer();
+  dire(joues.length >= 1, 'le flux part');
+  dire(!repliEntendu(), 'et on ne replie pas tout de suite : on lui laisse sa chance');
+  await dormir(60);
+  dire(repliEntendu(),
+       'mais un son qui ne demarre pas finit par rendre la main a la voix du navigateur');
+
+  // 4. Et le garde-fou ne doit JAMAIS couper une lecture qui avance — sinon il remplacerait
+  //    un defaut par un pire : une reponse longue hachee en plein milieu.
+  await relancer();
+  lecteur.currentTime = 3;
+  await dormir(60);
+  dire(!repliEntendu(), 'une lecture qui AVANCE n est jamais coupee par le garde-fou');
+  lecteur.currentTime = 0;
+  audioSansFin = false;
+  DEMARRAGE_MAX = demarrage;
+  couperLectureLocale();
+
+  // 5. Le serveur repond 200 et ne donne rien d exploitable : page de connexion rendue a la
+  //    place du JSON (redirection), ou JSON valide sans cle. Les deux laissaient la page
+  //    muette, sans un mot.
+  parlerRedirige = true;
+  await relancer();
+  dire(joues.filter(x => /\/parler\//.test(x)).length === 0,
+       'une redirection vers une page de connexion ne fait rien jouer');
+  dire(repliEntendu(), 'et le repli part quand meme');
+  parlerRedirige = false;
+
+  parlerSansCle = true;
+  await relancer();
+  dire(repliEntendu(), 'un JSON sans cle ne rend pas muet non plus');
+  parlerSansCle = false;
+
+  // 6. Azure franchement en panne : deja couvert plus haut, mais on verifie ici qu il n y a
+  //    AUCUN enchainement de pannes qui laisse la page sans voix.
+  azureMarche = false;
+  await relancer();
+  dire(repliEntendu(), 'Azure injoignable : le navigateur lit');
+  azureMarche = true;
+  await relancer();
+  dire(joues.some(x => /\/parler\/abc123$/.test(x)),
+       'et des qu Azure revient, c est lui qui lit de nouveau');
+  couperLectureLocale();
+  for (const k in echeances) clearTimeout(echeances[k]);
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -3364,6 +3561,7 @@ async function testerQuestionnaire() {
       .then(testerReouverture)
       .then(testerBandeauLecture)
       .then(testerQuestionnaire)
+      .then(testerAudioToujours)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

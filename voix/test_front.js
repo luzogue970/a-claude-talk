@@ -373,6 +373,12 @@ globalThis.AbortController = function () {
 // La synthese Azure, servie par /parler. Le drapeau azureMarche a false simule l absence de
 // cle ou un service injoignable : la page doit se rabattre sur la voix du navigateur.
 globalThis.azureMarche = true;
+// Les deux façons dont /parler/preparer peut repondre 200 sans rien donner d exploitable.
+// Derriere le proxy du tableau de bord, une session expiree rend une PAGE DE CONNEXION avec
+// un 200 et du HTML : donnee telle quelle a l element audio, elle ne joue rien et la page
+// reste muette sans jamais se rabattre sur la voix du navigateur.
+globalThis.parlerRedirige = false;   // 200, mais redirige — ce n est plus notre serveur
+globalThis.parlerSansCle = false;    // JSON valide, et pas de cle dedans
 // La sonde de sante : la page demande au serveur HTTP s il est encore la quand la WebSocket
 // n aboutit pas. C est ce qui distingue « l agent est arrete » de « je n ai plus de reseau ».
 globalThis.santeHS = false;
@@ -404,6 +410,16 @@ globalThis.fetch = (url, opts) => {
       return Promise.resolve({ ok: false, status: 503, redirected: false,
                                headers: { get: () => "application/json" },
                                json: () => Promise.resolve({ erreur: "pas de clé Azure" }) });
+    }
+    if (globalThis.parlerRedirige) {
+      return Promise.resolve({ ok: true, status: 200, redirected: true,
+                               headers: { get: () => "text/html; charset=utf-8" },
+                               json: () => Promise.reject(new Error("ce n est pas du JSON")) });
+    }
+    if (globalThis.parlerSansCle) {
+      return Promise.resolve({ ok: true, status: 200, redirected: false,
+                               headers: { get: () => "application/json; charset=utf-8" },
+                               json: () => Promise.resolve({ octets: 0 }) });
     }
     return Promise.resolve({ ok: true, status: 200, redirected: false,
                              headers: { get: () => "application/json; charset=utf-8" },
@@ -460,6 +476,18 @@ globalThis.URL = { createObjectURL: () => "blob:faux", revokeObjectURL: () => {}
 // L element audio. Il retient ce qu on lui donne a jouer — c est la seule chose a verifier :
 // que le son vient bien d Azure et pas de la synthese du navigateur.
 globalThis.joues = [];
+// Tout ce qu on a DEMANDE de jouer, que le son soit sorti ou non. joues ne garde que ce qui
+// est reellement parti dans le haut-parleur : la difference entre les deux listes est
+// exactement le defaut que l utilisateur decrit — « j appuie, et rien ».
+globalThis.tentatives = [];
+// Chaque load(). Rendre la session audio sur iOS, c est vider le src PUIS recharger ; sans
+// cette trace, un test ne distingue pas une session rendue d une session seulement oubliee.
+globalThis.audioCharges = [];
+// Les trois pannes d un element audio sur un telephone. Le talon ne savait que reussir, donc
+// aucune des trois n etait testable — et ce sont elles qu on voit en vrai.
+globalThis.audioRefuse = false;    // play() REJETE : le geste utilisateur est perime (iOS)
+globalThis.audioUrlMorte = false;  // la source ne charge pas : onerror, et jamais onended
+globalThis.audioSansFin = false;   // le son part et ne finit jamais : un flux qui cale
 globalThis.Audio = function (src) {
   const self = this;
   this.src = src || "";
@@ -474,11 +502,27 @@ globalThis.Audio = function (src) {
   // categorie « lecture », et le micro ouvert par-dessus capte du silence. Le talon doit donc
   // savoir se vider, sinon le test ne verrait pas la difference.
   this.removeAttribute = (n) => { if (n === "src") self.src = ""; };
-  this.load = () => {};
+  this.load = () => { globalThis.audioCharges.push(self.src); };
   this.play = () => {
     // Ce qu on joue est le src DU MOMENT : l element est reutilise, son src change.
+    globalThis.tentatives.push(self.src);
+    // Hors de la foulee d un geste, Safari REJETTE la promesse. Le code qui ne regarde que
+    // onerror ne voit rien passer : c est a la promesse qu il faut s accrocher.
+    if (globalThis.audioRefuse) {
+      const e = new Error("play() hors geste utilisateur");
+      e.name = "NotAllowedError";
+      return Promise.reject(e);
+    }
+    // Une cle expiree rend un 404 : l element leve onerror et ne jouera jamais rien.
+    if (globalThis.audioUrlMorte) {
+      setTimeout(() => { if (self.onerror) self.onerror(new Error("404")); }, 0);
+      return Promise.resolve();
+    }
     globalThis.joues.push(self.src);
     self.paused = false;
+    // Un flux qui cale : la lecture a commence, et onended n arrivera jamais. Tout ce qui
+    // attend la fin de la lecture pour repartir reste alors bloque pour de bon.
+    if (globalThis.audioSansFin) return Promise.resolve();
     // Un son en pause ne se termine pas tout seul : sans ce garde-fou, le talon declarerait
     // la lecture finie une boucle plus tard et le bandeau disparaitrait sous le doigt.
     setTimeout(() => {

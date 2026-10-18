@@ -83,6 +83,8 @@ SUITES = [
     ("vocal", "test_vocal.py", "py",
      "le relais audio d'un autre appareil, et les photos jointes à la phrase", False),
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
+    ("audio", "test_audio.py", "py",
+     "un lancement de son qui n'échoue pas : texte, plages d'octets, pannes d'Azure", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),
     ("rendu", "test_rendu.js", "node", "mise en page réelle, mesurée dans Chrome", True),
     ("tampon", "test_tampon.py", "py",

@@ -670,7 +670,24 @@ class Voix(Agent):
         await self._attendre_son_tour()
         if self.inscription:
             self.inscription.prendre_parole()
-        poignee = await self.sess.say(source, allow_interruptions=True)
+        # SANS `await`. `say()` rend la poignee tout de suite ; ATTENDRE une poignee attend
+        # la fin de la lecture — `SpeechHandle.__await__` appelle `wait_for_playout()`. Le
+        # code attendait donc, et c'est exactement ce que le commentaire d'en dessous jurait
+        # d'eviter. Trois consequences, toutes constatables : pendant toute la lecture
+        # `self._lecture` valait encore None, donc « couper » ne coupait rien ; l'evenement
+        # « lecture actif=True » partait quand la voix s'etait deja tue, donc le bandeau et
+        # la retenue des messages ne se declenchaient jamais ; et une relecture, attendue
+        # depuis la boucle de lecture de la WebSocket, gelait les commandes de la page.
+        try:
+            poignee = self.sess.say(source, allow_interruptions=True)
+        except Exception:
+            # Le bail de parole n'etait rendu que par le rappel de fin. Une lecture qui
+            # leve — session LiveKit perdue, salle fermee — le gardait donc jusqu'a sa
+            # peremption : trois minutes pendant lesquelles les autres conversations
+            # attendaient leur tour en silence, puis parlaient toutes ensemble.
+            if self.inscription:
+                self.inscription.liberer_parole()
+            raise
         self._lecture = poignee
 
         def rendre(_):

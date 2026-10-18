@@ -100,6 +100,67 @@ async def _decoder_pcm(chemin: pathlib.Path) -> bytes | None:
     return sortie
 
 
+# Les caracteres que XML 1.0 interdit, et que `escape` laisse pourtant passer : une reponse
+# qui cite une sortie de terminal embarque des sequences ANSI, Azure rend alors 400 sur tout
+# le SSML, et la page retombe sur la voix du navigateur sans que rien ne l'explique.
+_INTERDITS_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_FINS_DE_PHRASE = (". ", "! ", "? ", ".\n", "!\n", "?\n", "\n")
+# `escape` n'echappe pas le guillemet : les valeurs posees DANS un attribut SSML en ont
+# besoin, sinon un nom de voix mal configure casserait le document entier.
+_GUILLEMET = {'"': "&quot;"}
+
+
+def _texte_a_dire(brut: str, maximum: int) -> "tuple[str, bool]":
+    """Le texte tel qu'on l'envoie a Azure, et s'il a fallu l'ecourter.
+
+    Deux soucis a la fois. Les caracteres de controle font refuser le SSML entier. Et la
+    coupe a `maximum` tombait au milieu d'un mot : la lecture s'arretait net, ce qui
+    s'entend comme une coupure reseau alors que c'est nous qui avons coupe.
+
+    Les blancs sont compactes parce que la cle du cache est le hachage du texte : « lire
+    ici » envoie le flux brut, « ecouter » envoie le texte relu depuis la page, et sans ca
+    le meme propos etait synthetise — donc facture — deux fois."""
+    texte = _INTERDITS_XML.sub("", str(brut or ""))
+    texte = re.sub(r"[ \t]+", " ", texte)
+    texte = re.sub(r"\n{3,}", "\n\n", texte).strip()
+    if len(texte) <= maximum:
+        return texte, False
+    coupe = texte[:maximum]
+    fin = max(coupe.rfind(m) for m in _FINS_DE_PHRASE)
+    # A moitie du budget : en deça, c'est qu'il n'y a pas de phrase du tout (un pave de
+    # code, une URL) et mieux vaut tout garder que n'en dire que le debut.
+    return (coupe[:fin + 1].strip() if fin > maximum // 2 else coupe), True
+
+
+def _bornes_demandees(plage: str, total: int):
+    """Les octets reclames par un en-tete Range : (debut, fin), None (tout), ou "refus" (416).
+
+    Safari demande « bytes=0-1 » avant tout le reste et attend un 206 ; un serveur qui rend
+    200 passe pour ne pas savoir servir du son. Mais l'inverse coute aussi cher : un en-tete
+    qu'on ne sait pas lire DOIT etre ignore (RFC 9110 §14.2). On rendait 416 — un en-tete
+    inoffensif, « bytes=0-1,100-200 » par exemple, qui est parfaitement legal, suffisait
+    donc a faire declarer l'element audio en erreur et a perdre la lecture."""
+    if not plage.startswith("bytes="):
+        return None
+    premiere = plage[6:].split(",")[0].strip()
+    debut_s, tiret, fin_s = premiere.partition("-")
+    if not tiret:
+        return None
+    try:
+        if debut_s:
+            debut = int(debut_s)
+            fin = int(fin_s) if fin_s else total - 1
+        else:
+            # Un suffixe : les N derniers octets. « bytes=-0 » ne demande rien, et se refuse.
+            debut, fin = max(0, total - int(fin_s)), total - 1
+    except ValueError:
+        return None
+    fin = min(fin, total - 1)
+    if debut > fin or debut >= total:
+        return "refus"
+    return debut, fin
+
+
 class Tableau:
     def __init__(self, port: int = 7788, ouvrir: bool = True, on_commande=None):
         self.port = port
@@ -151,6 +212,10 @@ class Tableau:
         # Les enregistrements deja synthetises, du plus vieux au plus recent. Relire une
         # reponse est un geste qu'on refait, et chaque relecture coute du credit Azure.
         self._voix_cache: "OrderedDict[str, tuple[bytes, bool]]" = OrderedDict()
+        # Les syntheses deja parties chez Azure, par cle. Deux appuis coup sur coup — ou deux
+        # appareils sur la meme conversation — payaient deux fois le meme MP3 et attendaient
+        # deux fois : le second appelant attend desormais le premier.
+        self._voix_envol: "dict[str, asyncio.Future]" = {}
         # L'ETAT, garde a part du flux. Un etat n'est pas un evenement : « quels modeles
         # existent » reste vrai tant que personne ne le change, alors qu'« un outil a demarre »
         # appartient a un instant. Les melanger avait une consequence precise et mesuree : ces
@@ -204,13 +269,19 @@ class Tableau:
         for i, e in enumerate(passe):
             if e.get("genre") == "toi" and (e.get("texte") or "").strip() == q:
                 place = i
+        # SANS numero, et c'est le coeur de l'affaire. La page jette tout evenement dont le
+        # numero est deja vu, et son compteur part de zero : « n: 0 » etait donc filtre meme
+        # sur une page toute neuve. Ces rappels n'atteignaient JAMAIS le navigateur — on
+        # rouvrait une longue conversation et le dernier echange, celui qu'on venait
+        # reecouter, n'etait nulle part. Sans numero, la page les laisse passer, et ils ne
+        # font pas avancer son compteur : ils sont synthetiques, ils ne reperent rien.
         if q and place < 0:
-            rappels.append({"genre": "toi", "texte": q, "n": 0, "t": 0.0,
+            rappels.append({"genre": "toi", "texte": q, "t": 0.0,
                             "h": self.dernier_echange.get("hq", ""),
                             "tape": True, "rappel": True})
         apres = passe[place + 1:] if place >= 0 else passe
         if r and not any(e.get("genre") == "texte" for e in apres):
-            rappels.append({"genre": "texte", "texte": r, "n": 0, "t": 0.0,
+            rappels.append({"genre": "texte", "texte": r, "t": 0.0,
                             "h": self.dernier_echange.get("hr", ""), "rappel": True})
         return rappels
 
@@ -478,7 +549,7 @@ class Tableau:
         PCM qu'il faudrait emballer. L'API REST rend du MP3, que tout navigateur joue nativement
         et qui pese dix fois moins sur un reseau mobile.
         """
-        cle, erreur = await self._synthetiser(requete)
+        cle, erreur, _ = await self._synthetiser(requete)
         if erreur is not None:
             return erreur
         mp3, en_cache = self._voix_cache[cle]
@@ -496,18 +567,21 @@ class Tableau:
         se lit, la grande non ». La parade connue : un element audio DEBLOQUE dans l'appui
         lui-meme, puis nourri plus tard avec une adresse. Cette route fournit l'adresse.
         """
-        cle, erreur = await self._synthetiser(requete)
+        cle, erreur, tronque = await self._synthetiser(requete)
         if erreur is not None:
             return erreur
         mp3, en_cache = self._voix_cache[cle]
-        return web.json_response({"cle": cle, "octets": len(mp3), "cache": en_cache})
+        return web.json_response({"cle": cle, "octets": len(mp3), "cache": en_cache,
+                                  "tronque": tronque})
 
     async def _servir_voix(self, requete):
         """Le MP3 d'une cle, avec les plages d'octets : iOS les exige d'un element audio.
 
         Safari demande d'abord « bytes=0-1 » et attend un 206 ; un serveur qui repond 200 avec
         tout le fichier passe pour ne pas savoir servir du son, et l'element se declare en
-        erreur. Un cache evince rend 404 : la page refait alors la synthese complete."""
+        erreur. Un cache evince rend 404 : la page redemande alors UNE fois la synthese, puis
+        se rabat sur la voix du navigateur. Elle se contentait de se rabattre — la docstring
+        decrivait une reprise que personne n'ecrivait."""
         cle = requete.match_info.get("cle", "")
         entree = self._voix_cache.get(cle)
         if entree is None:
@@ -517,17 +591,11 @@ class Tableau:
         total = len(mp3)
         entetes = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=600",
                    "X-Voix": "azure"}
-        plage = requete.headers.get("Range", "")
-        if plage.startswith("bytes="):
-            debut_s, _, fin_s = plage[6:].partition("-")
-            try:
-                debut = int(debut_s) if debut_s else max(0, total - int(fin_s))
-                fin = int(fin_s) if (fin_s and debut_s) else total - 1
-            except ValueError:
-                return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
-            fin = min(fin, total - 1)
-            if debut > fin or debut >= total:
-                return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
+        bornes = _bornes_demandees(requete.headers.get("Range", ""), total)
+        if bornes == "refus":
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
+        if bornes is not None:
+            debut, fin = bornes
             entetes["Content-Range"] = f"bytes {debut}-{fin}/{total}"
             return web.Response(status=206, body=mp3[debut:fin + 1], content_type="audio/mpeg",
                                 headers=entetes)
@@ -536,20 +604,18 @@ class Tableau:
     async def _synthetiser(self, requete):
         """Le coeur commun : lit le texte, synthetise si besoin, met en cache.
 
-        Rend (cle, None) quand le MP3 est dans le cache, ou (None, reponse d'erreur)."""
+        Rend (cle, None, tronque), ou (None, reponse d'erreur, False)."""
         MAX = 6000        # une reponse parlee fait quelques centaines de caracteres
         if not config.AZURE_KEY:
             return None, web.json_response(
-                {"erreur": "pas de clé Azure : la voix du navigateur prend le relais"}, status=503)
+                {"erreur": "pas de clé Azure : la voix du navigateur prend le relais"}, status=503), False
         try:
             donnees = await requete.json()
         except Exception:
-            return None, web.json_response({"erreur": "JSON attendu"}, status=400)
-        texte = str((donnees or {}).get("texte") or "").strip()
+            return None, web.json_response({"erreur": "JSON attendu"}, status=400), False
+        texte, tronque = _texte_a_dire((donnees or {}).get("texte"), MAX)
         if not texte:
-            return None, web.json_response({"erreur": "rien à dire"}, status=400)
-        if len(texte) > MAX:
-            texte = texte[:MAX]
+            return None, web.json_response({"erreur": "rien à dire"}, status=400), False
 
         # Relire deux fois la meme reponse ne doit pas la facturer deux fois. Le cache est
         # borne et tenu en memoire : ces enregistrements ne survivent pas a la session, et
@@ -559,14 +625,44 @@ class Tableau:
         if cle in self._voix_cache:
             self._voix_cache.move_to_end(cle)
             self._voix_cache[cle] = (self._voix_cache[cle][0], True)
-            return cle, None
+            return cle, None, tronque
+
+        # Deja partie chez Azure : on attend celle-la plutot que d'en lancer une seconde.
+        envol = self._voix_envol.get(cle)
+        if envol is not None:
+            with contextlib.suppress(Exception):
+                await envol
+            if cle in self._voix_cache:
+                self._voix_cache.move_to_end(cle)
+                return cle, None, tronque
+            return None, web.json_response({"erreur": "Azure a refusé la synthèse"}, status=502), False
+        attente = asyncio.get_running_loop().create_future()
+        self._voix_envol[cle] = attente
+        try:
+            return await self._synthetiser_vraiment(cle, texte, tronque)
+        finally:
+            self._voix_envol.pop(cle, None)
+            if not attente.done():
+                attente.set_result(None)
+
+    async def _synthetiser_vraiment(self, cle: str, texte: str, tronque: bool):
+        """L'appel a Azure lui-meme, une fois qu'on sait qu'il faut vraiment le faire."""
+        # Un MP3 de moins d'un kilooctet n'est pas du son : a 48 kbit/s cela fait un sixieme
+        # de seconde. Azure rend parfois 200 avec un corps vide ; mis en cache tel quel, il
+        # EMPOISONNAIT ce texte-la — la meme reponse restait muette a chaque essai, jusqu'a
+        # ce que quarante autres syntheses l'evincent ou que le service redemarre.
+        MIN_SON = 1000
+        # Quarante enregistrements, mais au plus vingt megaoctets : une reponse de six mille
+        # caracteres fait sept minutes d'audio, et quarante de celles-la tiendraient cent
+        # megaoctets en memoire — le socle ferme les sessions bien avant d'en arriver la.
+        PLAFOND = 20 * 1024 * 1024
 
         url = f"https://{config.AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
         # `escape` et pas une simple concatenation : une reponse contient des esperluettes et
         # des chevrons — « a < b && c » suffit a casser le SSML, donc a rendre la page muette.
         ssml = (f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
-                f'xml:lang="{xml_escape(config.LANGUAGE)}">'
-                f'<voice name="{xml_escape(config.AZURE_VOICE)}">{xml_escape(texte)}</voice>'
+                f'xml:lang="{xml_escape(config.LANGUAGE, _GUILLEMET)}">'
+                f'<voice name="{xml_escape(config.AZURE_VOICE, _GUILLEMET)}">{xml_escape(texte)}</voice>'
                 f'</speak>')
         entetes = {"Ocp-Apim-Subscription-Key": config.AZURE_KEY,
                    "Content-Type": "application/ssml+xml",
@@ -583,17 +679,23 @@ class Tableau:
                         detail = corps[:200].decode("utf-8", "replace")
                         log.warning("Azure a refuse la synthese (%s) : %s", r.status, detail)
                         return None, web.json_response(
-                            {"erreur": f"Azure a refusé la synthèse ({r.status})"}, status=502)
+                            {"erreur": f"Azure a refusé la synthèse ({r.status})"}, status=502), False
         except asyncio.TimeoutError:
-            return None, web.json_response({"erreur": "Azure n'a pas répondu à temps"}, status=504)
+            return None, web.json_response({"erreur": "Azure n'a pas répondu à temps"}, status=504), False
         except Exception as exc:
             log.warning("synthese Azure indisponible : %s", exc)
-            return None, web.json_response({"erreur": "Azure injoignable"}, status=502)
+            return None, web.json_response({"erreur": "Azure injoignable"}, status=502), False
 
+        if len(corps) < MIN_SON:
+            log.warning("Azure a rendu 200 avec %d octets : ce n'est pas du son", len(corps))
+            return None, web.json_response({"erreur": "Azure a rendu un enregistrement vide"},
+                                           status=502), False
         self._voix_cache[cle] = (corps, False)
-        while len(self._voix_cache) > 40:
+        while len(self._voix_cache) > 1 and (
+                len(self._voix_cache) > 40
+                or sum(len(m) for m, _ in self._voix_cache.values()) > PLAFOND):
             self._voix_cache.popitem(last=False)
-        return cle, None
+        return cle, None, tronque
 
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
@@ -2889,7 +2991,12 @@ const GARDE = { stt: 12000, pensee: 30000, voix: 60000 };
 const echeances = {};
 function battre(nom) {
   clearTimeout(echeances[nom]);
-  echeances[nom] = setTimeout(() => resoudre(nom, "coupe", "sans suite"), GARDE[nom]);
+  echeances[nom] = setTimeout(() => {
+    resoudre(nom, "coupe", "sans suite");
+    // Eteindre la pastille « parole » sans deposer la lecture laissait la page se
+    // contredire : plus rien en cours en haut, et en bas un message qui attend toujours.
+    if (nom === "voix") deposerLecture();
+  }, GARDE[nom]);
 }
 
 const zoneActivite = document.getElementById("activite");
@@ -4702,6 +4809,13 @@ function recevoir(e, etat = false) {
       flux.textContent = "";
       actions = 0; jetons = 0;
       ecrituresDuTour = [];
+      // Et tout ce qui se lisait. Le haut-parleur de la barre lit `texteReponse`, qui n'est
+      // reecrit que par un debrief parle NEUF : une conversation reprise n'en produit aucun
+      // avant le tour suivant, et le bouton lisait donc la derniere reponse de celle qu'on
+      // venait de quitter.
+      deposerLecture();
+      idReponse = null; texteReponse = "";
+      lignesVoix.clear();
       majCompteurs();
       // La barre aussi, et sans condition : ce qu'elle porte appartient à la conversation
       // qu'on quitte. Le garder l'enverrait à la suivante, qui n'a rien demandé — c'est la
@@ -4813,6 +4927,11 @@ function recevoir(e, etat = false) {
       // « reçu » doit redevenir faux, sinon le tour suivant naitrait deja confirme.
       if (e.actif && debutTravail == null) {
         contexteTour = 0; sortieTour = 0; echangesTour = 0; recuParClaude = false;
+        // Un tour reparti tout seul — une tache de fond qui se termine et redonne la parole
+        // au modele — ne passe par aucun « toi ». Sans cette remise a zero, sa premiere
+        // ligne ecrite masquait le bouton « écouter » du tour precedent et lisait les deux
+        // reponses collees. L'ouverture du travail, elle, est emise dans tous les cas.
+        ecrituresDuTour = [];
       }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
@@ -4862,8 +4981,12 @@ function recevoir(e, etat = false) {
     // donc le seul moment ou l'attente cesse d'etre vraie. La retirer sur « fin de lecture »
     // serait faux — le tour n'est pas encore passe par llm_node a cet instant.
     if (e.genre === "toi" && enAttenteLecture.length) {
+      // Sur correspondance SEULEMENT : un « toi » etranger a la file — une dictee, qui ne
+      // passe pas par la retenue — en retirait la plus ancienne entree. Le message tape
+      // disparaissait de l'indicateur sans avoir ete pris en compte. Le filet de dix
+      // secondes nettoie ce qui resterait.
       const i = enAttenteLecture.indexOf((e.texte || "").trim());
-      enAttenteLecture.splice(i >= 0 ? i : 0, 1);
+      if (i >= 0) enAttenteLecture.splice(i, 1);
       majEnAttente();
     }
     if (e.genre === "toi" && !e.tape) {
@@ -5198,6 +5321,16 @@ addEventListener("click", ev => {
 const zonePupitre = document.getElementById("pupitre");
 let monPid = null, lectureEnCours = null;
 
+// Oublier une lecture dont on sait qu'elle n'aura pas de fin. Trois situations y menent et
+// aucune n'etait traitee : la liaison tombe pendant qu'on lit, le garde-fou d'une minute
+// s'arme, ou l'on change de conversation. Dans les trois cas la page restait persuadee que
+// quelqu'un parlait — « couper la lecture » clignotait sur un haut-parleur muet, et le
+// message suivant s'annonçait « en attente de la fin de la lecture » sans jamais partir.
+function deposerLecture() {
+  if (lectureEnCours) { lectureEnCours = null; majBoutonsLecture(); }
+  if (enAttenteLecture.length) { enAttenteLecture = []; majEnAttente(); }
+}
+
 function majPupitre(e) {
   monPid = e.moi;
   const s = e.sessions || [];
@@ -5264,14 +5397,20 @@ function outillerEcoute(ligne, e) {
   // un débrief — a déjà un énoncé par ligne, et les coller donnerait une relecture de
   // phrases sans rapport.
   const groupe = e.genre === "texte";
+  // La LISTE de ce tour-ci, retenue par reference. `ecrituresDuTour` est REASSIGNEE au tour
+  // suivant : une fermeture qui lisait la variable lisait donc le tour courant, pas le sien.
+  // Toucher « écouter » sur une réponse d'il y a deux tours lisait la dernière réponse — ou,
+  // si le nouveau tour n'avait encore rien écrit, ne faisait rien du tout. Quitter la
+  // conversation et revenir « réparait » : le rejeu reconstruisait tout.
+  const duTour = ecrituresDuTour;
   if (groupe) {
-    ecrituresDuTour.forEach(l => {
+    duTour.forEach(l => {
       if (l !== ligne && l.zoneEcoute) {
         l.zoneEcoute.hidden = true;
         if (l.zoneEcoute.style) l.zoneEcoute.style.display = "none";
       }
     });
-    ecrituresDuTour.push(ligne);
+    duTour.push(ligne);
   }
   const zone = document.createElement("span");
   zone.className = "lecture";
@@ -5283,7 +5422,7 @@ function outillerEcoute(ligne, e) {
     debloquerLecture();
     // Tout ce que le tour a écrit, dans l'ordre : c'est une réponse, pas un paragraphe.
     const t = groupe
-      ? ecrituresDuTour.map(texteDeLigne).filter(Boolean).join("\n\n")
+      ? duTour.map(texteDeLigne).filter(Boolean).join("\n\n")
       : texteDeLigne(ligne);
     if (!t) { noteBarre("rien à lire dans cette ligne"); return; }
     couperLectureLocale();
@@ -5423,6 +5562,12 @@ const SILENCE = "data:audio/mpeg;base64,SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcu
 const lecteur = typeof Audio !== "undefined" ? new Audio() : null;
 if (lecteur) lecteur.preload = "auto";
 let lecteurFin = null;         // resout la lecture en cours : "ok", "erreur" ou "coupe"
+// Combien de temps on accorde a un son pour COMMENCER. Un flux qui cale ne leve rien : ni
+// `ended`, ni `error`. La promesse de `jouer` n'etait alors jamais resolue — le bouton
+// restait « en lecture » pour de bon, aucun repli ne partait, et seul un rechargement de la
+// page rendait le son utilisable. C'est la forme exacte du defaut qu'on corrige partout
+// ailleurs : un etat qui ne sait pas se defaire. Les tests l'abaissent pour ne pas attendre.
+let DEMARRAGE_MAX = 10000;
 
 // A appeler DANS le gestionnaire du clic, avant tout await. Deux amorces, pour les deux
 // voix : l'element audio pour Azure, une utterance vide pour le repli.
@@ -5467,7 +5612,12 @@ function libererSessionAudio() {
 function jouer(src) {
   return new Promise(resolve => {
     lecteurFin = resolve;
-    const fini = (quoi) => { if (lecteurFin === resolve) lecteurFin = null; resolve(quoi); };
+    let garde = null;
+    const fini = (quoi) => {
+      clearTimeout(garde);
+      if (lecteurFin === resolve) lecteurFin = null;
+      resolve(quoi);
+    };
     lecteur.onended = () => fini("ok");
     lecteur.onerror = () => fini("erreur");
     lecteur.src = src;
@@ -5482,6 +5632,18 @@ function jouer(src) {
     if (lectureEnPause) return;
     const p = lecteur.play();
     if (p && p.catch) p.catch(() => fini("erreur"));
+    // Le garde-fou du demarrage. On ne coupe JAMAIS une lecture qui avance — seulement une
+    // qui n'a pas commence. Mis en pause, on se redonne le meme delai : la pause est voulue,
+    // elle ne doit pas compter comme une panne.
+    const verifier = () => {
+      if (lecteurFin !== resolve) return;
+      if (lectureEnPause || lecteur.currentTime > 0) {
+        garde = setTimeout(verifier, DEMARRAGE_MAX);
+        return;
+      }
+      fini("erreur");
+    };
+    garde = setTimeout(verifier, DEMARRAGE_MAX);
   });
 }
 
@@ -7028,13 +7190,14 @@ function brancher() {
       // on ne touche à rien : l'indicateur dit alors la vérité.
       if (!d.travail && d.etat !== "speaking" && d.etat !== "thinking") {
         toutClore("rien n'était en cours à la reconnexion");
-        // Le bouton « couper la lecture » pulse tant qu'une lecture est declaree en cours, et
-        // sa seule extinction est l'evenement de fin. Perdre la liaison PENDANT une lecture
-        // le laissait donc allume, a clignoter, sur une page ou plus personne ne parle — avec
-        // un bouton qui ne couperait rien si on le pressait.
-        if (lectureEnCours) { lectureEnCours = null; majBoutonsLecture(); }
-        if (enAttenteLecture.length) { enAttenteLecture = []; majEnAttente(); }
       }
+      // Le bouton « couper la lecture » pulse tant qu'une lecture est declaree en cours, et
+      // sa seule extinction est l'evenement de fin. Perdre la liaison PENDANT une lecture le
+      // laissait allume, a clignoter, sur une page ou plus personne ne parle. Le filet ne
+      // regardait que « l'agent ne fait rien » : une tache de fond qui relance un tour
+      // pendant la veille le desarmait. Or l'etat suffit a trancher — on peut travailler
+      // sans lire, on ne peut pas lire sans etre « speaking ».
+      if (d.etat !== "speaking") deposerLecture();
       // Le bonjour arrive APRES tout le rejeu. Donc a cet instant precis, un message encore
       // « en vol » n'a pas seulement perdu son accuse : il n'est jamais arrive — s'il etait
       // passe, son echo serait dans l'historique qu'on vient de rejouer, et l'aurait retire.

@@ -92,9 +92,14 @@ class FausseSession:
     def interrupt(self):
         self.interruptions += 1
 
-    async def say(self, source, allow_interruptions=True):
+    # Volontairement PAS `async`. `AgentSession.say` du SDK est un `def` ordinaire qui rend
+    # une poignee tout de suite ; attendre cette poignee attend la FIN de la lecture. La
+    # doublure etait `async` et mentait donc sur le contrat : le code pouvait l'attendre
+    # sans que rien ne s'en apercoive, et c'est exactement ce qui est arrive.
+    def say(self, source, allow_interruptions=True):
         self.dits.append(source)
-        return FaussePoignee()
+        self.derniere_poignee = FaussePoignee()
+        return self.derniere_poignee
 
 
 class FaussePoignee:
@@ -116,6 +121,16 @@ class FaussePoignee:
         self._fini = True
         for f in self._rappels:
             f(self)
+
+    def __await__(self):
+        # Attendre une poignee attend la FIN de la lecture : `SpeechHandle.__await__` du SDK
+        # appelle `wait_for_playout()`. La doublure le reproduit, et c'est le point — sans
+        # ca, un `await` de trop devant `say()` passait inapercu ici alors qu'en vrai il
+        # gelait la pompe d'evenements pendant toute la duree de la phrase.
+        async def jusqu_au_bout():
+            self.terminer()
+            return self
+        return jusqu_au_bout().__await__()
 
 
 class FauxTableau:
@@ -330,6 +345,12 @@ def couper_la_lecture_vise_CETTE_lecture():
         return v, poignee
     v, poignee = asyncio.run(essai())
     dire(v.sess.dits == ["j'ai corrigé le micro"], "la lecture part a la synthese")
+    # Le point qui fait tout le reste : on reprend la main AVANT que la voix ait fini. En
+    # attendant la poignee, `_lecture` restait None pendant toute la lecture (« couper » ne
+    # coupait rien), l'evenement « lecture » partait quand la voix s'etait deja tue, et une
+    # relecture demandee depuis la page gelait la boucle qui lit ses commandes.
+    dire(poignee.done() is False and v._lecture is poignee,
+         "et la main revient PENDANT que ça parle, la poignee tenue")
     dire(v.tableau.dernier("lecture")["actif"] is True, "la page voit qu'une lecture est en cours")
     dire(v.couper_lecture() is True and poignee.coupee == 1, "et on peut couper CELLE-CI")
 
@@ -339,6 +360,64 @@ def couper_la_lecture_vise_CETTE_lecture():
     dire(v._lecture is None and v.tableau.dernier("lecture")["actif"] is False,
          "a la fin, la poignee est rendue et la page le sait")
     dire(v.couper_lecture() is False, "couper une lecture finie ne fait rien")
+
+
+def une_synthese_qui_leve_rend_la_parole():
+    print("\n=== la synthèse tombe en panne ===")
+
+    class SessionQuiLeve(FausseSession):
+        def say(self, source, allow_interruptions=True):
+            raise RuntimeError("salle LiveKit fermée")
+
+    class FauxBail:
+        def __init__(self):
+            self.pris = 0
+            self.rendus = 0
+
+        def parole_ailleurs(self):
+            return None          # personne d'autre ne parle : on passe tout de suite
+
+        def prendre_parole(self):
+            self.pris += 1
+
+        def liberer_parole(self):
+            self.rendus += 1
+
+    async def essai():
+        v = neuve()
+        v._session_directe = SessionQuiLeve()
+        bail = FauxBail()
+        v.inscription = bail
+        try:
+            await v._lire("une réponse qui ne sortira pas")
+        except RuntimeError:
+            pass
+        return v, bail
+    v, bail = asyncio.run(essai())
+    # Mesure : le bail n'etait rendu que par le rappel de fin. Une lecture qui leve le
+    # gardait donc jusqu'a peremption — trois minutes pendant lesquelles les autres
+    # conversations attendaient en silence, puis parlaient toutes ensemble.
+    dire(bail.pris == 1 and bail.rendus == 1,
+         "une lecture qui tombe en panne rend le micro de parole aux autres")
+    dire(v._lecture is None, "et ne laisse pas une lecture fantome derriere elle")
+
+
+def le_sdk_rend_bien_une_poignee_sans_attendre():
+    """Le contrat du SDK, verifie sur le SDK lui-meme et pas sur notre doublure.
+
+    Une doublure peut mentir : celle de ce fichier l'a fait pendant des semaines. Si LiveKit
+    rendait un jour une coroutine, tout le raisonnement ci-dessus tomberait — et rien ne le
+    dirait. On regarde donc la vraie fonction.
+    """
+    print("\n=== le contrat de LiveKit ===")
+    try:
+        import inspect
+        from livekit.agents.voice import AgentSession
+    except Exception as e:                                   # pragma: no cover
+        dire(True, f"SDK LiveKit absent, contrat non verifiable ici ({type(e).__name__})")
+        return
+    dire(not inspect.iscoroutinefunction(AgentSession.say),
+         "AgentSession.say rend une poignee tout de suite : on ne doit JAMAIS l'attendre")
 
 
 def relire_ressert_le_texte_sans_refaire_le_tour():
@@ -406,6 +485,8 @@ def main():
     changer_de_modele_ne_se_devine_pas()
     une_intention_inconnue_ne_dit_rien()
     couper_la_lecture_vise_CETTE_lecture()
+    une_synthese_qui_leve_rend_la_parole()
+    le_sdk_rend_bien_une_poignee_sans_attendre()
     relire_ressert_le_texte_sans_refaire_le_tour()
     une_permission_attend_vraiment_la_reponse()
     print("\nTOUT VERT" if ok else "\nDES ECHECS")
