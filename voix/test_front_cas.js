@@ -2196,6 +2196,45 @@ async function testerEcouteHistorique() {
   dire(!/écouter/.test((quoi || {}).texte || ''),
        'le libelle du bouton ne part pas dans la synthese');
   couperLectureLocale();
+
+  // --- une reponse ecrite en plusieurs fois reste UNE reponse a ecouter -------------------
+  // Mesure sur une vraie session : un tour produit de deux a onze lignes ecrites, parce que
+  // Claude ecrit, lance un outil, et reprend. Chacune portait son bouton, donc la reponse
+  // s ecoutait en deux fois — on en lisait une, on cherchait l autre.
+  recevoir({ genre: 'toi', texte: 'et la suite ?', n: 20100, h: '09:01' });
+  recevoir({ genre: 'texte', texte: 'Premier bout de la reponse.', n: 20101, h: '09:01' });
+  const bout1 = dernier;
+  recevoir({ genre: 'outil', texte: 'Read fichier.py', n: 20102, h: '09:01' });
+  recevoir({ genre: 'texte', texte: 'Second bout, apres l outil.', n: 20103, h: '09:01' });
+  const bout2 = dernier;
+  dire(bout1 !== bout2, 'un outil au milieu ouvre bien deux lignes dans le flux');
+  dire(bout1.zoneEcoute && bout1.zoneEcoute.hidden === true,
+       'mais un seul bouton reste : celui du premier bout s efface');
+  dire(!!bout2.zoneEcoute && bout2.zoneEcoute.hidden !== true,
+       'et c est la derniere ligne ecrite qui le porte');
+
+  joues.length = 0; requetes.length = 0;
+  bout2.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const dem2 = requetes.filter(r => /\/parler\/preparer$/.test(r.url));
+  const lu = dem2[0] && JSON.parse(dem2[0].opts.body).texte;
+  dire(/Premier bout/.test(lu || '') && /Second bout/.test(lu || ''),
+       'et il lit TOUT ce que le tour a ecrit, d un seul tenant : ' + JSON.stringify(lu || ''));
+  couperLectureLocale();
+
+  // Une question neuve ouvre un tour neuf : la reponse d avant ne se recolle pas a celle
+  // qui arrive.
+  recevoir({ genre: 'toi', texte: 'autre chose', n: 20110, h: '09:02' });
+  recevoir({ genre: 'texte', texte: 'Reponse du tour suivant.', n: 20111, h: '09:02' });
+  const neuf = dernier;
+  joues.length = 0; requetes.length = 0;
+  neuf.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const lu2 = requetes.filter(r => /\/parler\/preparer$/.test(r.url))[0];
+  const texte2 = lu2 && JSON.parse(lu2.opts.body).texte;
+  dire(!/Premier bout/.test(texte2 || ''),
+       'le tour precedent ne se recolle pas au suivant : ' + JSON.stringify(texte2 || ''));
+  couperLectureLocale();
 }
 
 // ---- dicter avec le telephone : enregistrer ici, transcrire au PC -------------------------
@@ -3073,6 +3112,35 @@ async function testerBandeauLecture() {
   couperLectureLocale();
   dire(barre.hidden, 'couper la synthese du navigateur range le bandeau aussi');
   azureMarche = true;
+
+  // --- ecouter plus vite ------------------------------------------------------------------
+  // Une reponse de deux minutes tient en une a deux fois la vitesse. Le geste doit etre un
+  // toucher, et le reglage doit SURVIVRE : le reposer a chaque reponse serait pire que rien.
+  joues.length = 0; requetes.length = 0; azureMarche = true;
+  const bVitesse = document.getElementById('lec-vitesse');
+  ecouter.onclick();
+  await microtaches();
+  dire(!bVitesse.hidden && /^1×$/.test(bVitesse.textContent),
+       'la lecture part a vitesse normale, et le bouton le dit : ' + bVitesse.textContent);
+  dire(lecteur.playbackRate === 1, 'et le son joue bien a 1');
+  bVitesse.onclick();
+  dire(lecteur.playbackRate === 1.25,
+       'un toucher accelere le son EN COURS, sans le reprendre au debut : ' + lecteur.playbackRate);
+  dire(/1,25×/.test(bVitesse.textContent), 'le bouton annonce la vitesse : ' + bVitesse.textContent);
+  bVitesse.onclick(); bVitesse.onclick(); bVitesse.onclick();
+  dire(lecteur.playbackRate === 2, 'les paliers montent jusqu a deux fois : ' + lecteur.playbackRate);
+  dire(localStorage.getItem('vitesse-lecture') === '2',
+       'et le reglage est garde : on ne le repose pas a chaque reponse');
+  // Changer de `src` remet playbackRate a 1 sur plusieurs navigateurs : la DEUXIEME
+  // reponse se lisait alors a vitesse normale sans que le bouton ait bouge.
+  bCouper.onclick();
+  ecouter.onclick();
+  await microtaches();
+  dire(lecteur.playbackRate === 2,
+       'la lecture suivante repart a la vitesse choisie : ' + lecteur.playbackRate);
+  bVitesse.onclick();
+  dire(lecteur.playbackRate === 1, 'et le cycle revient a 1 apres le dernier palier');
+  bCouper.onclick();
 
   // --- assis devant la machine : c est elle qui parle, on ne peut que l interrompre --------
   const hoteVrai = location.hostname;

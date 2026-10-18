@@ -599,6 +599,21 @@ class Worker:
                     "lecture, elle n'autorise pas le rapport : une réponse en huit sections pour "
                     "une question simple est aussi pénible à lire qu'un pavé."
                     "\n\n"
+                    # Mesuré sur l'usage réel : les réponses de fin de tour racontaient tout
+                    # le travail — ce qui avait été lu, essayé, écarté, puis corrigé. Or
+                    # celui qui écoute n'a qu'une décision à prendre : relancer, ou passer à
+                    # la suite. Le récit du chemin ne l'aide pas à la prendre, et il la
+                    # retarde de deux minutes de lecture à chaque tour.
+                    "Quand le tour est un travail sur le code, la réponse tient en trois "
+                    "choses, dans cet ordre, en sautant ce qui ne s'applique pas : "
+                    "**ce qui est fait** — en une phrase, pas la liste des fichiers touchés ni "
+                    "le récit des étapes ; **ce qui ne l'est pas, et pourquoi** — un blocage, "
+                    "un choix laissé ouvert, une partie écartée ; **ce que tu ferais ensuite**, "
+                    "quand une suite s'impose vraiment. Rien d'autre : pas de résumé de ce que "
+                    "tu as essayé, pas de récapitulatif de la conversation, pas de "
+                    "réexplication de ce qui est déjà à l'écran. Quatre ou cinq lignes pour un "
+                    "tour ordinaire ; on développe seulement si on te le demande."
+                    "\n\n"
                     "Tu n'as pas à écrire pour la voix : une autre instance relit ton tour et en "
                     "fabrique la version parlée, qui est dite séparément. N'ajoute donc aucun "
                     "résumé oral, et ne t'interdis rien de ce qui rend un texte lisible."

@@ -1436,6 +1436,10 @@ body{overflow-x:hidden}
   background:#161e18;color:var(--texte);font-size:15px;font-weight:600;letter-spacing:.2px}
 /* Le bouton qui compte : celui qu'on cherche du pouce sans regarder. */
 #lec-pause{border-color:var(--voix);color:#7ee08d;background:#16271c;flex:1.5}
+/* Plus étroit : c'est un réglage, pas une commande de lecture. Mais pas moins haut — il se
+   touche du pouce comme les autres. */
+#lec-vitesse{flex:.6;font-variant-numeric:tabular-nums;color:#9aa5b3}
+#lec-vitesse.vite{border-color:var(--toi);color:#9fcdf2}
 #lec-couper{color:#d98f8f}
 #lecture-cmds button[hidden]{display:none}
 @media (max-width: 520px) {
@@ -2180,6 +2184,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <div id="lecture-cmds">
       <button id="lec-debut" type="button" title="reprendre cette lecture depuis le début"></button>
       <button id="lec-pause" type="button" title="mettre la lecture en pause"></button>
+      <!-- Écouter plus vite. Une réponse de deux minutes tient en une à deux fois la
+           vitesse, et c'est le geste qu'on fait sur tous les podcasts : on comprend très
+           bien, on perd juste l'attente. Le réglage est gardé d'une lecture à l'autre —
+           personne ne veut le reposer à chaque réponse. -->
+      <button id="lec-vitesse" type="button" title="lire plus vite (le réglage est gardé)"></button>
       <button id="lec-couper" type="button" title="arrêter cette lecture"></button>
     </div>
   </div>
@@ -2972,6 +2981,9 @@ function planifierMd(ligne) {
 
 function ajouter(e) {
   if (e.genre === "config") { carteConfig(e); return; }
+  // Une question neuve ouvre un tour neuf : ce qui a été écrit avant ne s'écoute plus avec
+  // ce qui va l'être.
+  if (e.genre === "toi") ecrituresDuTour = [];
   // Un résultat vide sert à clore l'indicateur de son outil, pas à remplir le flux d'une
   // ligne sans contenu.
   if (e.genre === "resultat" && !e.texte && e.id) {
@@ -4607,6 +4619,7 @@ function recevoir(e, etat = false) {
       // Le rejeu de la nouvelle arrive juste après.
       flux.textContent = "";
       actions = 0; jetons = 0;
+      ecrituresDuTour = [];
       majCompteurs();
       // La barre aussi, et sans condition : ce qu'elle porte appartient à la conversation
       // qu'on quitte. Le garder l'enverrait à la suivante, qui n'a rien demandé — c'est la
@@ -5143,11 +5156,31 @@ function texteDeLigne(ligne) {
 // qu'on veut pouvoir reecouter, puisqu'on revient sur quelque chose qu'on n'a pas fini de
 // lire. Les lignes du rejeu n'ont pas de « parole_fin » derriere elles — le debrief parle
 // n'est pas garde par Claude Code, seul son texte l'est — donc rien ne les outillait.
+// Les lignes ECRITES du tour en cours. Claude écrit un paragraphe, lance un outil, reprend :
+// la page ouvre une ligne à chaque reprise, et il y en a eu jusqu'à onze pour un seul tour
+// — mesuré sur une vraie session. Chacune portait son bouton « écouter », donc une réponse
+// se réécoutait en plusieurs fois, en retrouvant chaque bouton à la main. C'est la même
+// réponse : elle s'écoute d'un seul tenant.
+let ecrituresDuTour = [];
+
 function outillerEcoute(ligne, e) {
   if (!ligne || ligne.dejaEcoute || !lireDeCeCote()) return;
   const corps = ligne.querySelector?.(".corps");
   if (!corps) return;
   ligne.dejaEcoute = true;
+  // Le regroupement ne vaut que pour l'écrit. Ce que l'agent DIT — « d'accord, j'y vais »,
+  // un débrief — a déjà un énoncé par ligne, et les coller donnerait une relecture de
+  // phrases sans rapport.
+  const groupe = e.genre === "texte";
+  if (groupe) {
+    ecrituresDuTour.forEach(l => {
+      if (l !== ligne && l.zoneEcoute) {
+        l.zoneEcoute.hidden = true;
+        if (l.zoneEcoute.style) l.zoneEcoute.style.display = "none";
+      }
+    });
+    ecrituresDuTour.push(ligne);
+  }
   const zone = document.createElement("span");
   zone.className = "lecture";
   const b = document.createElement("button");
@@ -5156,7 +5189,10 @@ function outillerEcoute(ligne, e) {
   b.title = "lire cette réponse sur cet appareil";
   b.onclick = () => {
     debloquerLecture();
-    const t = texteDeLigne(ligne);
+    // Tout ce que le tour a écrit, dans l'ordre : c'est une réponse, pas un paragraphe.
+    const t = groupe
+      ? ecrituresDuTour.map(texteDeLigne).filter(Boolean).join("\n\n")
+      : texteDeLigne(ligne);
     if (!t) { noteBarre("rien à lire dans cette ligne"); return; }
     couperLectureLocale();
     lectureLocale = true;
@@ -5343,6 +5379,10 @@ function jouer(src) {
     lecteur.onended = () => fini("ok");
     lecteur.onerror = () => fini("erreur");
     lecteur.src = src;
+    // Reposée à chaque son : changer de `src` remet `playbackRate` à 1 sur plusieurs
+    // navigateurs, et la deuxième réponse se serait lue à vitesse normale sans que le
+    // bouton ait bougé.
+    appliquerVitesse();
     // Mettre en pause PENDANT qu'Azure synthetise est le cas le plus frequent : la lecture
     // part, on s'apercoit qu'on ne peut pas ecouter, on appuie — et le son n'est pas encore
     // la. Jouer quand meme a son arrivee annulerait l'appui, ce qui se lit comme un bouton
@@ -5379,7 +5419,10 @@ function direIci(texte, derniere) {
   const u = new SpeechSynthesisUtterance(texte);
   if (voixChoisie) u.voice = voixChoisie;
   u.lang = voixChoisie?.lang || "fr-FR";
-  u.rate = 1.05;
+  // 1,05 est la vitesse de base : la synthèse du navigateur est un peu lente au naturel.
+  // Le facteur choisi s'y multiplie, et le tout est borné — au-delà de 2,2 la voix du
+  // navigateur hache les syllabes au lieu d'accélérer, ce qui la rend moins lisible, pas plus.
+  u.rate = Math.min(2.2, 1.05 * vitesseLecture);
   // Seule la DERNIERE phrase rend le bouton a son etat normal : le faire sur chacune le
   // ferait clignoter entre deux phrases, comme si la lecture s'arretait sans arret.
   //
@@ -5480,6 +5523,39 @@ function lectureAMontrer() {
   return "";
 }
 
+// Les paliers. Pas un curseur : sur un téléphone, viser 1,4× sur un rail de 3 mm demande
+// plus d'attention que de réécouter la phrase. Cinq valeurs qui tournent en boucle, un
+// toucher par cran, et on entend immédiatement le résultat.
+const VITESSES = [1, 1.25, 1.5, 1.75, 2];
+let vitesseLecture = 1;
+try {
+  const gardee = parseFloat(localStorage.getItem("vitesse-lecture"));
+  if (VITESSES.includes(gardee)) vitesseLecture = gardee;
+} catch (_) {}
+
+function libelleVitesse(v) {
+  return (v === 1 ? "1" : String(v).replace(".", ",")) + "×";
+}
+
+// Appliquée À CHAUD sur l'élément audio : Azure rend un MP3, et changer `playbackRate`
+// pendant qu'il joue accélère la phrase en cours sans la reprendre au début. La synthèse du
+// navigateur, elle, fige sa vitesse au moment où l'utterance part — le changement vaut donc
+// pour la phrase suivante, et on le dit plutôt que de laisser croire à un bouton mort.
+function appliquerVitesse() {
+  if (lecteur) { try { lecteur.playbackRate = vitesseLecture; } catch (_) {} }
+}
+
+function changerVitesse() {
+  const i = VITESSES.indexOf(vitesseLecture);
+  vitesseLecture = VITESSES[(i + 1) % VITESSES.length];
+  try { localStorage.setItem("vitesse-lecture", String(vitesseLecture)); } catch (_) {}
+  appliquerVitesse();
+  if (lectureLocale && !lectureParAzure) {
+    noteBarre("la voix du navigateur garde sa vitesse jusqu'à la phrase suivante");
+  }
+  majBarreLecture();
+}
+
 function majBarreLecture() {
   const barre = document.getElementById("lecture-barre");
   if (!barre) return;
@@ -5499,6 +5575,15 @@ function majBarreLecture() {
   }
   if (bd) bd.textContent = "⏮  au début";
   if (bc) bc.textContent = "⏹  couper";
+  const bv = document.getElementById("lec-vitesse");
+  if (bv) {
+    // Rien à accélérer sur la voix du PC : le son est déjà synthétisé là-bas et arrive par
+    // un flux. Même raison que la pause, et même conséquence — pas de bouton qui mentirait.
+    bv.hidden = ou !== "ici";
+    bv.textContent = libelleVitesse(vitesseLecture);
+    bv.className = vitesseLecture > 1 ? "vite" : "";
+    bv.title = "lire plus vite — actuellement " + libelleVitesse(vitesseLecture);
+  }
   const jauge = document.getElementById("lecture-jauge");
   // La jauge n'a de sens que pour un son dont on connaît la durée. La synthèse du navigateur
   // n'en donne aucune : une barre immobile ferait croire à une lecture bloquée.
@@ -5568,6 +5653,8 @@ function reprendreDepuisBandeau() {
   if (bp) bp.onclick = basculerPauseLecture;
   if (bd) bd.onclick = reprendreDepuisBandeau;
   if (bc) bc.onclick = couperDepuisBandeau;
+  const bv = document.getElementById("lec-vitesse");
+  if (bv) bv.onclick = changerVitesse;
   if (lecteur) lecteur.ontimeupdate = majJaugeLecture;
 })();
 

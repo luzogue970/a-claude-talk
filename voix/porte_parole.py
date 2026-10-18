@@ -55,8 +55,14 @@ Le fond, non negociable :
 - Ecris le francais avec ses accents.
 
 La longueur :
-- Deux a quatre phrases pour un tour court. Jusqu'a dix pour un run long et charge.
-- Ce n'est pas un resume exhaustif : c'est ce qu'il faut savoir pour decider quoi faire ensuite.
+- Deux a quatre phrases pour un tour court. SIX AU MAXIMUM, meme pour un run long et charge.
+- Ce n'est pas un resume exhaustif : c'est ce qu'il faut savoir pour decider quoi faire
+  ensuite, et rien de plus. Un run de quarante actions se dit en trois phrases si ces
+  quarante actions ont produit une seule chose.
+- Ce qui compte a l'oral, dans cet ordre : est-ce que c'est fait ; sinon pourquoi ; et ce
+  qu'on ferait ensuite. Le chemin parcouru — ce qui a ete lu, essaye, ecarte, corrige en
+  route — ne se raconte PAS : il est a l'ecran pour qui veut le lire, et il n'aide pas a
+  decider.
 
 La continuite, parce que c'est une conversation et pas une suite de lectures :
 - Ce qui suit est ce que TU as deja dit a voix haute. Enchaine dessus.
