@@ -1873,7 +1873,9 @@ async def entrypoint(ctx: JobContext):
                 # ferait rien de visible — l'interrupteur paraitrait mort. Rallumer, c'est
                 # rendre la main.
                 agent._effort_manuel = False
-            tableau.publier("effort_auto", actif=config.EFFORT_AUTO)
+            # Pas de genre d'evenement a soi : la page n'a rien a redessiner, et un genre
+            # de plus serait un filtre de plus dans son panneau. La ligne « ordre » dit ce
+            # qui s'est passe, comme pour les autres reglages venus du tableau.
             tableau.publier("ordre", texte=("ajustement automatique de l'effort "
                                             + ("rétabli" if config.EFFORT_AUTO else "coupé")))
         elif nom == "retenir":
