@@ -2381,6 +2381,10 @@ async function testerRelaisVocal() {
 
   // Le micro deja pris par une autre application : la piste existe mais elle est muette.
   // Le dire AVANT de laisser parler vaut mieux que de le decouvrir a l arrivee.
+  // Une piste muette a l ouverture a droit a un delai pour se reveiller (iOS rend souvent
+  // le micro muet une demi-seconde au retour dans l application) : on le raccourcit, le
+  // delai lui-meme se verifie plus loin.
+  DELAI_DEMUTE = 10;
   microMuet = true; noteBarre(null); requetes.length = 0;
   btnDicter.onclick(); await pause();
   microMuet = false;
@@ -2556,6 +2560,9 @@ async function testerRelaisVocal() {
   noteBarre(null); enregistreurs.length = 0; vibrations.length = 0;
 
   // 1. Liaison deja morte : on refuse d ouvrir le micro, et on le dit AVANT.
+  // (Une liaison absente a l appui a droit a un delai pour revenir ; ce delai se verifie
+  // dans « micro : revenir sur la page ». Ici on veut le refus, tout de suite.)
+  DELAI_ATTENTE_LIAISON = 0; DELAI_TOLERANCE_LIAISON = 0;
   fermerSock(1006);
   btnDicter.onclick(); await tick();
   dire(enregistreurs.length === 0, 'liaison morte : le micro ne s ouvre meme pas');
@@ -2634,6 +2641,281 @@ async function testerRelaisVocal() {
   btnDicter.onclick(); await pause();              // relacher proprement
   noteBarre(null);
 
+}
+
+// ---- le micro apres un aller-retour hors de l application ---------------------------------
+// Le defaut vecu, ENCORE, apres les trois portes de « partir de la page et revenir » : on
+// dicte une fois, on quitte l application, on revient, et le micro ne repond plus. Il n y a
+// pas une cause mais une famille — chaque cas ci-dessous en est une, et chacune a ete lue
+// dans le code avant d etre reproduite ici. Le critere est toujours le meme : apres le cas,
+// un appui ouvre le micro et ça enregistre.
+async function testerMicroApresRetour() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const pause = () => new Promise(r => setTimeout(r, 40));
+  const dormir = ms => new Promise(r => setTimeout(r, ms));
+  const note = () => document.getElementById('note-barre').textContent || '';
+  const btnDicter = document.getElementById('dicter-ici');
+  const derniere = () => pistesMicro[pistesMicro.length - 1];
+  const propre = () => {
+    noteBarre(null); enregistreurs.length = 0; requetes.length = 0; envoyes.length = 0;
+    vibrations.length = 0; microDemandes = 0; recorderZombie = false; microSuspendu = false;
+    microDiffere = false; microResolveurs.length = 0; startEchoue = false; microMuet = false;
+    microAccorde = true; audioEchoue = false; audioLent = false; vocalEnAttente = null;
+    echecsMicro = 0; recharges = 0; champ.value = ''; majBoutonDictee();
+  };
+  DELAI_SESSION_AUDIO = 0; DELAI_GARDE_ARRET = 10; DELAI_DEMUTE = 10;
+  DELAI_OUVERTURE_MICRO = 30; DELAI_ATTENTE_LIAISON = 0; DELAI_TOLERANCE_LIAISON = 0;
+  DELAI_RECHARGE_MICRO = 5; DELAI_NIVEAU_MS = 10; MESURES_MIN = 5; niveauMicro = 40;
+  etatContexteAudio = 'running'; contexteBloque = false;
+
+  titre('micro : le systeme ne repond ni oui ni non');
+  brancher(); ouvrirSock(); await pause(); propre();
+  // Apres un aller-retour, iOS laisse parfois getUserMedia en suspens. Avant : bouton inerte,
+  // pas un mot, et chaque appui redemandait dans le vide — c est-a-dire « ne marche plus ».
+  microSuspendu = true;
+  btnDicter.onclick(); await tick();
+  dire(ouvertureVocal === true && btnDicter.classList.contains('ouverture'),
+       'pendant l ouverture, le bouton le montre au lieu d avoir l air mort');
+  dire(/s'ouvre/.test(btnDicter.title), 'et le dit : ' + btnDicter.title);
+  btnDicter.onclick(); await tick();
+  dire(microDemandes === 1, 'un second appui pendant l ouverture n en lance pas une deuxieme');
+  dire(/un instant/.test(note()), 'il dit ou on en est : ' + note());
+  await dormir(60);
+  dire(ouvertureVocal === false && vocalEnCours === false,
+       'un micro qui ne repond pas est abandonne au bout du delai, le bouton est rendu');
+  dire(/ne répond pas/.test(note()) && /réessayer/.test(note()),
+       'et on dit quoi faire : ' + note());
+  dire(vibrations.length >= 1, 'avec une alerte qu on sent');
+  microSuspendu = false; noteBarre(null);
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === true && enregistreurs.length === 1,
+       'l appui suivant ouvre le micro et enregistre : rien a recharger');
+  dire(echecsMicro === 0, 'un succes remet le compte des echecs a zero');
+  btnDicter.onclick(); await pause();
+
+  titre('micro : deux echecs de suite, la page se repare elle-meme');
+  propre(); microSuspendu = true;
+  btnDicter.onclick(); await dormir(60);
+  btnDicter.onclick(); await dormir(60);
+  dire(echecsMicro === 2, 'deux ouvertures ratees d affilee sont comptees');
+  dire(/se recharge/.test(note()), 'et on annonce le rechargement : ' + note());
+  await dormir(20);
+  dire(recharges === 1, 'la page se recharge toute seule : c est ce qui rend le micro');
+  // Mais jamais sur un brouillon : ce qui est dans la barre vaut plus que le micro.
+  propre(); microSuspendu = true; champ.value = 'un brouillon pas encore parti';
+  btnDicter.onclick(); await dormir(60);
+  btnDicter.onclick(); await dormir(80);
+  dire(recharges === 0, 'avec un brouillon dans la barre, on ne recharge pas');
+  dire(/recharge la page/.test(note()) && /perdu/.test(note()),
+       'on dit de le faire a la main, et ce que ça couterait : ' + note());
+  // Et un REFUS d autorisation n est pas un echec de la page : recharger n y changerait rien.
+  propre(); microAccorde = false;
+  btnDicter.onclick(); await pause();
+  btnDicter.onclick(); await pause();
+  dire(echecsMicro === 0 && recharges === 0,
+       'deux refus d autorisation ne font pas recharger : ce n est pas la page qui est cassee');
+  microAccorde = true;
+
+  titre('micro : partir pendant que le systeme reflechit');
+  // On appuie, on quitte l application avant que le micro soit rendu, on revient. Avant : le
+  // flux arrivait apres coup, un enregistrement demarrait dans une page que personne n avait
+  // sollicitee — ou restait ouvert sans preneur, et tenait le micro jusqu au rechargement.
+  propre(); microDiffere = true;
+  btnDicter.onclick(); await tick();
+  dire(ouvertureVocal === true && microResolveurs.length === 1, 'le micro est demande');
+  document.visibilityState = 'hidden'; declencher('visibilitychange');
+  document.visibilityState = 'visible'; declencher('visibilitychange');
+  microResolveurs.shift()(); await pause();
+  dire(vocalEnCours === false && enregistreurs.length === 0,
+       'un micro rendu APRES le depart ne demarre rien');
+  dire(derniere().arretee === true, 'et le flux est rendu au systeme, pas oublie');
+  dire(/interrompue par le départ/.test(note()), 'on dit ce qui s est passe : ' + note());
+  microDiffere = false; noteBarre(null);
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === true, 'et l appui suivant enregistre');
+  btnDicter.onclick(); await pause();
+
+  titre('micro : une piste muette a l ouverture a le temps de se reveiller');
+  // iOS rend souvent le micro « muted » au retour, le temps de remettre sa session audio
+  // d aplomb, puis le reveille dans la demi-seconde. Avant : refus immediat, « occupe par une
+  // autre application », a quelqu un qui n en avait ouvert aucune.
+  propre(); DELAI_DEMUTE = 200; microMuet = true;
+  btnDicter.onclick(); await pause();
+  dire(ouvertureVocal === true && !/occupé/.test(note()),
+       'une piste muette n est pas refusee sur-le-champ');
+  derniere().muted = false; if (derniere().onunmute) derniere().onunmute();
+  await pause();
+  dire(vocalEnCours === true && enregistreurs.length === 1,
+       'elle se reveille : ça enregistre, sans deuxieme appui');
+  btnDicter.onclick(); await pause();
+  // Et si elle ne se reveille pas, LA, c est un micro occupe — dit apres le delai, pas avant.
+  propre(); microMuet = true;
+  btnDicter.onclick(); await pause();
+  dire(!/occupé/.test(note()), 'avant le delai, pas de verdict');
+  await dormir(250);
+  dire(/occupé par une autre application/.test(note()) && vocalEnCours === false,
+       'apres le delai, le verdict : ' + note());
+  dire(derniere().arretee === true, 'et le flux muet est rendu, pas garde ouvert');
+  microMuet = false; DELAI_DEMUTE = 10;
+
+  titre('micro : le systeme reprend le micro pendant qu on parle');
+  // Appel entrant, Siri, autre application : la piste se termine sans que la page change de
+  // visibilite. Avant : on parlait dans un micro mort jusqu a l appui suivant.
+  propre();
+  btnDicter.onclick(); await tick();
+  dire(vocalEnCours === true, 'on parle');
+  derniere().readyState = 'ended'; derniere().onended();
+  dire(vocalEnCours === false, 'la piste se termine : l enregistrement s arrete');
+  await pause();
+  dire(requetes.some(r => /\/audio$/.test(r.url)), 'et ce qui a ete dit part vers le PC');
+  dire(/transcrit par/.test(note()), 'reseau sain : le PC a le dernier mot : ' + note());
+  // Reseau coupe au meme moment : la CAUSE reste lisible, avec le sort de la parole.
+  propre(); audioEchoue = true;
+  btnDicter.onclick(); await tick();
+  derniere().readyState = 'ended'; derniere().onended();
+  await pause();
+  dire(/repris le micro/.test(note()) && /GARDÉ/.test(note()) && !!vocalEnAttente,
+       'reseau coupe : on dit pourquoi, et que ce qui est dit est garde : ' + note());
+  audioEchoue = false; vocalEnAttente = null; majBoutonDictee();
+  // Sans meme l evenement : la veille regarde l enregistrement et le voit mort.
+  propre();
+  btnDicter.onclick(); await tick();
+  derniere().readyState = 'ended'; recorderZombie = true;
+  await dormir(600);
+  dire(vocalEnCours === false && btnDicter.getAttribute('aria-pressed') === 'false',
+       'un enregistrement mort sans evenement est solde par la veille, sans retour sur la page');
+  dire(/arrêté tout seul/.test(note()) && /de nouveau prêt/.test(note()), 'et le dit : ' + note());
+  recorderZombie = false;
+  // Et appuyer sur un enregistrement mort veut dire « parler », pas « arreter » : on rouvre.
+  propre();
+  btnDicter.onclick(); await tick();
+  derniere().readyState = 'ended'; recorderZombie = true; microDemandes = 0;
+  btnDicter.onclick(); recorderZombie = false; await pause();
+  dire(microDemandes === 1 && vocalEnCours === true && enregistreurs.length === 2,
+       'appuyer sur un enregistrement mort le solde ET rouvre le micro dans la foulee');
+  btnDicter.onclick(); await pause();
+
+  titre('micro : un enregistreur qui refuse de demarrer rend le micro');
+  // start() jetait hors de tout try : flux ouvert, micro pris, aucun message, et l appui
+  // suivant refaisait pareil. Une des portes du « ne marche plus apres un aller-retour ».
+  propre(); startEchoue = true;
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === false && fluxMicro === null && derniere().arretee === true,
+       'le flux est rendu quand l enregistreur refuse de demarrer');
+  dire(/refuse de démarrer/.test(note()), 'et on le dit : ' + note());
+  startEchoue = false; noteBarre(null);
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === true, 'l appui suivant enregistre');
+  btnDicter.onclick(); await pause();
+
+  titre('micro : un contexte audio qui ne tourne pas n est pas un silence');
+  // Apres un passage en arriere-plan, WebKit laisse le contexte de mesure « interrupted » :
+  // tous les echantillons valent 128, le silence parfait. Avant : « rien n a ete capte », et
+  // un enregistrement parfaitement bon etait JETE.
+  propre(); etatContexteAudio = 'suspended'; contexteBloque = true; niveauMicro = 0;
+  btnDicter.onclick(); await tick(); await dormir(120);
+  btnDicter.onclick(); await pause();
+  dire(requetes.some(r => /\/audio$/.test(r.url)),
+       'un enregistrement mesure sur un contexte arrete part quand meme vers le PC');
+  dire(!/resté muet/.test(note()), 'et n est pas declare muet : ' + note());
+  // Le contraste, pour que ça veuille dire quelque chose : contexte qui tourne et vrai
+  // silence, l enregistrement est bien jete.
+  propre(); etatContexteAudio = 'running'; contexteBloque = false; niveauMicro = 0;
+  btnDicter.onclick(); await tick(); await dormir(120);
+  btnDicter.onclick(); await pause();
+  dire(!requetes.some(r => /\/audio$/.test(r.url)) && /resté muet/.test(note()),
+       'un VRAI silence, lui, est toujours jete : ' + note());
+  niveauMicro = 40;
+
+  titre('micro : le son de confirmation survit a un aller-retour');
+  // Le contexte des sons revient « interrupted » d un passage en arriere-plan et n en sort
+  // pas toujours : le petit son qui dit « ça enregistre » ne partait plus — et c est ce son
+  // qu on ecoute au lieu de regarder l ecran.
+  propre(); notes.length = 0;
+  btnDicter.onclick(); await tick();
+  dire(notes.length >= 1, 'le son part a l ouverture');
+  const ctxAvant = ctxSons;
+  document.visibilityState = 'hidden'; declencher('visibilitychange'); await pause();
+  dire(ctxSons === null && ctxAvant.state === 'closed',
+       'partir rend le contexte des sons au lieu de le garder');
+  document.visibilityState = 'visible'; declencher('visibilitychange'); await pause();
+  notes.length = 0; noteBarre(null);
+  btnDicter.onclick(); await tick();
+  dire(notes.length >= 1 && ctxSons && ctxSons !== ctxAvant && ctxSons.state === 'running',
+       'au retour, un contexte neuf joue le son');
+  btnDicter.onclick(); await pause();
+  // Et un contexte « interrupted » — pas « suspended », le seul etat qu on reprenait — est
+  // repris lui aussi.
+  ctxSons.state = 'interrupted'; reveillerSons();
+  dire(ctxSons.state === 'running', 'un contexte « interrupted » est repris, pas seulement « suspended »');
+
+  titre('micro : une liaison qui revient n est pas une liaison coupee');
+  // Au retour sur la page, la socket se rebranche en un dixieme de seconde ; l appui arrive
+  // souvent avant. Avant : « liaison coupee — inutile de parler », a quelqu un dont la
+  // liaison etait revenue avant qu il ait fini de lire.
+  propre(); DELAI_ATTENTE_LIAISON = 500;
+  fermerSock(1006);
+  btnDicter.onclick(); await tick();
+  dire(enregistreurs.length === 0 && /liaison revient/.test(note()),
+       'liaison absente a l appui : on attend en le disant : ' + note());
+  ouvrirSock(); await dormir(150);
+  dire(vocalEnCours === true && enregistreurs.length === 1,
+       'elle revient dans le delai : le micro s ouvre sans deuxieme appui');
+  btnDicter.onclick(); await pause();
+  // Pendant qu on parle, une coupure breve est toleree : l audio part en HTTP de toute façon.
+  propre(); DELAI_TOLERANCE_LIAISON = 1000;
+  btnDicter.onclick(); await tick();
+  fermerSock(1006); await dormir(300);
+  dire(vocalEnCours === true, 'une liaison tombee depuis 300 ms ne coupe pas la parole');
+  brancher(); ouvrirSock(); await dormir(700);
+  dire(vocalEnCours === true && !/liaison est tombée/.test(note()),
+       'revenue dans la tolerance, elle n a rien interrompu');
+  btnDicter.onclick(); await pause();
+  DELAI_ATTENTE_LIAISON = 0; DELAI_TOLERANCE_LIAISON = 0;
+
+  titre('micro : un envoi qui ne revient jamais ne bloque pas le bouton');
+  // Page gelee en plein transfert : le bouton restait sur « transcription en cours » pour
+  // toujours, et l appui suivant ANNULAIT au lieu d enregistrer.
+  propre(); DELAI_ENVOI_VOCAL = 50; audioLent = true;
+  btnDicter.onclick(); await tick();
+  btnDicter.onclick(); await tick();
+  dire(vocalEnvoi === true, 'l envoi est en vol');
+  await dormir(120);
+  dire(vocalEnvoi === false && !!vocalEnAttente,
+       'passe le delai, l envoi est tenu pour echoue et la parole est GARDEE');
+  dire(/n'a pas abouti/.test(note()) && /GARDÉ/.test(note()), 'et on le dit : ' + note());
+  audioLent = false; DELAI_ENVOI_VOCAL = 120000; vocalEnAttente = null; majBoutonDictee();
+
+  titre('micro : revenir par le cache arriere-avant repare aussi');
+  // Certains retours ne passent pas par visibilitychange : pageshow avec persisted.
+  propre();
+  btnDicter.onclick(); await tick();
+  derniere().readyState = 'ended'; recorderZombie = true;
+  declencher('pageshow', { persisted: true }); await tick();
+  dire(vocalEnCours === false && /de nouveau prêt/.test(note()),
+       'un retour par pageshow solde l enregistrement mort : ' + note());
+  recorderZombie = false;
+
+  titre('micro : la page raconte son micro a l agent');
+  // Quand « le micro ne marche plus » arrive sur un telephone, personne n est devant la
+  // console. Chaque etape part au journal de l agent — et ce qui est dit socket fermee
+  // attend l ouverture suivante au lieu de se perdre.
+  propre();
+  btnDicter.onclick(); await tick();
+  dire(envoyes.some(o => o.cmd === 'trace' && /appui/.test(o.texte))
+       && envoyes.some(o => o.cmd === 'trace' && /enregistre/.test(o.texte)),
+       'l appui et le demarrage sont racontes a l agent');
+  btnDicter.onclick(); await pause();
+  dire(envoyes.some(o => o.cmd === 'trace' && /arrêt/.test(o.texte)),
+       'et l arret aussi, avec la taille et le niveau');
+  fermerSock(1006); tracesEnAttente.length = 0; envoyes.length = 0;
+  tracerMicro('essai', 'hors ligne');
+  dire(tracesEnAttente.length === 1 && envoyes.length === 0,
+       'socket fermee, la trace attend au lieu de se perdre');
+  brancher(); ouvrirSock(); await tick();
+  dire(envoyes.some(o => o.cmd === 'trace' && /essai/.test(o.texte)) && tracesEnAttente.length === 0,
+       'et part a la reconnexion');
+  propre();
 }
 
 // ---- une photo qui ne part pas ne gele pas la conversation -------------------------------
@@ -3555,6 +3837,7 @@ async function testerAudioToujours() {
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
+      .then(testerMicroApresRetour)
       .then(testerPiecesJointes)
       .then(testerEcritEnMorceaux)
       .then(testerLiaisonQuiNAboutitPas)

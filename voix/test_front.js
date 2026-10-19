@@ -263,13 +263,23 @@ globalThis.niveauMicro = 40;
 // verifier : qu un son part au bon moment, et qu il MONTE a l ouverture, descend a la
 // fermeture — le reste (l enveloppe, le timbre) ne ment a personne.
 globalThis.notes = [];
+// L etat d un contexte audio se regle : WebKit en cree « suspended » hors d un geste, et
+// les laisse « interrupted » apres un passage en arriere-plan. contexteBloque dit que
+// resume() ne le remet PAS en route — c est le cas qui faisait jeter un bon enregistrement.
+globalThis.etatContexteAudio = "running";
+globalThis.contexteBloque = false;
+globalThis.contextesAudio = [];
 globalThis.AudioContext = function () {
   const self = this;
-  this.state = "running";
+  this.state = globalThis.etatContexteAudio;
   this.currentTime = 0;
   this.destination = { nom: "sortie" };
-  this.close = () => {};
-  this.resume = () => {};
+  this.close = () => { self.state = "closed"; return Promise.resolve(); };
+  this.resume = () => {
+    if (!globalThis.contexteBloque && self.state !== "closed") self.state = "running";
+    return Promise.resolve();
+  };
+  globalThis.contextesAudio.push(this);
   this.createMediaStreamSource = () => ({ connect: () => {} });
   this.createOscillator = () => ({
     type: "", frequency: { setValueAtTime: (hz) => globalThis.notes.push(hz) },
@@ -297,15 +307,25 @@ globalThis.navigator = {
         const e = new Error("refus"); e.name = "NotAllowedError";
         return Promise.reject(e);
       }
+      // iOS, apres un aller-retour hors de l application, repond parfois ni oui ni non.
+      if (globalThis.microSuspendu) return new Promise(() => {});
       // Une piste porte son etat : iOS rend un micro deja « muted » quand une autre
       // application le tient, et c est exactement le cas qu on veut pouvoir reproduire.
-      const piste = { stop() {}, muted: !!globalThis.microMuet,
+      // stop() le note : un flux qu on a abandonne doit avoir ete RENDU, pas oublie.
+      const piste = { stop() { this.arretee = true; }, arretee: false,
+                      muted: !!globalThis.microMuet,
                       readyState: globalThis.microFini ? "ended" : "live" };
       // Retenues : l'OS peut reprendre le micro APRES l'ouverture — c'est exactement ce qui
       // arrive quand le telephone passe sur une autre application — et un test doit pouvoir
       // tuer la piste en cours de route, pas seulement a l'ouverture.
       globalThis.pistesMicro.push(piste);
-      return Promise.resolve({ getTracks: () => [piste], getAudioTracks: () => [piste] });
+      const flux = { getTracks: () => [piste], getAudioTracks: () => [piste] };
+      // Differe : le systeme rend le micro quand le test le decide — apres qu on a quitte la
+      // page, par exemple, ce qui est exactement l enchainement a verifier.
+      if (globalThis.microDiffere) {
+        return new Promise(res => globalThis.microResolveurs.push(() => res(flux)));
+      }
+      return Promise.resolve(flux);
     },
   },
 };
@@ -329,13 +349,21 @@ globalThis.pistesMicro = [];
 // aucun talon ne savait le produire — d'ou un bug invisible aux tests.
 // (Pas d'accent grave dans ce fichier : le talon vit dans un template literal.)
 globalThis.recorderZombie = false;
+globalThis.microSuspendu = false;
+globalThis.microDiffere = false;
+globalThis.microResolveurs = [];
+// start() peut jeter — flux deja inactif, session audio refusee. Il jetait hors de tout try.
+globalThis.startEchoue = false;
 globalThis.MediaRecorder = function (flux, opts) {
   const self = this;
   this.mimeType = (opts && opts.mimeType) || "audio/webm";
   // state et pas etat : c'est le nom du vrai MediaRecorder, et le code s'en sert pour
   // savoir si l'enregistrement tient encore debout.
   this.state = "inactive";
-  this.start = () => { self.state = "recording"; };
+  this.start = () => {
+    if (globalThis.startEchoue) { const e = new Error("flux inactif"); e.name = "InvalidStateError"; throw e; }
+    self.state = "recording";
+  };
   this.stop = () => {
     if (globalThis.recorderZombie) return;        // gele : ni etat, ni donnees, ni onstop
     self.state = "inactive";
@@ -584,8 +612,10 @@ globalThis.WebSocket = function () {
 globalThis.WebSocket.OPEN = 1;
 // hostname, et pas seulement host : le code s'en sert pour savoir si l'on est ASSIS devant
 // la machine qui parle. Les cas forcent « socle » quand ils veulent l'autre situation.
+globalThis.recharges = 0;
 globalThis.location = { host: "socle:7788", hostname: "socle",
-                        protocol: "https:", pathname: "/" };
+                        protocol: "https:", pathname: "/",
+                        reload: () => { globalThis.recharges++; } };
 `;
 
 const CAS = fs.readFileSync(path.join(__dirname, "test_front_cas.js"), "utf8");

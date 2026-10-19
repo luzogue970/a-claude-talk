@@ -996,6 +996,16 @@ class Tableau:
                         # vide sans la moindre erreur. Seule une reponse prouve la liaison.
                         await repondre(json.dumps(self._pouls(), ensure_ascii=False))
                         continue
+                    if nom == "trace":
+                        # La page raconte son micro : chaque etape de l'ouverture, de
+                        # l'enregistrement, de l'envoi. Quand « le micro ne marche plus »
+                        # arrive sur un telephone, personne n'est devant la console : ce
+                        # recit, dans le journal de l'agent — donc le filtre « log » de la
+                        # page — est le seul temoin. Pas une commande : rien ne part a l'agent.
+                        texte = ordre.get("texte") if isinstance(ordre, dict) else None
+                        if isinstance(texte, str) and texte.strip():
+                            log.info("page · %s", texte[:300])
+                        continue
                     if not self._on_commande:
                         # L'agent finit de demarrer : on garde la commande pour lui.
                         self._commandes_en_attente.append((nom, ordre))
@@ -1731,6 +1741,9 @@ body{overflow-x:hidden}
   box-shadow:0 0 0 3px #58a6ff26;animation:lit 1.2s ease-in-out infinite}
 #dicter-ici.envoi{color:var(--outil);border-color:var(--outil);background:#1c1710;animation:none}
 #dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
+/* Le micro s'ouvre : entre l'appui et l'enregistrement il y a l'autorisation, le flux et
+   l'enregistreur. Un bouton qui ne change pas pendant ce temps a l'air de ne pas repondre. */
+#dicter-ici.ouverture{color:var(--outil);border-color:var(--outil);border-style:dashed}
 #dicter-ici[hidden]{display:none}
 #dicter-ici.indisponible{opacity:.45;border-style:dashed}
 /* Un enregistrement garde attend la liaison. L'ambre dit « quelque chose est en suspens »,
@@ -3620,6 +3633,9 @@ function viderFile() {
   // qu'on etait hors ligne — et il ne sait alors rien des photos posees dans le composeur :
   // elles resteraient a l'ecran sans jamais suivre la phrase suivante.
   if (typeof jointes !== "undefined" && jointes.some(j => j.chemin)) declarerJointes();
+  // Et le recit du micro ecrit pendant la coupure : il raconte justement ce qui s'est passe
+  // quand la liaison n'etait pas la, ce qui est le moment qu'on cherche a comprendre.
+  if (typeof viderTraces === "function") viderTraces();
 }
 
 // Rebrancher tout de suite, sans doublonner les tentatives. Un seul chemin de reconnexion
@@ -6016,6 +6032,55 @@ let envoiEnCours = null;     // de quoi abandonner la requete en vol
 // Quand on a annule. Sert de fenetre de refus : une transcription qui arrive JUSTE apres,
 // par le flux, appartient au vocal qu'on vient de jeter et ne doit pas remplir la barre.
 let vocalAnnuleA = 0;
+// --- ce qu'il faut pour que le micro SURVIVE a un aller-retour hors de l'application ------
+//
+// Le defaut vecu, encore : on dicte une fois, on quitte l'application, on y revient, et le
+// micro ne repond plus. Il n'y a pas UNE cause mais une famille, et chacune a sa porte :
+//   - une ouverture commencee avant le depart et resolue apres — iOS rend le micro bien apres
+//     `getUserMedia` quand on a quitte entre-temps — demarrait un enregistrement sur un flux
+//     mort, ou laissait un flux ouvert que personne ne tenait ;
+//   - une piste rendue « muted » le temps que la session audio se remette d'aplomb etait
+//     refusee comme « micro occupe » ;
+//   - un `getUserMedia` qui ne repond ni oui ni non laissait le bouton inerte, sans un mot ;
+//   - un enregistreur qui refuse de demarrer laissait le flux ouvert, donc le micro pris ;
+//   - un contexte audio « interrupted » faisait passer un enregistrement bon pour muet, et on
+//     le jetait ;
+//   - une liaison revenue un dixieme de seconde apres l'appui etait refusee, ou coupee a la
+//     troisieme seconde de parole.
+// Chaque ouverture porte donc un numero : partir de la page en change, et ce qui se resout
+// apres coup se voit perime, rend le flux, et ne demarre rien.
+let generationVocal = 0;
+let ouvertureVocal = false;      // une ouverture est en vol : ni une seconde, ni un arret
+// Les echecs d'ouverture d'affilee, hors refus d'autorisation. Deux de suite, c'est que
+// l'etat de capture de la page est casse, et seul un rechargement le remet d'aplomb.
+let echecsMicro = 0;
+let DELAI_OUVERTURE_MICRO = 6000;   // getUserMedia qui ne repond ni oui ni non : on tranche
+let DELAI_DEMUTE = 1500;            // une piste muette a l'ouverture a ce temps pour revenir
+let DELAI_ATTENTE_LIAISON = 3000;   // une liaison absente a l'appui a ce temps pour revenir
+let DELAI_TOLERANCE_LIAISON = 2000; // une liaison qui tombe EN PARLANT a ce temps pour revenir
+let DELAI_ENVOI_VOCAL = 120000;     // un envoi qui ne revient jamais ne bloque pas le bouton
+let DELAI_RECHARGE_MICRO = 800;     // le temps de lire pourquoi la page se recharge
+
+// La page RACONTE son micro a l'agent. Quand « le micro ne marche plus » arrive sur un
+// telephone, personne n'est devant la console : sans ce recit, on ne sait ni si le micro a
+// ete demande, ni ce qu'il a rendu, ni ou ça s'est arrete. Chaque etape part dans le journal
+// de l'agent — quelques octets — et ce qui est dit socket fermee attend l'ouverture suivante.
+let tracesEnAttente = [];
+function tracerMicro(etape, detail) {
+  const ordre = { cmd: "trace", texte: "micro · " + etape + (detail ? " — " + detail : "") };
+  if (socket && socket.readyState === 1) {
+    try { socket.send(JSON.stringify(ordre)); return; } catch (_) {}
+  }
+  tracesEnAttente.push(ordre);
+  if (tracesEnAttente.length > 40) tracesEnAttente.shift();
+}
+function viderTraces() {
+  const file = tracesEnAttente;
+  tracesEnAttente = [];
+  for (const o of file) {
+    try { socket.send(JSON.stringify(o)); } catch (_) { tracesEnAttente.push(o); }
+  }
+}
 
 // Peut-on envoyer, maintenant ? La question se pose AVANT d'ouvrir le micro et PENDANT qu'il
 // enregistre — pas seulement au moment d'envoyer, qui est trop tard : la parole est deja
@@ -6062,10 +6127,27 @@ function reveillerSons() {
           || (typeof webkitAudioContext === "function" && webkitAudioContext);
   if (!AC) return null;
   try {
-    if (!ctxSons) ctxSons = new AC();
-    if (ctxSons.state === "suspended" && ctxSons.resume) ctxSons.resume();
+    if (!ctxSons || ctxSons.state === "closed") ctxSons = new AC();
+    // « suspended » n'est pas le seul etat ou rien ne sort : iOS met le contexte en
+    // « interrupted » quand on quitte l'application, et il y reste souvent au retour. On
+    // reprend des que ce n'est pas « running », quel que soit le nom que WebKit donne a l'arret.
+    if (ctxSons.state !== "running" && ctxSons.resume) {
+      const p = ctxSons.resume();
+      if (p && p.catch) p.catch(() => {});
+    }
   } catch (_) { ctxSons = null; }
   return ctxSons;
+}
+
+// Rendre le contexte des sons quand on quitte la page. Un contexte garde a travers un
+// aller-retour hors de l'application revient « interrupted » sur iOS, et parfois n'en sort
+// plus : le petit son qui confirme l'ouverture du micro ne part plus — et c'est precisement
+// ce son qu'on ecoute au lieu de regarder l'ecran. Un contexte NEUF, cree dans le geste
+// suivant, est ce que WebKit accepte toujours.
+function oublierSons() {
+  if (!ctxSons) return;
+  try { ctxSons.close(); } catch (_) {}
+  ctxSons = null;
 }
 
 // Deux notes courtes. L'enveloppe n'est pas un ornement : une sinusoïde qui démarre et
@@ -6111,17 +6193,23 @@ function majBoutonDictee() {
   if (!b) return;
   b.setAttribute("aria-pressed", vocalEnCours ? "true" : "false");
   b.classList.toggle("envoi", vocalEnvoi);
+  b.classList.toggle("ouverture", ouvertureVocal && !vocalEnCours);
   // Un enregistrement garde n'est pas une erreur de l'utilisateur, mais il attend quelque
   // chose de lui : le bouton le porte, pour qu'on ne l'oublie pas dans une note qui s'efface.
   b.classList.toggle("garde", !!vocalEnAttente && !vocalEnCours && !vocalEnvoi);
   b.title = vocalEnCours ? "arrêter et envoyer l'enregistrement"
+          : ouvertureVocal ? "le micro s'ouvre…"
           : vocalEnvoi ? "transcription en cours sur le PC…"
           : vocalEnAttente ? "un enregistrement attend la liaison — appuie pour réessayer"
           : "dicter avec le micro de cet appareil — appuie, parle, appuie";
 }
 
 function libererMicro() {
-  if (fluxMicro) { try { fluxMicro.getTracks().forEach(t => t.stop()); } catch (_) {} }
+  if (fluxMicro) {
+    try {
+      fluxMicro.getTracks().forEach(t => { t.onended = t.onmute = t.onunmute = null; t.stop(); });
+    } catch (_) {}
+  }
   fluxMicro = null;
   enregistreur = null;
   clearTimeout(minuterieVocal);
@@ -6212,6 +6300,16 @@ function surveillerNiveau() {
 // L'amplitude du dernier instant, 0 si on ne sait pas mesurer.
 function niveauInstantane() {
   if (!analyseurNiveau || !tamponNiveau) return 0;
+  // Un contexte qui ne tourne pas ne mesure rien : WebKit le cree « suspended » hors d'un
+  // geste, et le laisse « interrupted » apres un passage en arriere-plan. Ses echantillons
+  // valent alors tous 128 — le silence parfait — et la version precedente en concluait « le
+  // micro est reste muet » et JETAIT un enregistrement parfaitement bon. Ne pas savoir
+  // mesurer n'est pas un silence : la mesure ne compte pas, et on tente de reprendre.
+  if (ctxNiveau && ctxNiveau.state && ctxNiveau.state !== "running") {
+    try { const p = ctxNiveau.resume && ctxNiveau.resume(); if (p && p.catch) p.catch(() => {}); }
+    catch (_) {}
+    return 0;
+  }
   try { analyseurNiveau.getByteTimeDomainData(tamponNiveau); } catch (_) { return 0; }
   let pic = 0;
   for (let i = 0; i < tamponNiveau.length; i++) {
@@ -6224,6 +6322,101 @@ function niveauInstantane() {
 }
 
 async function demarrerVocal() {
+  if (ouvertureVocal) return;
+  const gen = ++generationVocal;
+  ouvertureVocal = true;
+  majBoutonDictee();
+  tracerMicro("ouverture", (socket ? "socket " + socket.readyState : "sans socket")
+              + (vocalEnAttente ? ", un vocal attend" : ""));
+  try {
+    await ouvrirMicro(gen);
+  } finally {
+    ouvertureVocal = false;
+    majBoutonDictee();
+  }
+}
+
+// Une ouverture qui echoue : on libere tout, on le dit, et on COMPTE. Le compte est ce qui
+// rend la reparation durable : un micro que la page n'arrive plus a ouvrir deux fois de
+// suite — flux muet qui ne revient pas, `getUserMedia` qui ne repond plus, enregistreur qui
+// refuse de demarrer — est un etat de capture casse par l'aller-retour hors de
+// l'application, et aucun appel de la page ne le repare. Seul un rechargement le fait : on
+// le fait, plutot que de laisser appuyer dans le vide. Sauf s'il y a quelque chose a perdre.
+function echecMicro(cause, compte = true) {
+  libererMicro();
+  vocalEnCours = false;
+  majBoutonDictee();
+  alerterFort();
+  tracerMicro("échec", cause + (compte ? " (" + (echecsMicro + 1) + " de suite)" : ""));
+  if (!compte) { noteBarre(cause, true); return; }
+  echecsMicro++;
+  if (echecsMicro >= 2 && peutRecharger()) {
+    noteBarre(cause + " — deux échecs de suite : la page se recharge pour récupérer le micro",
+              true);
+    setTimeout(() => { try { location.reload(); } catch (_) {} }, DELAI_RECHARGE_MICRO);
+    return;
+  }
+  noteBarre(cause + (echecsMicro >= 2
+    ? " — recharge la page pour récupérer le micro (ce qui est dans la barre serait perdu)"
+    : " — appuie pour réessayer"), true);
+}
+
+// Recharger ne se fait ni sur un brouillon ni sur une parole qui attend de partir.
+function peutRecharger() {
+  if (typeof location === "undefined" || typeof location.reload !== "function") return false;
+  if (vocalEnAttente || vocalEnvoi) return false;
+  const c = typeof champ !== "undefined" && champ;
+  return !(c && (c.value || "").trim());
+}
+
+function avecDelai(promesse, ms, message) {
+  if (!(ms > 0)) return promesse;
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      const e = new Error(message); e.name = "TimeoutError"; reject(e);
+    }, ms);
+    promesse.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+
+// Attendre qu'une piste muette se reveille. iOS rend souvent le micro « muted » au retour
+// dans l'application, le temps de remettre sa session audio d'aplomb, et le demute dans la
+// demi-seconde. Le refuser sur-le-champ — c'etait le cas — disait « micro occupe par une
+// autre application » a quelqu'un qui n'en avait ouvert aucune.
+function attendreDemute(pistes, ms) {
+  return new Promise(resolve => {
+    const vivante = () => pistes.some(t => !t.muted && t.readyState !== "ended");
+    if (vivante()) return resolve(true);
+    let fini = false, t = null, i = null;
+    const conclure = ok => {
+      if (fini) return;
+      fini = true; clearTimeout(t); clearInterval(i);
+      pistes.forEach(p => { p.onunmute = null; });
+      resolve(ok);
+    };
+    t = setTimeout(() => conclure(vivante()), ms);
+    i = setInterval(() => { if (vivante()) conclure(true); }, 50);
+    pistes.forEach(p => { p.onunmute = () => conclure(true); });
+  });
+}
+
+// Attendre une liaison qui revient. Au retour sur la page, la socket se rebranche en un
+// dixieme de seconde ; l'appui sur le micro arrive souvent avant. Refuser sur-le-champ,
+// c'etait dire « liaison coupee » a quelqu'un dont la liaison etait revenue avant qu'il ait
+// fini de lire.
+function attendreLiaison(ms) {
+  return new Promise(resolve => {
+    if (liaisonVivante()) return resolve(true);
+    if (!(ms > 0)) return resolve(false);
+    const debut = Date.now();
+    const t = setInterval(() => {
+      if (liaisonVivante()) { clearInterval(t); resolve(true); }
+      else if (Date.now() - debut >= ms) { clearInterval(t); resolve(false); }
+    }, 100);
+  });
+}
+
+async function ouvrirMicro(gen) {
   // La lecture s'arrete AVANT qu'on demande le micro, et c'est tout sauf un detail d'ordre.
   //
   // iOS n'a qu'UNE session audio par page. Tant qu'un element <audio> tient la session en
@@ -6235,41 +6428,78 @@ async function demarrerVocal() {
   // phrase, ce qui est exactement l'enchainement le plus naturel de l'application.
   couperLectureLocale();
   libererSessionAudio();
+  // Un flux oublie — une ouverture interrompue, un enregistreur qui n'a pas demarre —
+  // tiendrait le micro : iOS rend alors muets tous les suivants. Jamais deux flux.
+  if (fluxMicro) libererMicro();
   // Une image de repit : iOS rend la session audio de facon asynchrone, et demander le micro
   // dans la foulee immediate retombe parfois sur l'ancienne categorie. `let`, comme les
   // autres delais de ce fichier : un test ne doit pas avoir a dormir pour verifier l'ordre.
   await new Promise(r => setTimeout(r, DELAI_SESSION_AUDIO));
+  if (gen !== generationVocal) { tracerMicro("ouverture abandonnée", "avant la demande"); return; }
   let flux;
   try {
     // C'est CET appel qui fait apparaitre la demande d'autorisation. Et s'il est refuse, on
     // le sait tout de suite, avec la raison — l'inverse exact de la version precedente.
-    flux = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Borne dans le temps : apres un aller-retour hors de l'application, iOS repond parfois
+    // ni oui ni non. Sans borne, le bouton restait inerte et chaque appui redemandait dans
+    // le vide, en silence — c'est-a-dire « le micro ne marche plus ».
+    flux = await avecDelai(navigator.mediaDevices.getUserMedia({ audio: true }),
+                           DELAI_OUVERTURE_MICRO, "le micro n'a pas répondu");
   } catch (e) {
     const nom = (e && e.name) || "";
-    noteBarre(nom === "NotAllowedError" || nom === "SecurityError"
-      ? "micro refusé : autorise le microphone pour ce site dans les réglages, puis réessaie"
-      : "micro indisponible : " + (nom || e), true);
+    tracerMicro("getUserMedia a échoué", nom + " " + ((e && e.message) || ""));
+    if (nom === "NotAllowedError" || nom === "SecurityError") {
+      echecMicro("micro refusé : autorise le microphone pour ce site dans les réglages, "
+                 + "puis réessaie", false);
+    } else if (nom === "TimeoutError") {
+      echecMicro("le micro ne répond pas (" + Math.round(DELAI_OUVERTURE_MICRO / 1000)
+                 + " s sans réponse du système)");
+    } else {
+      echecMicro("micro indisponible : " + (nom || e));
+    }
+    return;
+  }
+  const pistes = (flux.getAudioTracks && flux.getAudioTracks()) || [];
+  const etatPistes = pistes.map(t => (t.readyState || "?") + (t.muted ? "/muted" : "")
+                                     + (t.label ? " " + t.label : "")).join(", ");
+  if (gen !== generationVocal) {
+    // On a quitte la page pendant que le systeme reflechissait. Ce flux n'a plus de
+    // preneur : le rendre tout de suite, sinon il tient le micro jusqu'au rechargement.
+    try { flux.getTracks().forEach(t => t.stop()); } catch (_) {}
+    tracerMicro("ouverture abandonnée", "flux rendu (" + etatPistes + ")");
+    noteBarre("l'ouverture du micro a été interrompue par le départ de la page — appuie "
+              + "pour reparler", true);
     return;
   }
   fluxMicro = flux;
   morceauxAudio = [];
-  // Une piste deja muette ou finie ne donnera jamais de son : c'est l'etat dans lequel iOS
-  // rend le micro quand une autre application l'a pris, ou quand la page revient de veille.
-  // Le dire MAINTENANT vaut mieux que de laisser parler pour rien.
-  const pistes = (flux.getAudioTracks && flux.getAudioTracks()) || [];
-  if (pistes.length && pistes.every(t => t.muted || t.readyState === "ended")) {
-    libererMicro();
-    alerterFort();
-    noteBarre("le micro est occupé par une autre application — ferme-la, ou coupe la lecture "
-              + "en cours, puis réessaie", true);
+  tracerMicro("flux obtenu", pistes.length + " piste(s) : " + etatPistes);
+  if (!pistes.length || pistes.every(t => t.readyState === "ended")) {
+    echecMicro("le système a rendu un micro déjà fermé");
     return;
+  }
+  // Une piste muette a l'ouverture n'est pas encore un micro occupe : on lui laisse le
+  // temps de se reveiller. Si elle reste muette, LA, c'est qu'une autre application le tient
+  // — ou que la lecture n'a pas rendu la session.
+  if (pistes.every(t => t.muted || t.readyState === "ended")) {
+    const revenue = await attendreDemute(pistes, DELAI_DEMUTE);
+    if (gen !== generationVocal) {
+      libererMicro();
+      tracerMicro("ouverture abandonnée", "pendant l'attente du réveil de la piste");
+      return;
+    }
+    if (!revenue) {
+      echecMicro("le micro est occupé par une autre application — ferme-la, ou coupe la "
+                 + "lecture en cours, puis réessaie");
+      return;
+    }
+    tracerMicro("piste réveillée");
   }
   const mime = mimeVocal();
   try {
     enregistreur = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
   } catch (e) {
-    libererMicro();
-    noteBarre("impossible d'enregistrer sur cet appareil : " + ((e && e.message) || e), true);
+    echecMicro("impossible d'enregistrer sur cet appareil : " + ((e && e.message) || e));
     return;
   }
   enregistreur.ondataavailable = ev => { if (ev.data && ev.data.size) morceauxAudio.push(ev.data); };
@@ -6285,6 +6515,8 @@ async function demarrerVocal() {
     libererMicro();
     vocalEnCours = false;
     majBoutonDictee();
+    tracerMicro("arrêt", blob.size + " octets, " + Math.round((Date.now() - debutVocal) / 1000)
+                + " s, niveau max " + niveauVu + (muetMesure ? ", MUET" : ""));
     if (!blob.size) { noteBarre("enregistrement vide — rien n'a été capté", true); return; }
     // Silencieux d'un bout a l'autre : inutile de l'envoyer. Le PC repondrait « rien compris »
     // apres plusieurs secondes de transcription, et ce message-la ne dit pas quoi faire. On
@@ -6305,16 +6537,40 @@ async function demarrerVocal() {
   // Une tranche par seconde : iOS a eu des versions qui rendaient un fichier vide quand
   // tout arrivait en un seul bloc a l'arret. Et ça dit, seconde apres seconde, que ça
   // enregistre vraiment.
-  enregistreur.start(1000);
+  try {
+    enregistreur.start(1000);
+  } catch (e) {
+    // `start()` peut JETER — flux deja inactif, session audio refusee — et il jetait hors
+    // de tout `try` : le flux restait ouvert, donc le micro pris, et aucun message. L'appui
+    // suivant refaisait exactement la meme chose. C'est l'une des portes du « ne marche
+    // plus apres un aller-retour ».
+    enregistreur = null;
+    echecMicro("l'enregistreur refuse de démarrer : " + ((e && e.name) || e));
+    return;
+  }
+  // Le systeme peut REPRENDRE le micro pendant qu'on parle — appel entrant, Siri, autre
+  // application, retour de veille — sans que la page change de visibilite. La piste le dit.
+  pistes.forEach(t => {
+    t.onended = () => {
+      if (!vocalEnCours || fluxMicro !== flux) return;
+      tracerMicro("piste terminée pendant la dictée");
+      interrompreVocal("le système a repris le micro");
+    };
+    t.onmute = () => tracerMicro("piste muette pendant la dictée");
+    t.onunmute = () => tracerMicro("piste réveillée pendant la dictée");
+  });
   demarrerMesureNiveau(flux);
   debutVocal = Date.now();
   vocalEnCours = true;
+  echecsMicro = 0;
   majBoutonDictee();
   // Ici et pas au clic : le clic dit ce qu'on a demandé, ce son-ci dit que ça ENREGISTRE
   // vraiment. Entre les deux il y a l'autorisation du micro, un flux à ouvrir et un
   // MediaRecorder à construire, et chacun peut échouer. Un son qui part sur l'intention
   // serait une confirmation fausse, c'est-à-dire pire que pas de son du tout.
   sonMicro(true);
+  tracerMicro("enregistre", (enregistreur.mimeType || mime || "format par défaut")
+              + (ctxNiveau ? ", mesure " + ctxNiveau.state : ", sans mesure"));
   noteBarre("j'écoute (" + (enregistreur.mimeType || mime || "format par défaut")
             + ") — appuie à nouveau pour envoyer");
   minuterieVocal = setTimeout(() => { if (vocalEnCours) arreterVocal(); }, VOCAL_MAX_MS);
@@ -6323,13 +6579,25 @@ async function demarrerVocal() {
   // on appuyait, et on apprenait a ce moment-la que rien ne partirait. Une demi-seconde de
   // detection valait mieux que trente secondes de parole perdue.
   clearInterval(veilleLiaisonVocal);
-  let tics = 0;
+  let tics = 0, liaisonMorteDepuis = 0;
   veilleLiaisonVocal = setInterval(() => {
     if (!vocalEnCours) return;
+    // L'enregistrement peut mourir sous nos pieds sans que la page change de visibilite : le
+    // systeme reprend le micro, l'enregistreur se fige. Regarder ne coute rien, et c'est ce
+    // qui rend le bouton de nouveau utilisable sans attendre un retour sur la page.
+    if (!dicteeVivante()) { assainirDictee("l'enregistrement s'est arrêté tout seul"); return; }
     if (!liaisonVivante()) {
-      interrompreVocal("la liaison est tombée pendant que tu parlais");
+      // Une liaison qui tombe en parlant n'est pas encore une liaison perdue : une socket
+      // zombie detectee au retour sur la page se rebranche en un dixieme de seconde, et
+      // l'audio part en HTTP de toute facon. Couper sur-le-champ, c'etait couper quelqu'un a
+      // sa troisieme seconde pour une liaison deja revenue.
+      if (!liaisonMorteDepuis) liaisonMorteDepuis = Date.now();
+      if (Date.now() - liaisonMorteDepuis >= DELAI_TOLERANCE_LIAISON) {
+        interrompreVocal("la liaison est tombée pendant que tu parlais");
+      }
       return;
     }
+    liaisonMorteDepuis = 0;
     // Toutes les cinq secondes, on ne se contente pas de regarder : on demande. Sans ça, une
     // socket morte en silence pendant qu'on parle ne serait vue qu'au bout de 70 s d'absence
     // de pouls — c'est-a-dire apres l'enregistrement, donc trop tard. Interroger coute une
@@ -6350,6 +6618,7 @@ function interrompreVocal(pourquoi) {
   // parler » est la phrase qui compte : on est en train de parler quand elle arrive. Les
   // deux sont donc dits ensemble, en une fois.
   vocalInterrompu = pourquoi;
+  tracerMicro("interrompu", pourquoi);
   noteBarre(pourquoi + " — arrête de parler, ce que tu as dit est gardé.", true);
   arreterVocal();            // onstop garde l'enregistrement et tentera l'envoi
 }
@@ -6386,8 +6655,9 @@ function dicteeVivante() {
 // avant le gel est au mieux un fragment, et le presenter comme une phrase complete serait
 // pire que de le perdre. Ce qu'on garantit, c'est que le bouton redevient utilisable tout de
 // suite — sans rechargement.
-function assainirDictee() {
+function assainirDictee(pourquoi) {
   if (!vocalEnCours || dicteeVivante()) return false;
+  tracerMicro("assaini", pourquoi || "au retour sur la page");
   clearInterval(veilleLiaisonVocal);
   veilleLiaisonVocal = null;
   if (enregistreur) { try { enregistreur.onstop = null; enregistreur.stop(); } catch (_) {} }
@@ -6395,9 +6665,28 @@ function assainirDictee() {
   vocalEnCours = false;
   silencePrevenu = false;
   majBoutonDictee();
-  noteBarre("l'enregistrement s'est arrêté pendant que tu étais ailleurs — "
-            + "le micro est de nouveau prêt, appuie pour reparler", true);
+  noteBarre((pourquoi || "l'enregistrement s'est arrêté pendant que tu étais ailleurs")
+            + " — le micro est de nouveau prêt, appuie pour reparler", true);
   return true;
+}
+
+// Partir : on ferme nous-memes, pendant qu'on le peut encore. Ce qui est en vol est perime,
+// ce qui enregistre s'arrete et part, et le contexte des sons est rendu — un contexte garde
+// a travers l'absence revient « interrupted » et ne joue plus.
+function quitterLaPage(comment) {
+  tracerMicro(comment, vocalEnCours ? "en pleine dictée" : ouvertureVocal ? "pendant l'ouverture"
+              : vocalEnvoi ? "pendant l'envoi" : "au repos");
+  if (ouvertureVocal) generationVocal++;
+  if (vocalEnCours) arreterVocal();
+  oublierSons();
+}
+
+// Revenir : le filet. Si la sortie n'a pas pu se faire — onglet tue sans preavis — c'est ici
+// que le blocage se defait.
+function revenirSurLaPage(comment) {
+  tracerMicro(comment, vocalEnCours ? "une dictée se croit en cours"
+              : vocalEnvoi ? "un envoi est en vol" : vocalEnAttente ? "un vocal attend" : "au repos");
+  assainirDictee();
 }
 
 if (typeof addEventListener === "function") {
@@ -6405,12 +6694,13 @@ if (typeof addEventListener === "function") {
   // sur telephone, `pagehide` couvre la fermeture et le cache arriere/avant.
   addEventListener("visibilitychange", () => {
     if (typeof document === "undefined") return;
-    if (document.visibilityState === "hidden") { if (vocalEnCours) arreterVocal(); return; }
-    // Revenir : le filet. Si la sortie n'a pas pu se faire — onglet tue sans preavis — c'est
-    // ici que le blocage se defait.
-    assainirDictee();
+    if (document.visibilityState === "hidden") { quitterLaPage("page cachée"); return; }
+    revenirSurLaPage("page visible");
   });
-  addEventListener("pagehide", () => { if (vocalEnCours) arreterVocal(); });
+  addEventListener("pagehide", () => quitterLaPage("pagehide"));
+  // Restauration depuis le cache arriere/avant : la page revient telle quelle, et certains
+  // retours ne passent pas par `visibilitychange`.
+  addEventListener("pageshow", e => { if (e && e.persisted) revenirSurLaPage("pageshow"); });
 }
 
 function arreterVocal() {
@@ -6432,6 +6722,7 @@ function arreterVocal() {
     libererMicro();
     vocalEnCours = false;
     majBoutonDictee();
+    tracerMicro("enregistreur figé", "stop() sans réponse en " + DELAI_GARDE_ARRET + " ms");
     noteBarre("le micro n'a pas rendu la main — il est réinitialisé, appuie pour reparler",
               true);
   }, DELAI_GARDE_ARRET);
@@ -6466,6 +6757,15 @@ async function envoyerVocal(blob, type) {
   noteBarre("envoi au PC pour transcription… — appuie sur le micro pour annuler");
   const controle = typeof AbortController === "function" ? new AbortController() : null;
   envoiEnCours = controle;
+  // Un envoi qui ne revient jamais — page gelee en plein transfert, requete avalee par le
+  // reseau — laissait le bouton en « transcription en cours » pour toujours, et l'appui
+  // suivant ANNULAIT au lieu d'enregistrer. Passe ce delai, c'est un echec de transport : la
+  // parole est gardee et repartira.
+  let expire = false;
+  const garde = controle
+    ? setTimeout(() => { expire = true; try { controle.abort(); } catch (_) {} }, DELAI_ENVOI_VOCAL)
+    : null;
+  tracerMicro("envoi", blob.size + " octets");
   try {
     const corps = new FormData();
     const ext = /mp4|m4a|aac/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg"
@@ -6503,13 +6803,17 @@ async function envoyerVocal(blob, type) {
     // qui : un vocal qui reussit sans un mot ressemble a un vocal perdu.
     vocalEnAttente = null;
     vocalInterrompu = "";
+    tracerMicro("transcrit", (d.moteur || "?") + (d.secondes ? ", " + d.secondes + " s" : ""));
     noteBarre(`transcrit par ${d.moteur || "le PC"}`
               + (d.secondes ? ` — ${d.secondes} s de parole` : ""));
   } catch (e) {
     // Annule volontairement : ce n'est pas un echec, et il n'y a rien a garder — c'est
     // precisement ce qu'on vient de jeter.
-    if (vocalAnnuleA || (e && e.name === "AbortError")) return;
-    const cause = vocalInterrompu || ((e && e.message) || String(e));
+    if (vocalAnnuleA || (e && e.name === "AbortError" && !expire)) return;
+    const cause = vocalInterrompu
+      || (expire ? "l'envoi n'a pas abouti en " + Math.round(DELAI_ENVOI_VOCAL / 1000) + " s"
+                 : ((e && e.message) || String(e)));
+    tracerMicro("envoi en échec", cause);
     vocalInterrompu = "";
     alerterFort();
     if (e && e.definitif) {
@@ -6531,6 +6835,7 @@ async function envoyerVocal(blob, type) {
     noteBarre(cause + " — arrête de parler. Ce que tu as dit est GARDÉ : il repartira "
               + "à la reconnexion, ou appuie sur le micro pour réessayer.", true);
   } finally {
+    clearTimeout(garde);
     envoiEnCours = null;
     vocalEnvoi = false;
     majBoutonDictee();
@@ -6551,8 +6856,23 @@ async function renvoyerVocalEnAttente() {
   await envoyerVocal(blob, type);
 }
 
-function basculerDicteeIci() {
-  if (vocalEnCours) { arreterVocal(); return; }
+async function basculerDicteeIci() {
+  // Dans le GESTE, avant tout `await` : WebKit n'accorde le son qu'a un contexte cree ou
+  // repris pendant un geste de l'utilisateur. Le petit son de confirmation part plus tard,
+  // quand ça enregistre vraiment — mais le droit de le jouer se prend ici.
+  reveillerSons();
+  tracerMicro("appui", (vocalEnCours ? "dictée en cours" : ouvertureVocal ? "ouverture en vol"
+              : vocalEnvoi ? "envoi en cours" : vocalEnAttente ? "un vocal attend" : "au repos")
+              + ", liaison " + (liaisonVivante() ? "vivante" : "absente"));
+  if (vocalEnCours) {
+    // Un enregistrement qui se croit en cours alors que son flux est mort — le systeme a
+    // repris le micro sans que la page change de visibilite — est solde, et l'appui vaut
+    // pour ce qu'il voulait dire : parler. On rouvre dans la foulee.
+    if (!assainirDictee("l'enregistrement s'était arrêté tout seul")) { arreterVocal(); return; }
+  }
+  // Une ouverture est en vol : un second appui n'en lance pas une deuxieme — deux flux, et
+  // iOS rend le second muet — et ne l'annule pas non plus. Il dit ou on en est.
+  if (ouvertureVocal) { noteBarre("le micro s'ouvre… un instant"); return; }
   // L'envoi est en cours : cet appui l'ANNULE. On vient de parler, on s'entend dire une
   // betise ou on se ravise — et il faut pouvoir revenir en arriere tout de suite, sans
   // attendre la fin de la transcription puis effacer le texte a la main. Le bouton pulse
@@ -6562,27 +6882,36 @@ function basculerDicteeIci() {
   // Un enregistrement garde attend son tour : le geste sert a le renvoyer, pas a en empiler
   // un second par-dessus.
   if (vocalEnAttente) { renvoyerVocalEnAttente(); return; }
-  // Le dire AVANT, pas apres. Ouvrir le micro alors que la liaison est deja tombee, c'est
-  // laisser quelqu'un parler une minute pour rien : c'est arrive, et c'est precisement ce
-  // qu'on refuse ici.
-  if (!liaisonVivante()) {
-    alerterFort();
-    noteBarre("liaison coupée — inutile de parler pour l'instant, ça ne partirait pas. "
-              + "Réessaie dès que la connexion revient.", true);
-    return;
-  }
-  // La liaison a l'air bonne — mais « a l'air » ne suffit pas pour un geste qui engage une
-  // minute de parole. On POSE la question au serveur au moment ou l'on ouvre le micro. La
-  // reponse arrive en quelques centiemes ; si elle ne vient pas, la sonde rebranche, et la
-  // surveillance ci-dessous interrompt l'enregistrement dans la seconde qui suit. On perd
-  // deux secondes de parole au pire, au lieu de la totalite.
-  sonder("ouverture du micro");
   // Sans https, Safari refuse le micro — et il le refuse en silence, ce qui se lit comme
   // « la page est cassee ». On teste avant, et on le DIT.
   if (!globalThis.isSecureContext) {
     noteBarre("le micro de cet appareil demande une connexion sécurisée : ouvre la page "
               + "en https plutôt qu'en http", true);
     return;
+  }
+  // Le dire AVANT, pas apres. Ouvrir le micro alors que la liaison est deja tombee, c'est
+  // laisser quelqu'un parler une minute pour rien : c'est arrive, et c'est precisement ce
+  // qu'on refuse ici. Mais une liaison absente a l'appui est souvent une liaison qui
+  // REVIENT — on sort de veille, la socket se rebranche en un dixieme de seconde. On lui
+  // laisse ce temps, en le disant, avant de refuser.
+  if (!liaisonVivante()) {
+    noteBarre("la liaison revient… le micro s'ouvrira dès qu'elle répond");
+    rebrancherMaintenant("ouverture du micro");
+    const revenue = await attendreLiaison(DELAI_ATTENTE_LIAISON);
+    if (!revenue) {
+      alerterFort();
+      tracerMicro("refusé", "liaison absente après " + DELAI_ATTENTE_LIAISON + " ms");
+      noteBarre("liaison coupée — inutile de parler pour l'instant, ça ne partirait pas. "
+                + "Réessaie dès que la connexion revient.", true);
+      return;
+    }
+    if (vocalEnCours || ouvertureVocal) return;   // lance entre-temps par un autre chemin
+  } else {
+    // La liaison a l'air bonne — mais « a l'air » ne suffit pas pour un geste qui engage une
+    // minute de parole. On POSE la question au serveur au moment ou l'on ouvre le micro. La
+    // reponse arrive en quelques centiemes ; si elle ne vient pas, la sonde rebranche, et la
+    // surveillance de l'enregistrement tolere la reprise avant d'interrompre.
+    sonder("ouverture du micro");
   }
   demarrerVocal();
 }

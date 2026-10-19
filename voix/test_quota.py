@@ -80,8 +80,12 @@ def le_temps_restant_se_dit_autrement():
 
 def la_date_de_reset_se_lit_selon_le_jour():
     print("\n=== _quand : aujourd'hui l'heure, demain le jour ===")
-    aujourdhui = _quand(dans(30))
-    dire(len(aujourdhui) == 5 and ":" in aujourdhui,
+    # Une heure FIXE du jour courant, pas « dans 30 minutes » : lance a 23h52 le 19 octobre
+    # 2026, la suite tombait parce que l'echeance debordait sur le lendemain. Un test qui
+    # echoue selon l'heure a laquelle on le lance n'apprend rien sur le code.
+    midi = datetime.now().astimezone().replace(hour=12, minute=30, second=0, microsecond=0)
+    aujourdhui = _quand(midi.isoformat())
+    dire(aujourdhui == "12:30",
          f"une echeance du jour donne juste l'heure : {aujourdhui!r}")
     plus_tard = _quand(dans(60 * 72))
     dire("/" in plus_tard and plus_tard[:4] in [j[:4] for j in mq.JOURS],
