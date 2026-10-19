@@ -748,7 +748,10 @@ class Voix(Agent):
                 return f"sur quel modèle ? {dispo}."
             libelle = await self.worker.changer_modele(cle, temporaire=True)
             if not libelle:
-                return "je ne connais pas ce modèle."
+                # Un couple refusé n'est pas un modèle inconnu : le dire tel quel, sinon on
+                # croit avoir mal prononcé le nom et on répète le même ordre indéfiniment.
+                return (getattr(self.worker, "refus_credits", "")
+                        or "je ne connais pas ce modèle.")
             retour = " juste pour cette tâche" if cle != config.cle_du_modele(
                 config.WORKER_MODEL) else ""
             return f"d'accord, je passe sur {libelle}{retour}."

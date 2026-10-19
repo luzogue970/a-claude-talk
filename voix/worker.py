@@ -371,6 +371,9 @@ class Worker:
         self._modele_base = config.WORKER_MODEL
         self.effort = config.WORKER_EFFORT
         self._rendre_apres_tour = False
+        # Le dernier couple modele+effort refuse, pour que la voix le dise au lieu de
+        # repondre « je ne connais pas ce modele » a un modele qu'elle connait tres bien.
+        self.refus_credits = ""
 
     def _voir(self, genre: str, **donnees):
         if self._tableau:
@@ -1166,6 +1169,18 @@ class Worker:
             self.journal.question = f"{self.journal.question} / {texte}".strip(" /")
         await self.client.query(texte)
 
+    def _refuser_le_couple(self, refus: str) -> str:
+        """Dit non au couple modele+effort, une fois, en clair, et renvoie "".
+
+        Le refus s'ecrit ici plutot que chez chacun des appelants parce qu'ils sont trois —
+        la voix, la page de conversation et la carte du tableau de bord — et qu'un refus
+        silencieux ressemble a un bouton casse. Le message reste aussi en memoire : le
+        chemin vocal le dit a haute voix, les deux autres le lisent dans le journal.
+        """
+        self.refus_credits = refus
+        self._voir("log", niveau="WARNING", source="crédits", texte=refus)
+        return ""
+
     async def changer_modele(self, cle: str, temporaire: bool = True) -> str:
         """Switch model mid-session. Returns the label to say.
 
@@ -1173,10 +1188,14 @@ class Worker:
         re-reads the conversation at full price. That is fine for an explicit choice, and the
         reason this is not done automatically per task."""
         assert self.client
+        self.refus_credits = ""
         entree = config.MODELES.get(cle)
         if not entree:
             return ""
         identifiant, libelle = entree
+        refus = config.refus_du_couple(cle, self.effort)
+        if refus:
+            return self._refuser_le_couple(refus)
         await self.client.set_model(identifiant)
         self.modele = identifiant
         self._rendre_apres_tour = temporaire and identifiant != self._modele_base
@@ -1206,21 +1225,30 @@ class Worker:
         sans reconstruction. Ce qui se paie est donc la latence, et elle seule : une demi-
         seconde, avant que Claude ne commence. C'est ce qui rend l'ajustement automatique de
         l'effort viable à chaque tour — voir complexite.py."""
+        self.refus_credits = ""
         entree = config.EFFORTS.get(cle)
         if not entree or not self.client:
             return ""
         niveau, libelle = entree
-        if niveau == self.effort:
+        refus = config.refus_du_couple(config.cle_du_modele(self.modele), cle)
+        if refus:
+            return self._refuser_le_couple(refus)
+        # On compare, on reconstruit et on retient sur la CLE, jamais sur le niveau SDK.
+        # Invisible sur cinq niveaux ou les deux coincident, faux sur le sixieme : ultracode
+        # s'envoie en « xhigh », donc le retenir ainsi effacait l'information qu'on y etait —
+        # les consignes ultracode ne partaient pas, et le selecteur retombait tout seul sur
+        # « très élevé ». Tout le reste du code lit self.effort comme une cle.
+        if cle == self.effort:
             return libelle
         if self.occupe:
             return ""
 
         ancien, ancienne_pompe = self.client, self._pompe
-        nouveau = ClaudeSDKClient(self._options(effort=niveau, reprendre=self._sid_vivant()))
+        nouveau = ClaudeSDKClient(self._options(effort=cle, reprendre=self._sid_vivant()))
         await nouveau.connect()
         # Bascule seulement maintenant : jusqu'ici l'ancien client servait encore.
         self.client = nouveau
-        self.effort = niveau
+        self.effort = cle
         self._pompe = asyncio.create_task(self._drainer())
 
         if ancienne_pompe:

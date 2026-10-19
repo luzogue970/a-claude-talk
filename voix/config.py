@@ -236,6 +236,44 @@ def effort_sdk(niveau: str) -> str:
 
 def est_ultracode(niveau: str) -> bool:
     return niveau == ULTRACODE
+
+
+# Les modeles qui ne se paient PAS dans la fenetre du forfait mais en credits achetes. Un
+# pourcentage de fenetre qui ne bouge pas ne veut alors pas dire « ca ne coute rien » : ca
+# veut dire que la depense est ailleurs, et que rien ne la plafonne.
+MODELES_HORS_FORFAIT = ("fable",)
+
+
+def refus_du_couple(cle_modele: str, niveau_effort: str) -> str:
+    """Pourquoi ce modele et cet effort ne vont pas ensemble — "" quand ils vont.
+
+    Un seul couple est refuse, et il l'est pour une raison arithmetique, pas par prudence :
+    Fable se paie en credits hors forfait, ultracode lance plusieurs agents sur le MEME tour,
+    et multiplier une depense que le forfait ne plafonne pas est le seul moyen connu de vider
+    un compte en une poignee de tours. Aucune tache n'exige ce couple : xhigh donne le meme
+    niveau d'effort au SDK, sans les agents en parallele.
+
+    Fonction pure, donc la regle se teste sans session ni reseau — et elle vit ici plutot que
+    dans chacune des trois portes (la voix, la page, le tableau de bord) qui la consultent.
+    """
+    if cle_de_modele_hors_forfait(cle_modele) and est_ultracode(niveau_effort):
+        return ("Fable en ultracode, non : Fable se paie en crédits hors forfait et "
+                "ultracode lance plusieurs agents sur le même tour. L'un ou l'autre.")
+    return ""
+
+
+def cle_de_modele_hors_forfait(nom: str) -> bool:
+    """Accepte la cle courte comme l'identifiant complet : les reglages generaux stockent
+    « claude-fable-5-1 », la voix dit « fable », et les deux doivent buter sur la meme regle."""
+    return cle_du_modele(str(nom or "")) in MODELES_HORS_FORFAIT
+
+# Le couple refuse peut arriver par l'environnement ou par les reglages generaux, sans que
+# personne l'ait choisi d'un seul geste — c'est meme le cas le plus probable : on pose Fable
+# un jour, ultracode un autre. On redescend alors l'effort a xhigh plutot que de refuser de
+# demarrer : une session qui ne s'ouvre pas coute plus cher qu'une session un cran moins
+# ambitieuse, et xhigh est exactement ce qu'ultracode envoie au SDK.
+if refus_du_couple(cle_du_modele(WORKER_MODEL), WORKER_EFFORT):
+    WORKER_EFFORT = "xhigh"
 SPEAKER_MODEL = os.environ.get("VOIX_SPEAKER_MODEL", "claude-haiku-4-5")
 WORKDIR = os.environ.get("VOIX_WORKDIR", os.getcwd())
 

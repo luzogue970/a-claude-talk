@@ -78,6 +78,8 @@ SUITES = [
      "ce qui passe sans demander, ce qui demande, et ce qui bascule", False),
     ("hey-claude", "test_assistant_conversation.py", "py",
      "« Hey Claude » : une conversation qui traîne facture la pièce entière", False),
+    ("credits", "test_credits.py", "py",
+     "le garde-fou des crédits : Fable en ultracode refusé, et l'alerte avant l'addition", False),
     ("complexite", "test_complexite.py", "py",
      "l'effort choisi d'après la demande, et la décision rendue visible", False),
     ("actions", "test_actions.py", "py", "ce que la page peut commander à l'agent", False),
