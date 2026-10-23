@@ -562,9 +562,18 @@ globalThis.Audio = function (src) {
 };
 // localStorage : ce qui survit a la page. Un simple dictionnaire suffit.
 globalThis.__stock = {};
+// Un quota plein, et c est le point : localStorage tient environ cinq megaoctets, et une
+// fois plein il LEVE a chaque ecriture suivante. Le talon ne savait que reussir, donc un
+// historique gele pour de bon n etait pas testable.
+globalThis.stockPlein = 0;   // 0 = illimite ; sinon, refuse au-dela de N caracteres
 globalThis.localStorage = {
   getItem: (k) => (k in globalThis.__stock ? globalThis.__stock[k] : null),
-  setItem: (k, v) => { globalThis.__stock[k] = String(v); },
+  setItem: (k, v) => {
+    if (globalThis.stockPlein && String(v).length > globalThis.stockPlein) {
+      const e = new Error("quota depasse"); e.name = "QuotaExceededError"; throw e;
+    }
+    globalThis.__stock[k] = String(v);
+  },
   removeItem: (k) => { delete globalThis.__stock[k]; },
   clear: () => { globalThis.__stock = {}; },
   key: (i) => Object.keys(globalThis.__stock)[i] ?? null,

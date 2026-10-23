@@ -42,9 +42,14 @@ log = logging.getLogger("voix.tableau")
 # Assez pour contenir un historique rejoue (jusqu'a 400 lignes) SANS chasser la session en
 # cours : une page ouverte en cours de route doit montrer les deux.
 MEMOIRE = 3000
-# De quoi tenir une question dictee comme une reponse longue : le champ de saisie est
-# borne a 4 000 caracteres, un debrief depasse rarement 8 000.
-ECHANGE_MAX = 12000
+# Le tampon de « relis » : la derniere question et la derniere reponse, telles quelles.
+#
+# Il valait 12 000 parce que le champ de saisie etait borne a 4 000 caracteres. Cette borne
+# a saute — on colle une trace d'erreur entiere, un fichier, une sortie de test — donc le
+# tampon devait sauter avec elle, sinon il devenait la nouvelle limite en silence. 400 000
+# caracteres : assez pour tout ce qu'on colle a la main, et toujours borne, parce que ce
+# tampon est garde en memoire pour chaque conversation ouverte.
+ECHANGE_MAX = 400_000
 
 # Les genres qui decrivent un ETAT plutot qu'un instant. Ils survivent a l'eviction du flux et
 # sont renvoyes a chaque nouvelle connexion, avant l'historique.
@@ -930,7 +935,11 @@ class Tableau:
             rejeu_fini.set()
 
     async def _flux(self, requete):
-        ws = web.WebSocketResponse(heartbeat=20)
+        # max_msg_size explicite : aiohttp borne les trames entrantes a 4 Mio par defaut, et
+        # une trame au-dessus ne rend pas une erreur — elle FERME la socket. Coller une
+        # sortie de test de quelques megaoctets aurait donc coupe la liaison au moment de
+        # l'envoi, sans un mot, et la page aurait seulement vu une reconnexion.
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=64 * 1024 * 1024)
         await ws.prepare(requete)
         file: asyncio.Queue = asyncio.Queue(maxsize=500)
         self.clients[ws] = file
@@ -2408,7 +2417,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          une tabulation qui traverse trois ronds avant d'atteindre la zone qu'on regarde. -->
     <textarea id="saisie" rows="1" class="une-ligne"
               placeholder="écrire au lieu de parler — touche /"
-              aria-label="message à envoyer" maxlength="4000"></textarea>
+              aria-label="message à envoyer"></textarea>
     <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
          regard est quand on dicte : le texte s'y ecrit, et la relecture s'y fait. Devoir
          remonter en haut pour couper l'ecoute avant de corriger un mot casse le geste. Les
@@ -4388,7 +4397,32 @@ function histoAjouter(texte) {
   if (histo.length > HISTO_MAX) histo.length = HISTO_MAX;
   histoPos = -1;
   histoBrouillon = "";
-  try { localStorage.setItem(HISTO_CLE, JSON.stringify(histo)); } catch (_) {}
+  rangerHistorique();
+}
+
+// Ecrire l'historique, et SURVIVRE a un quota plein.
+//
+// `localStorage` tient environ cinq megaoctets. Un seul gros message colle — une trace
+// d'erreur, un fichier — peut le remplir, et `setItem` leve alors a CHAQUE appel suivant :
+// l'historique gelait pour de bon, sans un mot, et remonter ses messages d'avant ne rendait
+// plus que du vieux. On raccourcit donc jusqu'a ce que ça rentre, en gardant les plus
+// recents — c'est eux qu'on remonte.
+function rangerHistorique() {
+  let essai = histo;
+  for (let i = 0; i < 12; i++) {
+    try {
+      localStorage.setItem(HISTO_CLE, JSON.stringify(essai));
+      histo = essai;
+      return true;
+    } catch (_) {
+      if (essai.length <= 1) break;
+      essai = essai.slice(0, Math.max(1, Math.floor(essai.length / 2)));
+    }
+  }
+  // Meme une seule entree ne rentre pas : on renonce a la garder plutot que de laisser
+  // l'historique dans un etat a moitie ecrit.
+  try { localStorage.removeItem(HISTO_CLE); } catch (_) {}
+  return false;
 }
 
 // Le curseur peut-il encore monter (ou descendre) dans le champ ? Si oui, la flèche lui

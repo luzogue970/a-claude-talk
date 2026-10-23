@@ -3834,6 +3834,43 @@ async function testerAudioToujours() {
   for (const k in echeances) clearTimeout(echeances[k]);
 }
 
+// ---- ce qu on peut ecrire : rien ne doit etre coupe en silence --------------------------
+async function testerLongMessage() {
+  titre('un message long part entier, et sans se faire couper en silence');
+
+  // Le champ portait `maxlength="4000"`. Un navigateur ne DIT rien quand il refuse les
+  // caracteres en trop : pas de message, pas de compteur, pas de son. On colle une trace
+  // d erreur, et ce qui part est ampute — sans que rien ne le signale.
+  const balise = /<textarea id="saisie"[\s\S]*?>/.exec(__html);
+  dire(!!balise && !/maxlength/.test(balise[0]),
+       'le champ de saisie ne porte aucune borne de longueur');
+
+  const long = 'Traceback (most recent call last):\n' + 'x'.repeat(250000);
+  envoyes.length = 0; jointes.length = 0;
+  sockets.length = 0; brancher(); ouvrirSock();
+  champ.value = long;
+  composer.onsubmit({ preventDefault() {} });
+  const parti = envoyes.find(o => o.cmd === 'texte');
+  dire(!!parti && parti.texte.length === long.length,
+       'et un message de 250 000 caracteres part ENTIER : '
+       + (parti ? parti.texte.length : 0) + ' / ' + long.length);
+  dire(champ.value === '', 'la barre est rendue propre derriere, comme pour un message court');
+
+  // L historique local, lui, a une vraie borne : cinq megaoctets, imposee par le navigateur.
+  // Un seul gros message collait le quota, et `setItem` levait ensuite a CHAQUE appel :
+  // l historique gelait pour de bon, en silence, et remonter ses messages d avant ne rendait
+  // plus que du vieux.
+  stockPlein = 4000;
+  histoAjouter(long);
+  histoAjouter('un message court, apres le gros');
+  const garde = JSON.parse(localStorage.getItem(HISTO_CLE) || '[]');
+  dire(garde[0] === 'un message court, apres le gros',
+       'un quota plein ne gele pas l historique : le message suivant s y inscrit quand meme');
+  dire(JSON.stringify(garde).length <= 4000,
+       'il a seulement ete raccourci, en gardant les plus recents (' + garde.length + ' entrees)');
+  stockPlein = 0;
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -3845,6 +3882,7 @@ async function testerAudioToujours() {
       .then(testerBandeauLecture)
       .then(testerQuestionnaire)
       .then(testerAudioToujours)
+      .then(testerLongMessage)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

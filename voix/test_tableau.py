@@ -1152,6 +1152,67 @@ async def le_serveur_ecoute_pendant_qu_il_rejoue():
         await t.arreter()
 
 
+async def un_long_message_arrive_entier():
+    """Coller une trace d'erreur entiere, et qu'elle parte TELLE QUELLE.
+
+    Le champ de saisie portait `maxlength="4000"` : au-dela, le navigateur refusait les
+    caracteres sans rien dire — pas de message, pas de compteur, le texte colle arrivait
+    simplement ampute. Trois bornes se cachaient derriere, et il fallait les lever toutes :
+    le champ, le tampon de « relis », et la taille des trames de la WebSocket.
+
+    Celle-ci est la pire des trois : aiohttp ne rend pas une erreur sur une trame trop
+    grosse, il FERME la socket. L'envoi aurait coupe la liaison, et la page n'aurait vu
+    qu'une reconnexion — rien qui dise que le message n'est jamais parti.
+    """
+    print("\n=== un long message arrive entier ===")
+    recus = []
+
+    async def commande(nom, donnees):
+        recus.append(donnees.get("texte"))
+
+    # 250 000 caracteres : une vraie sortie de test, ou un fichier colle. Au-dessus de
+    # l'ancienne borne du champ, au-dessus de l'ancien tampon de relecture.
+    long = "ligne de trace numero %d\n" % 0 + ("x" * 250_000)
+    t = Tableau(port=7899, ouvrir=False, on_commande=commande)
+    url = await t.demarrer()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url.replace("http", "ws") + "/flux") as ws:
+                await ws.receive()
+                await ws.send_str(json.dumps(
+                    {"cmd": "texte", "texte": long, "jeton": "j-long"}))
+                await asyncio.sleep(0.4)
+                # La preuve que la socket a SURVECU : un message court derriere, qui doit
+                # arriver. `ws.closed` ne suffit pas — le client ne bascule qu'a la trame de
+                # fermeture, donc il repond encore « ouverte » alors que rien ne passe plus.
+                # Sous except : une socket deja fermee fait LEVER l'envoi, et un traceback
+                # dit « rouge » sans dire quoi. On veut la phrase, pas la pile.
+                try:
+                    await ws.send_str(json.dumps(
+                        {"cmd": "texte", "texte": "et apres ?", "jeton": "j-apres"}))
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    recus.append(f"liaison perdue : {type(e).__name__}")
+        dire(recus[-1:] == ["et apres ?"],
+             "la liaison tient : une trame longue ne ferme pas la socket")
+        dire(recus[:1] == [long],
+             f"et le message arrive ENTIER, pas tronque ({len(recus[0]) if recus else 0} "
+             f"caracteres sur {len(long)})")
+    finally:
+        await t.arreter()
+
+    # Le tampon de « relis » ne doit pas devenir la nouvelle borne : relire une question
+    # coupee au milieu d'un mot est pire que de ne pas la relire.
+    t = Tableau(port=7899, ouvrir=False)
+    try:
+        t.publier("toi", texte=long)
+        garde = t.dernier_echange["question"]
+        dire(len(garde) == len(long),
+             f"le tampon de relecture garde la question entiere ({len(garde)})")
+    finally:
+        pass
+
+
 async def principal():
     logging.disable(logging.CRITICAL)  # le traceback attendu n'a pas a polluer la sortie
     await une_commande_qui_leve_ne_tue_pas_la_socket()
@@ -1171,6 +1232,7 @@ async def principal():
     tout_genre_affiche_a_un_filtre()
     le_rejeu_ne_garde_que_ce_qui_se_relit()
     await le_dernier_echange_survit_a_tout()
+    await un_long_message_arrive_entier()
     await le_serveur_ecoute_pendant_qu_il_rejoue()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
