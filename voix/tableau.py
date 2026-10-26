@@ -1126,6 +1126,11 @@ PAGE = r"""<!doctype html>
   /* « ça attend ta relecture » : la note contre la barre quand une dictée est retenue.
      L'ambre plutôt que le rouge — rien n'est cassé, quelque chose demande un geste. */
   --retenu:#d8a657;
+  /* « ta reponse manque ». Le meme ambre que --retenu, et pour la meme raison : rien n'est
+     casse, quelque chose attend un geste de ta part. Variable distincte parce que les deux
+     marquent des objets differents — la barre de saisie d'un cote, une reponse de Claude de
+     l'autre — et qu'on voudra peut-etre un jour en changer une sans l'autre. */
+  --attend:#e3b341;
 }
 *{box-sizing:border-box}
 
@@ -1332,6 +1337,15 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #choix-conv .meta{color:#5a636e;margin-top:3px}
 #choix-conv .ici{color:var(--accent)}
+/* « elle attend ta reponse ». Le bord ambre plutot qu'une pastille de plus : la pastille
+   d'etat dit deja si la conversation est vivante, et empiler deux ronds a lire ferait
+   deviner lequel veut dire quoi. `.active` garde la priorite sur le bord — savoir ou l'on
+   EST passe avant savoir ou l'on doit retourner. */
+#choix-conv .c.attend{border-left-color:var(--attend)}
+#choix-conv .c.attend.active{border-left-color:var(--accent)}
+#choix-conv .att{color:var(--attend);font-weight:650}
+/* Le compteur dans le bouton du haut : discret, mais il ne disparait pas. */
+#convs .att{color:var(--attend);font-weight:700}
 #choix-conv .titre{color:#5a636e;padding:8px 11px 4px;letter-spacing:.02em}
 /* L'action est distincte des entrées de liste : bordée en pointillé, sans pastille d'état.
    La mêler aux conversations existantes ferait cliquer dessus par erreur. */
@@ -1837,6 +1851,20 @@ body{overflow-x:hidden}
 .g-toi .badge{color:var(--toi)} .g-toi .corps{color:#cde3ff}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
 .g-voix .badge{color:var(--voix)} .g-voix .corps{color:#c6f0cf}
+/* Une reponse qui ATTEND une reponse. Le defaut : « c'est fait » et « il me faut ton avis
+   sur trois points » arrivaient dans la meme ligne, de la meme couleur, et se lisaient a
+   voix haute de la meme facon — donc il fallait ecouter la reponse ENTIERE a chaque fois
+   pour decouvrir a la fin si elle se terminait par une question.
+   Volontairement LEGER : un filet ambre a gauche et un fond a peine tiede. Une ligne qui
+   crie detournerait le regard de ce qu'elle dit, et c'est le texte qu'on vient lire. */
+.ev.attend{background:#1b1711;box-shadow:inset 2px 0 0 var(--attend)}
+.ev.attend:hover{background:#211c13}
+.ev.attend .corps{color:#f0e2c2}
+/* La pastille. Elle nomme la chose en toutes lettres — une teinte seule se devine, et
+   quelque chose qui se devine ne vaut pas mieux que rien sur un ecran de telephone. */
+.quest{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;
+  background:var(--attend);color:#161b22;font-size:10.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.03em;vertical-align:1px}
 .g-pensee .badge{color:var(--pensee)} .g-pensee .corps{color:#c3a6f5;font-size:13px}
 .g-texte .badge{color:#7d8590}
 /* La reponse ECRITE : c'est elle qu'on lit, donc elle a le contraste et la mise en forme
@@ -4968,7 +4996,15 @@ function recevoir(e, etat = false) {
     // que d'eteindre l'indicateur, sinon « parole » s'eteindrait en pleine phrase.
     // La fin de la reponse vide le tampon : la derniere phrase n'a pas toujours de point,
     // et sans ce coup de balai elle resterait a attendre une suite qui ne vient jamais.
-    if (e.genre === "parole_fin") { battre("voix"); outillerParole(e); return; }
+    if (e.genre === "parole_fin") {
+      battre("voix");
+      // AVANT d'outiller : outillerParole se retire tout de suite quand c'est le PC qui
+      // lit, et la marque d'attente, elle, doit se poser dans les deux cas — c'est meme
+      // sur le telephone, ou on ecoute sans lire, qu'elle sert le plus.
+      marquerAttente(e);
+      outillerParole(e);
+      return;
+    }
     if (e.genre === "lecture") {
       lectureEnCours = e.actif ? e.id : null;
       majBoutonsLecture();
@@ -5280,8 +5316,13 @@ function majConvs() {
   // Le nom de la conversation courante d'abord, le compte ensuite : ce qu'on veut savoir d'un
   // coup d'oeil est « où suis-je », pas « combien y en a-t-il ».
   const nom = c ? (c.titre || c.projet || "sans nom") : "nouvelle conversation";
+  // Combien d'autres conversations attendent une reponse. Dans le bouton, parce que c'est
+  // la seule information de la liste qui merite qu'on OUVRE la liste : le reste attend
+  // simplement qu'on y revienne, celles-ci attendent quelque chose de precis.
+  const dus = vraies.filter(x => (x.attend || "").trim() && x.session_id !== convCourante);
   btnConvs.innerHTML = `<span class="rond"></span><b>${ech(nom)}</b>`
-    + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "");
+    + (vraies.length > 1 ? ` <span>+${vraies.length - 1}</span>` : "")
+    + (dus.length ? ` <span class="att">${dus.length} ↩</span>` : "");
   // Le PROJET, et lui seul. Le sujet y a figure un temps — « claude-talk · bouton suivre » —
   // et l'usage a tranche : ce qu'on cherche en levant les yeux, c'est dans quelle
   // conversation on se trouve, pas de quoi elle parle. Ça, on le lit dans le flux, qui est
@@ -5292,10 +5333,11 @@ function majConvs() {
   ou.textContent = String(dossier).replace(/\/+$/, "").split("/").pop() || nom;
   ou.hidden = false;
   ou.title = nom;
-  btnConvs.title = c
+  btnConvs.title = (c
     ? `${c.titre ? c.titre + " · " : ""}${c.projet} — ${c.tours} tours`
       + `\nCliquer pour en reprendre une autre, ou en ouvrir une neuve.`
-    : "conversation neuve — cliquer pour en reprendre une, ou en ouvrir une autre";
+    : "conversation neuve — cliquer pour en reprendre une, ou en ouvrir une autre")
+    + (dus.length ? `\n${dus.length} autre(s) conversation(s) attendent ta réponse.` : "");
 }
 
 function dessinerConvs() {
@@ -5325,11 +5367,18 @@ function dessinerConvs() {
       : morte ? ["prise", "ouverte dans une autre fenêtre — on ne peut pas y être à deux"]
       : c.etat === "interrompue" ? ["coupee", "interrompue — l'agent s'est arrêté sans se fermer"]
       : ["close", "fermée proprement, prête à reprendre"];
-    html += `<button type="button" class="c${active ? " active" : ""}${morte ? " morte" : ""}" `
+    // Ce qu'on vient chercher dans cette liste n'est pas seulement « laquelle », c'est
+    // « laquelle est restee en plan ». Une conversation qui attend simplement un nouveau
+    // sujet peut dormir un mois sans dommage ; une conversation arretee sur une question
+    // est un travail suspendu, et rien ne le disait.
+    const attend = (c.attend || "").trim();
+    html += `<button type="button" class="c${active ? " active" : ""}${morte ? " morte" : ""}`
+      + `${attend ? " attend" : ""}" `
       + `data-sid="${ech(c.session_id)}"${morte ? " disabled" : ""} `
-      + `title="${ech(et[1])}">`
+      + `title="${ech(attend ? "elle attend ta réponse : " + attend : et[1])}">`
       + `<span class="haut"><span class="nom">`
       + `<span class="etat ${et[0]}"></span>${ech(c.titre || c.projet || "?")}`
+      + (attend ? ` <span class="att">· attend ta réponse</span>` : "")
       + (active ? ` <span class="ici">· en cours</span>` : "")
       + (morte ? ` <span class="ici">· ouverte ailleurs</span>` : "")
       + `</span><span class="quand">${ech(ilYA(c.maj))}</span></span>`
@@ -5518,6 +5567,35 @@ function outillerEcoute(ligne, e) {
   zone.appendChild(b);
   corps.appendChild(zone);
   ligne.zoneEcoute = zone;
+}
+
+// Dire qu'il FAUT repondre, sur la ligne elle-meme. Le besoin tient en une phrase : « est-ce
+// que j'ai besoin d'ecouter cette reponse en entier ? ». Sans marque, la reponse est la meme
+// a chaque fois — oui, jusqu'au bout, au cas ou elle se terminerait par une question.
+function marquerAttente(e) {
+  const ligne = lignesVoix.get(e.id);
+  if (!ligne) return;
+  const demande = (e.attend || "").trim();
+  ligne.classList.toggle("attend", !!demande);
+  const corps = ligne.querySelector(".corps");
+  if (!demande) {
+    if (ligne.pastilleAttente && ligne.pastilleAttente.remove) ligne.pastilleAttente.remove();
+    ligne.pastilleAttente = null;
+    return;
+  }
+  // La question en infobulle : pouvoir la relire sans rouvrir toute la reponse est la
+  // moitie de l'interet, et sur un telephone un appui long la montre.
+  ligne.title = demande;
+  // La pastille est retenue sur la LIGNE, pas cherchee dans le DOM : un rejeu de
+  // reconnexion repasse les memes evenements, et deux pastilles sur la meme ligne poussent
+  // le texte sur une ligne de plus — le genre de doublon qu on ne voit que sur telephone.
+  if (ligne.pastilleAttente) return;
+  const p = document.createElement("span");
+  p.className = "quest";
+  p.textContent = "ta réponse";
+  p.title = demande;
+  (corps || ligne).appendChild(p);
+  ligne.pastilleAttente = p;
 }
 
 function outillerParole(e) {

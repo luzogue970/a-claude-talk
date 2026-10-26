@@ -3835,6 +3835,90 @@ async function testerAudioToujours() {
 }
 
 // ---- ce qu on peut ecrire : rien ne doit etre coupe en silence --------------------------
+// ---- « est-ce que je dois ecouter jusqu au bout ? » --------------------------------------
+// Le besoin tient en une phrase : il y a des reponses qui disent « c est fait », et des
+// reponses qui demandent quelque chose — et mon prochain message doit alors etre une
+// REPONSE. Rien ne les distinguait : meme ligne, meme couleur, meme voix. Donc il fallait
+// tout ecouter, a chaque fois, pour decouvrir a la fin laquelle des deux c etait.
+async function testerAttenteReponse() {
+  titre('une reponse qui attend MA reponse se distingue d un compte rendu');
+
+  sockets.length = 0; brancher(); ouvrirSock();
+
+  emettre({ genre: 'voix', id: 'q0', texte: 'C est fait, 2076 vertes.' });
+  const faite = dernier;
+  recevoir({ genre: 'parole_fin', id: 'q0', mots: 5, attend: '' });
+  dire(!faite.classList.contains('attend'),
+       'un compte rendu garde l allure de toutes les autres lignes');
+  dire(faite.querySelectorAll('.quest').length === 0,
+       'et ne porte aucune pastille : rien ne m est demande');
+
+  emettre({ genre: 'voix', id: 'q1', texte: 'J ai deux approches possibles.' });
+  const demande = dernier;
+  recevoir({ genre: 'parole_fin', id: 'q1', mots: 6,
+             attend: 'Laquelle tu preferes ?' });
+  dire(demande.classList.contains('attend'),
+       'une reponse qui pose une question change de couleur');
+  const pastille = demande.querySelectorAll('.quest')[0];
+  dire(!!pastille && /ta r/.test(pastille.textContent),
+       'et le dit en toutes lettres : une teinte seule se devine, et ce qui se devine ne '
+       + 'vaut pas mieux que rien');
+  dire(demande.title === 'Laquelle tu preferes ?',
+       'la question elle-meme est relisible sans rouvrir toute la reponse');
+
+  // Le rejeu d une reconnexion repasse les memes evenements. Deux pastilles sur la meme
+  // ligne, c est le genre de doublon qu on ne remarque que sur un telephone, quand elles
+  // poussent le texte sur une ligne de plus.
+  recevoir({ genre: 'parole_fin', id: 'q1', mots: 6, attend: 'Laquelle tu preferes ?' });
+  dire(demande.querySelectorAll('.quest').length === 1,
+       'un rejeu ne pose pas une deuxieme pastille sur la meme ligne');
+
+  // ---- et dans la LISTE des conversations ------------------------------------------------
+  // « Laquelle reprendre » n est pas la meme question que « laquelle est restee en plan ».
+  // Une conversation qui attend un nouveau sujet peut dormir un mois ; une conversation
+  // arretee sur une question est un travail suspendu, et rien ne le disait.
+  emettre({ genre: 'conversations', dossier: '/a/projet', courante: 'sid-ici', liste: [
+    { session_id: 'sid-ici', projet: 'claude-talk', tours: 12, reprises: 1, ici: true,
+      maj: new Date(Date.now() - 60000).toISOString(), etat: 'en cours',
+      apercu: 'on continue', attend: '' },
+    { session_id: 'sid-en-plan', projet: 'insnap', tours: 30, reprises: 2, ici: true,
+      maj: new Date(Date.now() - 3600000).toISOString(), etat: 'fermée',
+      apercu: 'deux options', attend: 'Tu preferes laquelle ?' },
+    { session_id: 'sid-calme', projet: 'piano', tours: 4, reprises: 1, ici: true,
+      maj: new Date(Date.now() - 7200000).toISOString(), etat: 'fermée',
+      apercu: 'c est fait', attend: '' },
+  ]});
+  dessinerConvs();
+  const liste = document.getElementById('choix-conv');
+  dire(/attend ta r/.test(liste.innerHTML),
+       'la conversation laissee sur une question le dit dans la liste');
+  dire((liste.innerHTML.match(/class="att"/g) || []).length === 1,
+       'et elle seule : les deux autres n attendent qu un nouveau sujet');
+  dire(/Tu preferes laquelle \?/.test(liste.innerHTML),
+       'son infobulle porte la question, pour choisir sans avoir a la rouvrir');
+  dire(/class="c attend"|class="c  ?attend"/.test(liste.innerHTML)
+       || /class="c[^"]*attend[^"]*"/.test(liste.innerHTML),
+       'la ligne porte la marque qui la colore');
+
+  // Le compteur dans le bouton : savoir qu une autre conversation attend SANS ouvrir le
+  // panneau. C est la seule information de la liste qui merite qu on l ouvre.
+  dire(/1 ↩/.test(btnConvs.innerHTML),
+       'le bouton compte les autres conversations qui attendent : "'
+       + btnConvs.textContent + '"');
+  dire(/attendent ta réponse|attendent ta reponse/.test(btnConvs.title),
+       'et son infobulle le dit en toutes lettres');
+
+  // La conversation COURANTE ne se compte pas elle-meme : on y est, la ligne du flux le dit
+  // deja, et un compteur a 1 en permanence ne voudrait plus rien dire.
+  emettre({ genre: 'conversations', dossier: '/a/projet', courante: 'sid-en-plan', liste: [
+    { session_id: 'sid-en-plan', projet: 'insnap', tours: 30, reprises: 2, ici: true,
+      maj: new Date().toISOString(), etat: 'en cours', apercu: 'deux options',
+      attend: 'Tu preferes laquelle ?' },
+  ]});
+  dire(!/↩/.test(btnConvs.innerHTML),
+       'celle ou je suis deja ne se compte pas dans le bouton');
+}
+
 async function testerLongMessage() {
   titre('un message long part entier, et sans se faire couper en silence');
 
@@ -3883,6 +3967,7 @@ async function testerLongMessage() {
       .then(testerQuestionnaire)
       .then(testerAudioToujours)
       .then(testerLongMessage)
+      .then(testerAttenteReponse)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

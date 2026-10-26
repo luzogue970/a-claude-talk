@@ -63,6 +63,11 @@ class Conversation:
         # toutes pareil et il fallait lire la derniere phrase de chacune pour deviner laquelle
         # etait laquelle.
         self.titre: str | None = None
+        # La question laissee en plan par la derniere reponse de Claude, s'il y en a une.
+        # Ecrite dans l'index pour que la LISTE des conversations puisse distinguer celle
+        # qui attend simplement un nouveau sujet de celle dont on a interrompu le fil sur
+        # une question — la seule qu'on perde vraiment en l'oubliant.
+        self.attend: str | None = None
         nom = f"{self.debut:%Y-%m-%d_%H%M}_{projet}".replace("/", "-")
         # Le nom est a la MINUTE, et deux lancements du meme projet dans la meme minute
         # tombaient donc sur le meme fichier : le second ecrivait par-dessus le premier, et
@@ -127,12 +132,21 @@ class Conversation:
         self.fichier.write_text(contenu, encoding="utf-8")
         self.indexer()
 
-    def tour_utilisateur(self, texte: str):
+    def tour_utilisateur(self, texte: str, repond: bool = False):
         self.tours += 1
         self._ajouter(f"\n## {datetime.now():%H:%M} — toi\n\n{texte.strip()}\n")
+        # Repondre solde l'attente, et l'index doit l'apprendre TOUT DE SUITE : le tour qui
+        # suit peut durer vingt minutes, pendant lesquelles la liste afficherait encore
+        # « attend ta réponse » pour une question a laquelle on vient de repondre. On
+        # n'ecrit qu'en cas de bascule : indexer chaque tour utilisateur doublerait l'index
+        # pour ne rien dire de neuf.
+        if repond and self.attend:
+            self.attend = None
+            self.indexer()
 
     def tour_claude(self, parle: str, outils: list[str] | None = None,
-                    jetons: int | None = None, duree: float | None = None):
+                    jetons: int | None = None, duree: float | None = None,
+                    attend: str | None = None):
         detail = []
         if outils:
             detail.append(f"{len(outils)} action(s) : " + ", ".join(outils))
@@ -144,6 +158,7 @@ class Conversation:
         if detail:
             entete += f"*{' · '.join(detail)}*\n\n"
         self._ajouter(entete + (parle.strip() or "_(rien dit)_") + "\n")
+        self.attend = attend or None
         self.indexer()
 
     def ordre_local(self, quoi: str):
@@ -173,6 +188,7 @@ class Conversation:
             "pid": self.pid,
             "tours": self.tours,
             "modele": self.modele,
+            "attend": self.attend,
         }
         with INDEX.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(ligne, ensure_ascii=False) + "\n")
@@ -325,6 +341,10 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
                 # La cle manquait donc sur toute conversation d'un seul lancement.
                 "fichier": lc["fichier"],
                 "pid": lc.get("pid"),
+                # La question laissee en plan. C'est l'etat le plus RECENT qui fait foi :
+                # une conversation reprise et poursuivie n'attend plus la question de sa
+                # premiere vie.
+                "attend": lc.get("attend"),
                 "ici": lc.get("ici"),
                 "sous": lc.get("sous"),
             }
@@ -341,6 +361,7 @@ def conversations(ici: str | None = None, sous_arbre: bool = True,
             g["modele"] = lc.get("modele")
             g["fichier"] = lc["fichier"]     # ou lire la suite
             g["pid"] = lc.get("pid")
+            g["attend"] = lc.get("attend")
         if lc.get("chemin") and not g["chemin"]:
             g["chemin"] = lc["chemin"]
         # Le titre vient du premier lancement qui en a un : une conversation reprise garde le

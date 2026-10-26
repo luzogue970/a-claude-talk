@@ -49,6 +49,22 @@ function elem(nom) {
     // reguliere ecrite ici perd ses \\w et ses \\[ en silence — c est deja arrive.
     querySelectorAll(sel) {
       if (sel === "details[open]") return this.children.filter(c => c.open);
+      // Un selecteur de classe, cherche dans les enfants REELLEMENT ajoutes. Sans lui,
+      // querySelector inventait un element pour toute classe absente : une page qui ne
+      // pose aucune pastille rendait donc le meme resultat qu une page qui en pose une,
+      // et le test ne pouvait pas faire la difference.
+      if (sel.startsWith(".") && sel.indexOf(" ") < 0 && sel.indexOf("[") < 0) {
+        const vise = sel.slice(1);
+        const trouves = [];
+        const descendre = n => {
+          for (const c of n.children || []) {
+            if (String(c.className || "").split(" ").indexOf(vise) >= 0) trouves.push(c);
+            descendre(c);
+          }
+        };
+        descendre(this);
+        return trouves;
+      }
       if (sel.startsWith("[") && sel.endsWith("]") && this.innerHTML) {
         // Les deux formes que la page utilise reellement : [data-sid] pour tout rebrancher,
         // et [data-sid="x"] pour en viser un. Elles doivent rendre les MEMES objets, sinon
@@ -136,7 +152,16 @@ function elem(nom) {
       // que sur la page.
       const trouves = this.querySelectorAll(sel);
       if (trouves.length) return trouves[0];
-      return this._q[sel] || (this._q[sel] = elem(nom + sel));
+      // L element invente devient un vrai ENFANT. Sans ça, une page qui cherche le corps
+      // d une ligne puis y ajoute une pastille la posait dans un noeud flottant, et la
+      // meme ligne interrogee ensuite ne la retrouvait jamais : le talon cassait la
+      // chaine parent/enfant que la page tient pour acquise.
+      if (!this._q[sel]) {
+        this._q[sel] = elem(nom + sel);
+        this._q[sel].className = sel.startsWith(".") ? sel.slice(1) : "";
+        this.children.push(this._q[sel]);
+      }
+      return this._q[sel];
     },
     // Dans un vrai DOM, LIRE textContent concatene le texte des descendants et l ECRIRE
     // remplace tous les enfants. Le talon le gardait comme une chaine ordinaire : vider un

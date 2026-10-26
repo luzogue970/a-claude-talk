@@ -58,6 +58,7 @@ import stt_local
 import complexite
 import config
 import journal
+import question_en_plan
 
 from intentions import modele_demande, reconnaitre
 from porte_parole import PorteParole
@@ -171,6 +172,8 @@ class Voix(Agent):
         # « retenu » alors qu'on n'avait rien retenu du tout.
         self._dictee_ouverte: bool = False
         self._dernier_tour_utilisateur: str | None = None
+        # La question laissee en plan par la derniere reponse, s'il y en a une.
+        self._attend_reponse: str | None = None
         # De quoi republier la consommation quand elle change, sans que Voix connaisse le
         # tableau : elle sait juste qu'il y a quelqu'un a prevenir.
         self._sur_conso = None
@@ -613,7 +616,11 @@ class Voix(Agent):
         if self.quota and not deja_occupe:
             self._quota_depart = self.quota.instantane()
         if self.conv:
-            self.conv.tour_utilisateur(texte)
+            # Repondre SOLDE l'attente. Sans ça la liste des conversations continuerait
+            # d'afficher « attend ta réponse » pendant tout le tour qui suit la reponse —
+            # une indication fausse, donc pire qu'aucune.
+            self.conv.tour_utilisateur(texte, repond=bool(self._attend_reponse))
+            self._attend_reponse = None
             # Garde pour le titre : c'est la premiere DEMANDE qui dit le sujet, pas la reponse.
             self._dernier_tour_utilisateur = texte
         if not deja_occupe:
@@ -872,6 +879,14 @@ class Voix(Agent):
             yield phrase
         # Kept so "répète" can say it again without paying for a second rewrite.
         self._dernier_debrief = "".join(morceaux).strip() or None
+        # Est-ce que mon prochain message doit etre une REPONSE ? C'est la seule chose qu'on
+        # veut savoir avant de decider d'ecouter ou non, et jusqu'ici rien ne la disait : un
+        # compte rendu et une demande arrivaient dans la meme ligne, de la meme couleur. On
+        # regarde l'ecrit ET le parle, parce que le bilan parle est une reecriture et qu'il
+        # lui arrive de laisser tomber la question finale.
+        ecrit = (getattr(journal_, "textes", None) or [""])[-1]
+        demande = question_en_plan.attend_une_reponse(ecrit, self._dernier_debrief)
+        self._attend_reponse = demande
         if self._dernier_debrief:
             self._paroles[cle] = self._dernier_debrief
             # Bornée : garder tout l'historique parlé d'une session de deux jours n'aurait
@@ -880,7 +895,8 @@ class Voix(Agent):
                 for vieux in list(self._paroles)[:-40]:
                     self._paroles.pop(vieux, None)
             # La ligne du flux reçoit ses boutons quand le texte complet existe.
-            self._voir("parole_fin", id=cle, mots=len(self._dernier_debrief.split()))
+            self._voir("parole_fin", id=cle, mots=len(self._dernier_debrief.split()),
+                       attend=demande or "")
         if self.conv:
             # Le titre, apres le PREMIER echange et une seule fois. En tache de fond : un
             # appel de modele, meme sur Haiku, n'a pas a retarder la parole qui suit.
@@ -888,7 +904,8 @@ class Voix(Agent):
                 asyncio.create_task(self._titrer(self._dernier_tour_utilisateur or ""))
             self.conv.tour_claude(self._dernier_debrief or "", outils=journal_lignes(journal_),
                                   jetons=getattr(journal_, "jetons", None),
-                                  duree=getattr(journal_, "duree_s", None))
+                                  duree=getattr(journal_, "duree_s", None),
+                                  attend=demande)
 
     async def _ajuster_effort(self, texte: str) -> None:
         """Mettre l'effort au niveau que CETTE demande merite, avant de la transmettre.
@@ -2048,6 +2065,10 @@ async def entrypoint(ctx: JobContext):
                     "modele": c.get("modele"),
                     "ici": bool(c.get("ici")),
                     "sous": c.get("sous"),
+                    # Celle-ci attend-elle une REPONSE, ou simplement un nouveau sujet ?
+                    # Entre quatre conversations ouvertes, c'est la seule distinction qui
+                    # dise laquelle reprendre en premier.
+                    "attend": c.get("attend") or "",
                     "apercu": journal.dernier_echange(c.get("fichier") or ""),
                 })
             # `session_id` n'existe qu'une fois le SDK revenu avec un premier message, et

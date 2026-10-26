@@ -89,6 +89,8 @@ SUITES = [
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
     ("audio", "test_audio.py", "py",
      "un lancement de son qui n'échoue pas : texte, plages d'octets, pannes d'Azure", False),
+    ("question-en-plan", "test_question_en_plan.py", "py",
+     "distinguer une réponse qui attend MA réponse d'un simple compte rendu", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),
     ("micro-retour", "test_micro_retour.py", "py",
      "le micro après un aller-retour : la page raconte, l'agent écrit, rien ne devient un ordre", False),

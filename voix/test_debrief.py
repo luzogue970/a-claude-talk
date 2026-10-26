@@ -45,7 +45,11 @@ class FauxPorteParole:
 
 
 class FauxJournal:
-    def __init__(self, lignes=("modifie voix/a.py",), arret=None, jetons=1200, duree=4.2):
+    def __init__(self, lignes=("modifie voix/a.py",), arret=None, jetons=1200, duree=4.2,
+                 textes=()):
+        # Ce que Claude a ECRIT pendant le tour. C'est la source de verite pour savoir si la
+        # reponse se termine sur une question : le bilan parle, lui, est une reecriture.
+        self.textes = list(textes)
         self._lignes = list(lignes)
         self._arret = arret
         self.jetons = jetons
@@ -65,9 +69,9 @@ class FausseConv:
         self.session_id = "sess-1"
         self.tours_claude = []
 
-    def tour_claude(self, texte, outils=None, jetons=None, duree=None):
+    def tour_claude(self, texte, outils=None, jetons=None, duree=None, attend=None):
         self.tours_claude.append({"texte": texte, "outils": outils,
-                                  "jetons": jetons, "duree": duree})
+                                  "jetons": jetons, "duree": duree, "attend": attend})
 
     def note_titre(self, t):
         self.titre = t
@@ -123,6 +127,45 @@ def chaque_reponse_porte_son_identifiant():
     dire([f["id"] for f in fins] == ["p1", "p2"],
          "la page reçoit la fin de chaque reponse, avec sa cle : c'est elle qui porte les boutons")
     dire(fins[0]["mots"] == 1, "et le nombre de mots, pour afficher la longueur sans la relire")
+
+
+def une_reponse_qui_pose_une_question_le_dit():
+    """Le contrat entre le detecteur, la ligne du flux et la liste des conversations.
+
+    Sans lui, on peut avoir un detecteur parfait et une page qui n'affiche rien : le
+    drapeau ne traverse pas. C'est exactement ce qu'un test unitaire ne peut pas voir.
+    """
+    print("\n=== « est-ce que je dois ecouter jusqu'au bout ? » ===")
+    conv = FausseConv()
+    v = neuve(conv)
+    debriefer(v, ["c'est fait, tout est vert."], FauxJournal(textes=["C'est fait."]))
+    fin = [d for g, d in v.tableau.publies if g == "parole_fin"][-1]
+    dire(not fin.get("attend"), "un compte rendu ne reclame rien a la page")
+    dire(not conv.tours_claude[-1]["attend"],
+         "et la conversation ne se signale pas comme restee en plan")
+
+    conv = FausseConv()
+    v = neuve(conv)
+    debriefer(v, ["j'ai deux approches. tu preferes laquelle ?"],
+              FauxJournal(textes=["J'ai deux approches.\n\nTu préfères laquelle ?"]))
+    fin = [d for g, d in v.tableau.publies if g == "parole_fin"][-1]
+    dire(bool(fin.get("attend")),
+         f"une reponse qui pose une question le dit a la page : {fin.get('attend')!r}")
+    dire(bool(conv.tours_claude[-1]["attend"]),
+         "et la conversation le retient, pour que la LISTE puisse la distinguer")
+
+    # Le bilan parle est une reecriture : il lui arrive de laisser tomber la question.
+    # Prendre le parle seul raterait alors une demande bel et bien posee par ecrit.
+    conv = FausseConv()
+    v = neuve(conv)
+    debriefer(v, ["c'est pousse."],
+              FauxJournal(textes=["C'est poussé. Tu veux que je monte la version ?"]))
+    fin = [d for g, d in v.tableau.publies if g == "parole_fin"][-1]
+    dire(bool(fin.get("attend")),
+         "une question presente a l'ecrit mais perdue a l'oral compte quand meme")
+
+    # Repondre SOLDE l'attente, et tout de suite : le tour suivant peut durer vingt minutes.
+    dire(v._attend_reponse is not None, "l'agent retient la question tant qu'on n'a pas repondu")
 
 
 def l_historique_parle_est_borne():
@@ -237,6 +280,7 @@ def le_titre_arrive_une_fois_et_en_fond():
 def main():
     ce_qui_se_lit_est_ce_qui_se_dit()
     chaque_reponse_porte_son_identifiant()
+    une_reponse_qui_pose_une_question_le_dit()
     l_historique_parle_est_borne()
     la_raison_d_un_arret_est_dite_en_dur()
     un_tour_vide_ne_laisse_pas_de_trace_fantome()
