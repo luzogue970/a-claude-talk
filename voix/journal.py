@@ -18,6 +18,7 @@ en cours, pas la conversation.
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -42,11 +43,13 @@ class Conversation:
                  chemin: str | None = None):
         RACINE.mkdir(parents=True, exist_ok=True)
         self.debut = datetime.now()
-        self.projet = projet
         # Le chemin complet, pas seulement le nom du dossier : deux projets peuvent
         # s'appeler « front », et c'est le chemin qui permet de remonter en premier les
         # conversations du dossier depuis lequel on regarde.
         self.chemin = chemin or os.getcwd()
+        # Le nom du projet, pas celui du dossier — ecrit ici pour que le transcript qu'on
+        # relit porte lui aussi le bon nom. Voir nom_du_projet.
+        self.projet = nom_du_projet(self.chemin, projet)
         # Le PID est la seule autorite fiable sur « est-elle encore ouverte ». Un marqueur
         # de fermeture ne s'ecrit que si le processus meurt proprement — et les deux jours
         # de panne silencieuse etaient precisement deux processus zombies. Un PID, on peut
@@ -227,6 +230,50 @@ def etat(d: dict) -> str:
     return "fermée" if d.get("fin") else "interrompue"
 
 
+# --- comment s'appelle un projet -----------------------------------------------------------
+# Le defaut qu'on corrige : le projet s'appelait d'apres son DOSSIER. « insnap » a ete
+# renomme Halo il y a longtemps — le depot GitHub s'appelle Halo, le CLAUDE.md s'appelle
+# Halo, l'application s'appelle Halo — mais le dossier sur le disque est reste « insnap ».
+# La liste des conversations continuait donc d'annoncer un projet qui n'existe plus sous ce
+# nom, et renommer le dossier casserait les chemins de tout ce qui pointe dessus.
+#
+# L'autorite choisie est le TITRE du CLAUDE.md du projet. C'est lui qui est ecrit a la main,
+# c'est lui qu'on relit, et c'est donc lui qui dit le nom sous lequel on connait le projet.
+# Le depot Git a ete essaye et jete : « socle », « piano-training », « flashcard-master »,
+# « a-claude-talk » — aucun de ces noms n'est celui sous lequel je pense a ces projets.
+_NOMS: dict[str, str] = {}
+# Un nom, pas une phrase. Au-dela, c'est que la premiere ligne n'etait pas un titre de
+# projet, et le nom du dossier vaut mieux qu'un bout de paragraphe dans une liste.
+NOM_MAX = 40
+
+
+def nom_du_projet(chemin: str | None, defaut: str = "") -> str:
+    """Le nom sous lequel le projet se presente, a defaut celui de son dossier."""
+    if not chemin:
+        return defaut
+    if chemin in _NOMS:
+        return _NOMS[chemin] or defaut
+    trouve = ""
+    try:
+        texte = (Path(chemin) / "CLAUDE.md").read_text(encoding="utf-8")[:400]
+        for ligne in texte.splitlines():
+            if not ligne.strip():
+                continue
+            # Seulement la PREMIERE ligne non vide : un « # » rencontre plus bas est un
+            # titre de section, pas le nom du projet.
+            if ligne.startswith("# "):
+                # « Halo — conventions de travail » : ce qui suit le tiret decrit le
+                # fichier, pas le projet.
+                nom = re.split(r"\s+[—–-]\s+|\s*:\s+", ligne[2:].strip())[0].strip()
+                if nom and len(nom) <= NOM_MAX:
+                    trouve = nom
+            break
+    except (OSError, ValueError):
+        pass
+    _NOMS[chemin] = trouve
+    return trouve or defaut
+
+
 def historique(limite: int = 20, ici: str | None = None,
                sous_arbre: bool = False) -> list[dict]:
     """Les conversations, dedupliquees par fichier, celles d'ICI d'abord.
@@ -262,6 +309,10 @@ def historique(limite: int = 20, ici: str | None = None,
     lignes = list(par_fichier.values())
     for d in lignes:
         d["etat"] = etat(d)
+        # Resolu ICI plutot qu'a l'ecriture : l'index s'ajoute sans jamais se reecrire, et
+        # un projet renomme doit retrouver son nom dans TOUTE son histoire, pas seulement
+        # dans les conversations ouvertes apres le changement.
+        d["projet"] = nom_du_projet(d.get("chemin"), d.get("projet") or "")
         chemin = d.get("chemin")
         if chemin:
             reel = os.path.realpath(chemin)

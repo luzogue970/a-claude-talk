@@ -35,6 +35,52 @@ def dire(bon: bool, texte: str):
     print(f"  {'OK  ' if bon else 'ECHEC'} {texte}")
 
 
+def un_projet_renomme_garde_son_vrai_nom(boite):
+    """« La conversation Halo continue de s'appeler insnap. »
+
+    Le dossier sur le disque s'appelle encore comme la premiere version du projet, et le
+    renommer casserait tous les chemins qui pointent dessus. Ce qui doit s'adapter, c'est
+    la liste — pas le disque.
+    """
+    print("\n--- un projet renomme s'affiche sous son nom, pas sous celui de son dossier")
+    import journal
+
+    racine = Path(tempfile.mkdtemp(prefix="projets-"))
+    vieux = racine / "insnap"          # le dossier d'avant, jamais renomme
+    vieux.mkdir()
+    (vieux / "CLAUDE.md").write_text("# Halo — conventions de travail\n\nMessagerie.\n",
+                                     encoding="utf-8")
+    nu = racine / "sans-consignes"     # pas de CLAUDE.md du tout
+    nu.mkdir()
+    redirige = racine / "echec"        # un CLAUDE.md qui ne commence pas par un titre
+    redirige.mkdir()
+    (redirige / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8")
+    bavard = racine / "bavard"         # une premiere ligne qui est un paragraphe
+    bavard.mkdir()
+    (bavard / "CLAUDE.md").write_text("# " + "x" * 80 + "\n", encoding="utf-8")
+
+    dire(journal.nom_du_projet(str(vieux), "insnap") == "Halo",
+         "le projet se nomme d'apres ses propres consignes, pas d'apres son dossier")
+    dire(journal.nom_du_projet(str(nu), "sans-consignes") == "sans-consignes",
+         "sans consignes, le nom du dossier reste la meilleure reponse disponible")
+    dire(journal.nom_du_projet(str(redirige), "echec") == "echec",
+         "un CLAUDE.md qui ne commence pas par un titre ne renomme rien")
+    dire(journal.nom_du_projet(str(bavard), "bavard") == "bavard",
+         "une premiere ligne trop longue est un paragraphe, pas un nom")
+
+    # Et le contrat jusqu'a la LISTE : c'est la qu'on lit le nom, et c'est la qu'il etait faux.
+    c = journal.Conversation("insnap", "claude-opus-5", "high", chemin=str(vieux))
+    c.note_session("sess-halo")
+    c.tour_utilisateur("ou en est l'inscription ?")
+    c.tour_claude("elle passe.")
+    vues = [d for d in journal.conversations(str(racine)) if d["session_id"] == "sess-halo"]
+    dire(len(vues) == 1 and vues[0]["projet"] == "Halo",
+         f"la liste des conversations l'appelle Halo : {vues[0]['projet']!r}")
+    dire("Halo" in c.fichier.read_text(encoding="utf-8"),
+         "et le transcript qu'on relit porte le meme nom")
+    shutil.rmtree(racine, ignore_errors=True)
+
+
 def principal():
     boite = Path(tempfile.mkdtemp(prefix="journal-"))
     os.environ["VOIX_JOURNAL"] = str(boite)
@@ -227,6 +273,8 @@ def principal():
     c3 = journal.Conversation("sans-titre", "m", "e", chemin="/a/projet/s")
     c3.note_titre("   ")
     dire(c3.titre is None, "un titre vide est refuse")
+
+    un_projet_renomme_garde_son_vrai_nom(boite)
 
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
