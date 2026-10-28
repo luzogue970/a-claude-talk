@@ -215,6 +215,41 @@ class Journal:
     stop: str | None = None         # stop_reason de la derniere reponse : max_tokens, refusal…
     erreurs: list[str] = field(default_factory=list)
     api_statut: int | None = None   # le code HTTP quand c'est l'API qui a coupe
+    # Ce qui tournait ENCORE au moment ou le tour s'est termine. Un tour qui rend la parole
+    # en laissant une tache de fond derriere lui n'est pas une reponse : c'est un accuse de
+    # reception — « c'est lance, je te previens » — et le harnais rappellera Claude des que
+    # la tache finira. Mesure sur les 806 tours deja tenus : 105 d'entre eux, 13 %, etaient
+    # ce second tour arrive sans que j'aie rien demande entre les deux. Donc deux ecoutes
+    # pour une seule demande, et la premiere ne disait rien.
+    fond_en_cours: list[str] = field(default_factory=list)
+
+    def enchainer(self, *suivants: "Journal") -> "Journal":
+        """Un seul journal pour la suite de tours qui n'en fait qu'un pour celui qui ecoute.
+
+        La question gardee est celle du DEBUT : c'est la mienne, les tours suivants n'en ont
+        pas. Ce qui s'est passe s'additionne. L'etat final, lui, est celui du DERNIER tour —
+        c'est le seul qui dise comment l'ensemble s'est termine.
+        """
+        tous = [self, *suivants]
+        dernier = tous[-1]
+        return Journal(
+            question=self.question,
+            outils=[o for j in tous for o in j.outils],
+            textes=[t for j in tous for t in j.textes],
+            refus=[r for j in tous for r in j.refus],
+            cout_usd=sum(j.cout_usd or 0 for j in tous) or None,
+            duree_s=round(sum(j.duree_s or 0 for j in tous), 1) or None,
+            jetons=dernier.jetons,
+            contexte=dernier.contexte,
+            jetons_sortie=sum(j.jetons_sortie for j in tous),
+            echanges=sum(j.echanges for j in tous),
+            fin=dernier.fin,
+            tours=sum(j.tours or 0 for j in tous) or None,
+            stop=dernier.stop,
+            erreurs=[e for j in tous for e in j.erreurs],
+            api_statut=dernier.api_statut,
+            fond_en_cours=list(dernier.fond_en_cours),
+        )
 
     def pourquoi_arrete(self) -> str | None:
         """Une phrase disant pourquoi le tour s'est arrete, ou None s'il a fini normalement.
@@ -343,6 +378,10 @@ class Worker:
         # tout l'interet, la notification de fin arrive apres.
         self._fond: dict[str, dict] = {}
         self._attente_fond: dict[str, tuple[str, str]] = {}
+        # Les taches de fond ouvertes par le tour en cours. Ce que le tour a LANCE n'est pas
+        # ce qui tourne : si je demande « ou on en est ? » pendant une compilation, le tour
+        # n'a rien lance, et sa reponse doit s'entendre tout de suite.
+        self._fond_du_tour: set[str] = set()
         # Un lecteur par workflow : il relit le journal de l'orchestration pour dire
         # quels agents tournent. S'arrete avec la tache, jamais avant.
         self._suivis: dict[str, asyncio.Task] = {}
@@ -400,6 +439,7 @@ class Worker:
         if cle in self._fond:
             return
         self._fond[cle] = {"nom": nom, "cible": cible, "depuis": time.time()}
+        self._fond_du_tour.add(cle)
         if journal:
             try:
                 self._suivis[cle] = asyncio.get_running_loop().create_task(
@@ -507,6 +547,20 @@ class Worker:
         if len(restants) != len(self._agents):
             self._agents = restants
             self._agents_publier()
+
+    def _fond_a_suivre(self) -> list[str]:
+        """Ce qui fait de ce tour un « je te previens » plutot qu'une reponse.
+
+        Deux mesures differentes selon d'ou vient le tour. S'il vient de MOI, seul ce qu'il a
+        LANCE lui-meme compte : une question posee pendant une compilation merite sa reponse
+        tout de suite, et la compilation n'y est pour rien. S'il vient d'une tache qui s'est
+        terminee, on est deja dans la chaine que j'ecoute en une fois, et tout ce qui tourne
+        encore la prolonge.
+        """
+        suivies = (set(self._fond) if self.journal.question == RELANCE_DE_FOND
+                   else self._fond_du_tour & set(self._fond))
+        return [f"{t['nom']} {t['cible']}".strip()
+                for c, t in self._fond.items() if c in suivies]
 
     def _fond_resultat(self, tool_id: str, texte: str) -> str:
         """Le retour immediat d'un outil lance en fond : il porte l'identifiant de la tache.
@@ -718,6 +772,17 @@ class Worker:
                     "tu as répondu à la question posée, arrête-toi. Si tu tournes en rond ou "
                     "qu'une piste ne donne rien, dis-le au lieu de continuer à chercher — un "
                     "constat d'échec est une réponse utile, un silence de dix minutes ne l'est pas."
+                    "\n\n"
+                    # La cause, attaquee a la source. Le palliatif existe aussi — la couche
+                    # vocale recoud les tours en un seul bilan — mais un tour de moins, c'est
+                    # surtout tout le contexte relu une fois de moins.
+                    "Une nuance sur le travail de fond : si tu lances quelque chose en tâche "
+                    "de fond et qu'ensuite tu n'as plus qu'à l'attendre, ne rends PAS la "
+                    "parole pour annoncer que c'est lancé. Attends le résultat dans le même "
+                    "tour, et réponds une seule fois. Sinon celui qui écoute paie deux écoutes "
+                    "pour une seule demande, et la première ne lui apprend rien. Rendre la "
+                    "parole n'a de sens que quand tu as quelque chose à dire, ou une décision "
+                    "à me demander."
     )
 
     def _sid_vivant(self) -> str | None:
@@ -980,6 +1045,13 @@ class Worker:
                 self.occupe = False
                 self.arret_demande = False
                 self._agents_balayer()
+                # Ce qui fait de ce tour un « je te previens » plutot qu'une reponse. Deux
+                # mesures differentes selon d'ou vient le tour : s'il vient de MOI, seul ce
+                # qu'il a lance lui-meme compte — une question posee pendant une compilation
+                # merite sa reponse tout de suite. S'il vient d'une tache qui s'est terminee,
+                # on est deja dans la chaine, et tout ce qui tourne encore la prolonge.
+                self.journal.fond_en_cours = self._fond_a_suivre()
+                self._fond_du_tour = set()
                 # L'extrait voyage avec l'etat : c'est ce qu'une notification de fin de
                 # tour peut montrer sans ouvrir la page.
                 reponse = " ".join(self.journal.textes[-1].split()) if self.journal.textes else ""
@@ -1201,6 +1273,11 @@ class Worker:
         self._rendre_apres_tour = temporaire and identifiant != self._modele_base
         self._voir("modele", modele=identifiant, cle=cle, libelle=libelle,
                    temporaire=self._rendre_apres_tour)
+        # Et l'ETAT, pas seulement l'evenement : « modele » passe au vol et n'est pas rejoue
+        # a la reconnexion, donc sans cette ligne une page rechargee — ou un tableau de bord
+        # qui regarde de l'exterieur — annonce le modele du demarrage pour le reste de la
+        # session. C'est precisement le chiffre qu'on vient verifier.
+        self._voir("modeles", **config.etat_modeles(identifiant))
         return libelle
 
     async def changer_effort(self, cle: str) -> str:
@@ -1259,6 +1336,7 @@ class Worker:
             # L'ancien client est déjà remplacé : son adieu qui rate ne concerne plus personne.
             pass
         self._voir("effort", cle=cle, niveau=niveau, libelle=libelle)
+        self._voir("efforts", **config.etat_efforts(cle))
         return libelle
 
     async def changer_conversation(self, sid: str) -> str:
@@ -1358,6 +1436,9 @@ class Worker:
         self._voir("modele", modele=self._modele_base, cle=cle,
                    libelle=config.MODELES.get(cle, ("", self._modele_base))[1],
                    temporaire=False)
+        # Le retour au modele de base compte autant que l'ecart : sans cette ligne, l'etat
+        # resterait bloque sur l'emprunt d'un tour.
+        self._voir("modeles", **config.etat_modeles(self._modele_base))
 
     async def interrompre(self):
         """Arreter le tour en cours. Rend la main AVANT de demander l'arret.

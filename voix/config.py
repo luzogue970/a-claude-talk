@@ -167,6 +167,26 @@ def cle_du_modele(nom: str) -> str:
         if identifiant == nom:
             return cle
     return nom
+
+
+# Le modele et l'effort COURANTS, sous la forme que la page et le tableau de bord lisent.
+#
+# Ils vivaient en deux copies : une liste construite a la main au demarrage dans agent.py, et
+# rien du tout ensuite. Changer de modele en cours de route publiait un evenement « modele »
+# que la page ecoutait au vol, mais qui n'etait pas un ETAT : il n'etait pas rejoue a la
+# reconnexion. Une page rechargee au milieu d'une session affichait donc le modele du
+# DEMARRAGE, et un superviseur exterieur n'avait aucun moyen de connaitre le vrai.
+#
+# D'ou ces deux fonctions : un seul endroit qui dit la forme, appele au demarrage comme a
+# chaque changement.
+def etat_modeles(actuel: str) -> dict:
+    return {"liste": [{"cle": k, "libelle": l} for k, (_, l) in MODELES.items()],
+            "actuel": cle_du_modele(actuel)}
+
+
+def etat_efforts(actuel: str) -> dict:
+    return {"liste": [{"cle": k, "libelle": l} for k, (_, l) in EFFORTS.items()],
+            "actuel": actuel if actuel in EFFORTS else WORKER_EFFORT}
 # Les cinq niveaux d'effort du SDK, verifies dans le type de ClaudeAgentOptions :
 # Literal['low', 'medium', 'high', 'xhigh', 'max']. Il n'y en a pas d'autre.
 #

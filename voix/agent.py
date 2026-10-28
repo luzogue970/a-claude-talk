@@ -142,6 +142,10 @@ class Voix(Agent):
         self._attente: dict | None = None
         self._debut_tour: float | None = None
         self._dernier_debrief: str | None = None
+        # Les tours mis de cote parce qu'ils n'annoncaient qu'une attente. Ils seront dits
+        # avec celui qui conclut, en une seule fois. Voir _en_attente_de_fond.
+        self._tours_en_attente: list = []
+        self._silence_depuis: float | None = None
         # « Retenir » : la dictée se dépose dans la barre de saisie au lieu de partir chez
         # Claude, pour pouvoir corriger une transcription avant de l'envoyer.
         self.retenir = False
@@ -642,7 +646,58 @@ class Voix(Agent):
                 # chiffre arrive, une seconde plus tard.
                 if self.quota:
                     asyncio.create_task(self._mesurer_quota())
-                await self._lire(self._debrief(charge))
+                if self._en_attente_de_fond(charge):
+                    # Rien n'est perdu : la reponse ECRITE s'affiche en direct, par un autre
+                    # chemin. Ce qu'on evite, c'est la deuxieme ECOUTE.
+                    self._tours_en_attente.append(charge)
+                    self._silence_depuis = self._silence_depuis or time.monotonic()
+                    quoi = list(getattr(charge, "fond_en_cours", []))[:4]
+                    self._voir("attente_fond", tours=len(self._tours_en_attente), quoi=quoi,
+                               texte="je garde ce bilan pour le dire avec la suite — "
+                                     + (", ".join(quoi) or "quelque chose") + " tourne encore")
+                    continue
+                await self._lire(self._debrief(self._recoudre(charge)))
+
+    # Combien de tours d'attente on avale avant de parler quand meme, et pendant combien
+    # de temps. Les deux existent pour la meme raison : une tache de fond dont la
+    # notification de fin n'arrive jamais laisserait la voix muette pour le reste de la
+    # session. Ce defaut-la serait pire que celui qu'on corrige, donc il est borne.
+    ATTENTES_MAX = 4
+    SILENCE_MAX_S = 25 * 60
+
+    def _en_attente_de_fond(self, journal_) -> bool:
+        """Ce tour est-il un accusé de réception plutôt qu'une réponse ?
+
+        Il l'est quand Claude a rendu la parole en laissant tourner ce qu'il venait de
+        lancer : le harnais le rappellera à la fin de la tâche, donc une vraie réponse
+        arrive derrière. La dire maintenant coûte une écoute pour « c'est lancé ».
+
+        Quatre cas la font dire quand même, et chacun vaut mieux qu'un silence :
+        un travail coupé en route, une question dont j'attends la réponse, trop de tours
+        déjà mis de côté, ou une attente qui dure trop.
+        """
+        if not getattr(journal_, "fond_en_cours", None):
+            return False
+        if getattr(journal_, "pourquoi_arrete", lambda: None)():
+            return False
+        ecrit = (getattr(journal_, "textes", None) or [""])[-1]
+        if question_en_plan.attend_une_reponse(ecrit):
+            return False
+        if len(self._tours_en_attente) >= self.ATTENTES_MAX:
+            return False
+        if self._silence_depuis and time.monotonic() - self._silence_depuis > self.SILENCE_MAX_S:
+            return False
+        return True
+
+    def _recoudre(self, journal_):
+        """Un seul journal pour tout ce qu'on a tu, le tour qui conclut compris."""
+        if not self._tours_en_attente:
+            return journal_
+        tete, *milieu = self._tours_en_attente
+        self._tours_en_attente = []
+        self._silence_depuis = None
+        enchainer = getattr(tete, "enchainer", None)
+        return enchainer(*milieu, journal_) if enchainer else journal_
 
     async def _attendre_son_tour(self):
         """Attendre qu'aucune autre conversation ne soit en train de lire.
@@ -1242,9 +1297,7 @@ async def entrypoint(ctx: JobContext):
         valeurs["reprise de"] = config.REPRENDRE
     valeurs["_alerte"] = alerte
     tableau.publier("config", valeurs=valeurs)
-    tableau.publier("modeles",
-                    liste=[{"cle": k, "libelle": l} for k, (_, l) in config.MODELES.items()],
-                    actuel=config.cle_du_modele(config.WORKER_MODEL))
+    tableau.publier("modeles", **config.etat_modeles(config.WORKER_MODEL))
     # Reprendre une conversation rendait le contexte complet à Claude, mais la page restait
     # VIDE : le tableau vit en mémoire du processus, et un nouveau processus part de rien. On
     # relit donc ce que Claude Code a écrit sur disque et on le republie, pour retrouver les
@@ -1322,9 +1375,7 @@ async def entrypoint(ctx: JobContext):
     tableau.publier("delais",
                     paliers=[{"s": p} for p in config.ECOUTE_PALIERS],
                     actuel=config.ECOUTE_MIN, plafond=config.plafond_ecoute())
-    tableau.publier("efforts",
-                    liste=[{"cle": k, "libelle": l} for k, (_, l) in config.EFFORTS.items()],
-                    actuel=config.WORKER_EFFORT)
+    tableau.publier("efforts", **config.etat_efforts(config.WORKER_EFFORT))
 
     vad = silero.VAD.load()
     moteur_stt = _stt(vad)

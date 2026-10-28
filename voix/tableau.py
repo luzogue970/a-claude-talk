@@ -781,6 +781,14 @@ class Tableau:
             "reponse": str(travail.get("reponse") or "")[:200],
             "micro": bool((etat.get("micro") or {}).get("actif")),
             "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
+            # Sur quoi cette conversation tourne EN CE MOMENT. Publie ici parce que c'est la
+            # seule facon de le savoir sans ouvrir la conversation — et qu'on ouvrait la
+            # conversation uniquement pour ca : « j'espere que je ne suis pas resté en
+            # ultracode ». L'effort s'ajuste tout seul a chaque demande et le modele peut
+            # etre emprunte le temps d'un tour, donc c'est bien l'etat courant qu'on lit,
+            # jamais le reglage de depart.
+            "modele": (etat.get("modeles") or {}).get("actuel") or "",
+            "effort": (etat.get("efforts") or {}).get("actuel") or "",
             # Une question posée et pas encore répondue. Publié ici parce que c'est ce que
             # lit ce qui regarde la session de l'extérieur : sans ça, une conversation en
             # attente d'une réponse est indiscernable d'une conversation oisive — même
@@ -2558,6 +2566,8 @@ const GROUPES = [
     { g: "outil",    lib: "outil",     quoi: "chaque action : lecture, édition, commande" },
     { g: "resultat", lib: "résultat",  quoi: "la sortie des outils — souvent longue", cache: true },
     { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
+    { g: "attente_fond", lib: "dit plus tard",
+      quoi: "un tour qui n'annonçait qu'une attente : gardé pour être dit avec la suite, en une seule écoute" },
     { g: "contexte", lib: "contexte",  quoi: "la conversation compactée, et ce qu'elle pesait" },
   ]},
   { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [
