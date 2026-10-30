@@ -497,6 +497,22 @@ class Tableau:
         provisoire.replace(chemin)
         return web.json_response({"chemin": str(chemin), "octets": octets})
 
+    async def attendre_branchement(self, delai: float = 25.0, pas: float = 0.1) -> bool:
+        """Attendre que l'agent ait branche ses commandes. Rend False s'il n'arrive pas.
+
+        On entre maintenant dans la conversation AVANT que l'agent soit pret : le tableau de
+        bord redirige des que cette page repond — sept secondes au lieu de treize, mesure le
+        30 octobre 2026. Les commandes ecrites dans cet intervalle sont mises de cote et
+        rejouees ; un enregistrement du micro, lui, etait refuse net, et le son etait perdu.
+        Attendre quelques secondes vaut mieux que jeter ce qui vient d'etre dit.
+        """
+        fin = time.monotonic() + delai
+        while not self._on_commande:
+            if time.monotonic() >= fin:
+                return False
+            await asyncio.sleep(pas)
+        return True
+
     async def _audio(self, requete):
         """Recevoir un enregistrement du micro d'un AUTRE appareil, et le faire transcrire.
 
@@ -518,7 +534,7 @@ class Tableau:
                  "audio/3gpp", "application/octet-stream"}
         PLAFOND = 12 * 1024 * 1024   # une minute et demie de voix compressee en fait moins d'un
 
-        if not self._on_commande:
+        if not await self.attendre_branchement():
             return web.json_response({"erreur": "l'agent n'est pas encore branché"}, status=503)
         if not (requete.content_type or "").startswith("multipart/"):
             return web.json_response({"erreur": "envoi multipart attendu"}, status=400)
@@ -5154,6 +5170,8 @@ function recevoir(e, etat = false) {
     if (e.genre === "quota") { quota = e.fenetres || []; majCompteurs(); return; }
     if (e.genre === "etat") {
       etatRecu = true; clearTimeout(attenteAgent);
+      // L'agent vient de se brancher : la promesse d'attente n'a plus lieu d'etre.
+      if (champ && champ.placeholder.startsWith("l'agent démarre")) champ.placeholder = ECRIRE_ICI;
       const el = document.getElementById("etat");
       el.textContent = ETATS[e.vers] || e.vers;
       // « vif » fait respirer la pastille tant que la session n'est pas au repos : un coup
@@ -7275,6 +7293,10 @@ let minuterieBonjour = null;     // le garde-temps d'une socket ouverte mais mue
 // les 70 s de `perimee()`, c'est-a-dire une eternite passee a regarder trois points.
 let DELAI_BONJOUR = 20000;
 
+// Ce que dit le champ de saisie au repos. Nomme parce qu'il se repose a deux endroits :
+// a l'ouverture de la liaison, et quand l'agent se branche enfin.
+const ECRIRE_ICI = "écrire au lieu de parler — touche /";
+
 // Combien de temps on laisse une socket neuve aboutir avant de la declarer morte-nee.
 // Huit secondes : un handshake WebSocket local se compte en millisecondes, et meme un reseau
 // mobile mediocre reste tres en dessous. Au-dela, ce n'est pas de la lenteur — c'est une
@@ -7640,7 +7662,12 @@ function brancher() {
       }, 30000);
     }
     majEnvoyer();
-    champ.placeholder = "écrire au lieu de parler — touche /";
+    // Tant que l'agent n'a pas donne signe de vie, le dire LA ou le regard est quand on
+    // veut parler. On arrive maintenant dans la conversation PENDANT son demarrage : un
+    // champ qui invite a ecrire sans rien dire de plus laisse croire que le message part
+    // dans le vide. Il est mis de cote et rejoue — c'est ce que cette phrase promet.
+    champ.placeholder = etatRecu ? ECRIRE_ICI
+      : "l'agent démarre — ce que tu écris partira dès qu'il est prêt";
     const etatEl = document.getElementById("etat");
     if (etatEl) etatEl.onclick = null;
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.

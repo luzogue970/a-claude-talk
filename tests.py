@@ -89,6 +89,8 @@ SUITES = [
     ("vocal", "test_vocal.py", "py",
      "le relais audio d'un autre appareil, et les photos jointes à la phrase", False),
     ("tableau", "test_tableau.py", "py", "serveur du tableau : état, commandes, rejeu, retenue", False),
+    ("demarrage-visible", "test_demarrage_visible.py", "py",
+     "entrer dans la conversation pendant que l'agent démarre, sans rien perdre", False),
     ("audio", "test_audio.py", "py",
      "un lancement de son qui n'échoue pas : texte, plages d'octets, pannes d'Azure", False),
     ("une-seule-ecoute", "test_une_seule_ecoute.py", "py",
