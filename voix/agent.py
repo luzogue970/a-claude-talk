@@ -1523,7 +1523,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     async def fermer(*_):
-        conv.clore("session terminée")
+        conv.clore(worker.etat_a_la_fermeture())
         # Two claude subprocesses are alive at this point. Without this they outlive the
         # Ctrl+C, and the "coroutine AgentServer.aclose was never awaited" warning is the
         # symptom of tearing down while they are still attached.

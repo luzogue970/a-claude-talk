@@ -2584,6 +2584,8 @@ const GROUPES = [
     { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
     { g: "attente_fond", lib: "dit plus tard",
       quoi: "un tour qui n'annonçait qu'une attente : gardé pour être dit avec la suite, en une seule écoute" },
+    { g: "reprise_auto", lib: "reprise auto",
+      quoi: "un tour coupé par une panne technique, reparti tout seul — sans rien te redemander" },
     { g: "contexte", lib: "contexte",  quoi: "la conversation compactée, et ce qu'elle pesait" },
   ]},
   { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [

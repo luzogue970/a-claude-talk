@@ -80,16 +80,55 @@ async def main():
     )
     await session.start(agent=agent)
 
-    async def capture(texte, **kwargs):
+    class PoigneeFactice:
+        """Ce que `say()` rend vraiment : une poignée, tout de suite, pas une coroutine.
+
+        Le défaut que cette classe répare, constaté le 1er novembre 2026 : la doublure était
+        un `async def`. Or `_lire` n'attend PAS `say()` — il pose un rappel sur la poignée et
+        rend la main immédiatement, pour que la pompe reste libre pendant que la voix parle.
+        La doublure rendait donc une coroutine jamais attendue, `add_done_callback` levait
+        dessus, et PLUS RIEN n'était jamais dit : « 0 prise de parole capturée » sur une
+        boucle qui marchait parfaitement. Le test accusait l'application de son propre défaut.
+        """
+
+        def __init__(self):
+            self.fini = asyncio.Event()
+            self._rappels = []
+
+        def add_done_callback(self, rappel):
+            self._rappels.append(rappel)
+            if self.fini.is_set():
+                rappel(self)
+
+        def _finir(self):
+            self.fini.set()
+            for rappel in self._rappels:
+                rappel(self)
+
+        # Deux appelants attendent la poignée (la question posée, la permission demandée) :
+        # pour eux, attendre doit vouloir dire « attendre la fin de la lecture ».
+        def __await__(self):
+            async def _attendre():
+                await self.fini.wait()
+                return self
+            return _attendre().__await__()
+
+    def capture(texte, **kwargs):
         """Stand in for the speaker; accepts a str or the porte-parole's async generator."""
-        if isinstance(texte, str):
-            morceaux = [texte]
-        else:
-            morceaux = [m async for m in texte]
-        phrase = "".join(morceaux).strip()
-        dit.append(phrase)
-        print(f"\n  [VOIX] {phrase}\n")
-        return None
+        poignee = PoigneeFactice()
+
+        async def avaler():
+            if isinstance(texte, str):
+                morceaux = [texte]
+            else:
+                morceaux = [m async for m in texte]
+            phrase = "".join(morceaux).strip()
+            dit.append(phrase)
+            print(f"\n  [VOIX] {phrase}\n")
+            poignee._finir()
+
+        asyncio.create_task(avaler())
+        return poignee
 
     session.say = capture  # type: ignore[method-assign]
     pompe = asyncio.create_task(agent.pomper_evenements())

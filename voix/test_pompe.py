@@ -74,13 +74,17 @@ class ClientMuet:
 
 
 async def principal():
-    from worker import Worker
+    from worker import RELANCES_MAX, Worker
 
     print("=== une pompe qui tombe relâche le tour et le dit ===")
     tab = TableauFactice()
     w = Worker(tableau=tab)
     w.client = ClientQuiTombe()
     w.occupe = True
+    # Une panne de liaison repart maintenant toute seule (voir test_jusqu_au_bout.py). Ce
+    # qu'on tient ICI est l'autre bout de la chaîne : le jour où les reprises sont épuisées,
+    # on ne se tait pas pour autant. C'est la garantie du 3 octobre, et elle reste entière.
+    w.journal.relances = RELANCES_MAX
     await w._drainer()
 
     dire(w.occupe is False, "le tour est relâché : la page cesse d'afficher « au travail »")
@@ -105,6 +109,7 @@ async def principal():
     w2 = Worker(tableau=tab2)
     w2.client = ClientQuiFerme()
     w2.occupe = True
+    w2.journal.relances = RELANCES_MAX
     await w2._drainer()
     dire(w2.occupe is False and "erreur" in tab2.genres(),
          "le CLI qui ferme sa sortie sans rien dire ne laisse pas la page bloquée")

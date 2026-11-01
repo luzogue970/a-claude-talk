@@ -222,6 +222,10 @@ class Journal:
     # ce second tour arrive sans que j'aie rien demande entre les deux. Donc deux ecoutes
     # pour une seule demande, et la premiere ne disait rien.
     fond_en_cours: list[str] = field(default_factory=list)
+    # Combien de fois ce tour est reparti tout seul apres une panne technique. Voyage avec
+    # le tour, donc remis a zero des que je demande autre chose — c'est exactement la borne
+    # qu'on veut : trois reprises par demande, pas trois par session.
+    relances: int = 0
 
     def enchainer(self, *suivants: "Journal") -> "Journal":
         """Un seul journal pour la suite de tours qui n'en fait qu'un pour celui qui ecoute.
@@ -257,12 +261,15 @@ class Journal:
         Dite a voix haute ET affichee : c'est la seule information qui explique un travail qui
         s'interrompt, et la deviner coute plus cher que de la lire."""
         detail = (self.erreurs or [None])[0]
+        essais = (f" — et j'avais déjà repris {self.relances} fois tout seul"
+                  if self.relances else "")
         if self.fin == "error_max_turns":
             combien = f" ({self.tours} tours)" if self.tours else ""
             return (f"je me suis arrêté avant d'avoir fini : la limite de tours est "
-                    f"atteinte{combien}")
+                    f"atteinte{combien}{essais}")
         if self.fin == "error_max_budget_usd":
-            return "je me suis arrêté avant d'avoir fini : le plafond de dépense est atteint"
+            return ("je me suis arrêté avant d'avoir fini : le plafond de dépense est "
+                    f"atteint{essais}")
         if self.fin == "error_max_structured_output_retries":
             return ("je me suis arrêté avant d'avoir fini : trop d'essais pour produire une "
                     "sortie structurée")
@@ -270,7 +277,8 @@ class Journal:
             bout = f" — {detail}" if detail else ""
             if self.api_statut:
                 bout = f" — l'API a répondu {self.api_statut}{bout}"
-            return f"je me suis arrêté avant d'avoir fini : une erreur a coupé l'exécution{bout}"
+            return ("je me suis arrêté avant d'avoir fini : une erreur a coupé "
+                    f"l'exécution{bout}{essais}")
         if self.stop == "max_tokens":
             return ("ma réponse a été coupée net : elle a atteint la limite de longueur, "
                     "donc la fin manque")
@@ -306,6 +314,49 @@ FOND_IMPLICITE = ("Agent", "Workflow")
 # Ce qu'on inscrit au journal d'un tour que personne n'a demande : le bilan parle doit
 # pouvoir dire d'ou il sort, sinon il repond a une question qui n'a pas ete posee.
 RELANCE_DE_FOND = "(une tâche de fond s'est terminée)"
+
+# Reprendre tout seul apres une panne technique. Mesure du 1er novembre 2026 sur toutes les
+# conversations du dossier : 52 tours se sont arretes anormalement, dont 30 sur un « l'API a
+# repondu 429 » et 15 sur une execution coupee. Aucun n'a jamais ete repris — le code ne
+# savait pas le faire. La conversation s'arretait la, et on la retrouvait morte des heures
+# plus tard avec « x tours » pour toute explication.
+RELANCES_MAX = 3
+# Des attentes qui montent. Une limite de debit ne se vide pas en dix secondes : repartir
+# tout de suite ne fait que reprendre le meme refus, en payant le contexte une fois de plus.
+ATTENTES_RELANCE = (20, 90, 300)
+RELANCE_APRES_PANNE = (
+    "(reprise automatique : {raison}. Le tour précédent a été coupé en cours de route. "
+    "Reprends exactement où tu en étais, sans refaire ce qui est déjà fait et sans me "
+    "raconter l'incident — réponds comme si la coupure n'avait pas eu lieu.)")
+
+# Ce qu'une veille d'un tour muet tolere. Un tour qui ne produit AUCUN message pendant tout
+# ce temps n'est plus en train de travailler : mesure du 1er novembre sur la conversation
+# insnap — un tour de 178 actions, puis plus rien, et cinq de mes messages avales sans une
+# reponse pendant quatre-vingt-dix minutes. Personne n'a rien vu, parce que rien ne
+# regardait.
+SILENCE_SIGNALE_S = 5 * 60
+SILENCE_MAX_TOUR_S = 20 * 60
+# A quelle cadence on regarde. Separe des seuils pour qu'un test puisse le raccourcir.
+PAS_DE_VEILLE = 30
+
+
+def reprenable(journal: "Journal") -> bool:
+    """Est-ce une panne technique, ou une decision ?
+
+    On ne reprend que ce qui n'engage personne. Une liste blanche, pas une liste noire :
+    un sous-type inconnu du SDK ne doit pas declencher une boucle de relances payantes.
+
+    - Repris : l'execution coupee, toute erreur HTTP de l'API, le plafond de tours interne
+      atteint. Ce sont des accidents de transport, et refaire marche.
+    - Jamais repris : le plafond de depense (c'est une decision, pas une panne), un refus,
+      une reponse tronquee, et bien sur un tour reussi.
+    """
+    # Le code HTTP d'abord : `pourquoi_arrete` le traite deja comme un arret anormal quel
+    # que soit le sous-type, et un 429 reste un 429 meme annonce comme « success ».
+    if journal.api_statut:
+        return True
+    return journal.fin in ("error_during_execution", "error_max_turns")
+
 
 # Les outils qui DELEGUENT. Pendant qu'ils tournent, le SDK fait remonter les appels
 # d'outils du delegue dans le MEME flux, avec `parent_tool_use_id` renseigne — c'est
@@ -401,6 +452,11 @@ class Worker:
         # Vrai quand la pompe d'evenements s'est arretee : plus rien n'arrivera de ce
         # client-la, et seule une reconstruction remet la conversation en marche.
         self.pompe_morte = False
+        # Le dernier signe de vie du tour en cours, et la veille qui le regarde. Un tour
+        # fige ne leve aucune exception et ne ferme aucun flux : il ne se voit que par son
+        # absence, donc il faut quelqu'un dont c'est le seul travail.
+        self._dernier_signe = 0.0
+        self._veilleur: asyncio.Task | None = None
         # Les paliers de contexte deja annonces. Vides a l'ouverture et apres chaque
         # compactage : franchir 400 k une seconde fois, apres s'en etre allege, est une
         # nouvelle quand le redire a chaque tour n'en est pas une.
@@ -904,6 +960,108 @@ class Worker:
             # tour en cours ne se finira plus et que la page doit cesser de l'attendre.
             self._clore_sur_panne("Claude Code a fermé le flux")
 
+    async def _reprendre(self, mort: Journal):
+        """Repartir la ou le tour s'est fait couper, sans rien demander a personne.
+
+        La voix ne dit rien ici, et c'est voulu : une reprise reussie ne doit pas couter une
+        ecoute. Ce qui s'entend, c'est le bilan complet quand le travail aboutit vraiment —
+        ou l'abandon, en clair, si les trois reprises echouent.
+        """
+        rang = mort.relances + 1
+        attente = ATTENTES_RELANCE[min(rang, len(ATTENTES_RELANCE)) - 1]
+        raison = mort.pourquoi_arrete() or "la liaison a lâché"
+        self._voir("reprise_auto", essai=rang, sur=RELANCES_MAX, attente=attente,
+                   texte=(f"{raison} — je reprends tout seul dans {attente} s "
+                          f"(essai {rang}/{RELANCES_MAX}), sans rien te redemander."))
+        log.warning("reprise auto %s/%s dans %ss — %s", rang, RELANCES_MAX, attente, raison)
+        try:
+            await asyncio.sleep(attente)
+            # Pendant l'attente, tout a pu changer : j'ai pu parler, arreter, ou fermer. Une
+            # reprise qui s'empile sur un tour vivant ferait exactement le degat qu'elle
+            # pretend reparer.
+            if self.occupe or self.arret_demande or not self.client:
+                log.info("reprise auto abandonnee : le tour a repris sans elle")
+                return
+            await self.envoyer(RELANCE_APRES_PANNE.format(raison=raison), reprise=mort)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Si la reprise elle-meme casse, le tour mort n'a toujours pas rendu de bilan :
+            # sans ce `fin`, le micro reste ferme et la conversation s'arrete en silence —
+            # precisement ce qu'on corrige.
+            log.exception("la reprise automatique a echoue")
+            mort.erreurs = [*mort.erreurs, f"reprise automatique impossible ({exc})"]
+            mort.relances = RELANCES_MAX
+            await self.events.put(("fin", mort))
+
+    def _relancer_ou_finir(self, journal_: Journal, arret_voulu: bool) -> bool:
+        """Vrai si une reprise a ete lancee — donc si on ne rend PAS la parole maintenant."""
+        if arret_voulu or not reprenable(journal_):
+            return False
+        if journal_.relances >= RELANCES_MAX:
+            log.warning("tour abandonne apres %s reprises", journal_.relances)
+            return False
+        asyncio.get_running_loop().create_task(self._reprendre(journal_))
+        return True
+
+    async def _veiller_le_tour(self):
+        """Regarder un tour qui ne dit plus rien, et finir par le declarer fige.
+
+        Aucune exception n'est levee quand un tour se bloque : le flux reste ouvert, la
+        pompe attend un message qui ne viendra pas, et `envoyer` colle chacun de mes
+        messages suivants sur ce tour mort. Le silence est total des deux cotes.
+        """
+        signale = False
+        try:
+            while self.occupe:
+                await asyncio.sleep(PAS_DE_VEILLE)
+                if not self.occupe:
+                    return
+                mut = time.monotonic() - (self._dernier_signe or time.monotonic())
+                dernier = " ".join(self.journal.outils[-1]).strip() if self.journal.outils else ""
+                if mut >= SILENCE_MAX_TOUR_S:
+                    self._clore_sur_panne(
+                        f"le tour n'a plus rien produit depuis {int(mut) // 60} min"
+                        + (f" (dernier geste : {dernier})" if dernier else ""))
+                    return
+                if mut >= SILENCE_SIGNALE_S and not signale:
+                    signale = True
+                    # Dit, pas tu. Une attente longue qui s'affiche est une attente ; une
+                    # attente longue muette ressemble a une panne, et on relance pour rien.
+                    self._voir("log", niveau="WARNING", source="session",
+                               texte=(f"rien depuis {int(mut) // 60} min"
+                                      + (f" — toujours sur {dernier}" if dernier else "")
+                                      + f" ; je coupe et je reprends à {SILENCE_MAX_TOUR_S // 60} min"))
+                elif mut < SILENCE_SIGNALE_S:
+                    signale = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("la veille du tour est tombee")
+
+    def etat_a_la_fermeture(self) -> str:
+        """Dans quel etat la conversation s'arrete — a ecrire dans le journal de bord.
+
+        « session terminée, 16 tour(s) » devant une conversation qu'on retrouve morte ne dit
+        pas si elle avait fini ou si on l'a coupee en plein travail. C'est pourtant la seule
+        question qu'on se pose en la rouvrant, et c'est celle a laquelle on ne savait pas
+        repondre.
+        """
+        if self.pompe_morte:
+            return "session terminée — la liaison avec Claude Code était morte"
+        if self.occupe:
+            reste = " ".join(self.journal.outils[-1]).strip() if self.journal.outils else ""
+            return ("session terminée alors qu'un tour était ENCORE en cours"
+                    + (f" (dernier geste : {reste})" if reste else "")
+                    + " : ce tour n'a jamais rendu de bilan")
+        return "session terminée"
+
+    def _veille_demarrer(self):
+        self._dernier_signe = time.monotonic()
+        if self._veilleur and not self._veilleur.done():
+            return
+        self._veilleur = asyncio.get_running_loop().create_task(self._veiller_le_tour())
+
     def _clore_sur_panne(self, pourquoi: str):
         """Rendre la main apres une pompe tombee, et le dire.
 
@@ -911,25 +1069,38 @@ class Worker:
         sans bouton. On annonce donc la panne ET la sortie, parce que « débloque » remonte
         une conversation intacte — le contexte est sur disque, pas dans ce processus.
         """
+        self.pompe_morte = True
+        if not self.occupe:
+            self._voir("erreur", niveau="ERROR", source="session",
+                       texte=(f"{pourquoi} — « débloque » relance la liaison en gardant "
+                              "la conversation."))
+            return
+        self.occupe = False
+        self._voir("travail", actif=False)
+        self.journal.fin = "error_during_execution"
+        self.journal.erreurs = [pourquoi]
+        # Une panne de liaison se repare toute seule : `envoyer` relance le CLI avant
+        # d'ecrire, et la session se reprend par son identifiant. Ne le dire en rouge que
+        # si on renonce vraiment — sinon la page crie a l'incident pendant qu'on repart.
+        if self._relancer_ou_finir(self.journal, self.arret_demande):
+            self._voir("log", niveau="WARNING", source="session", texte=pourquoi)
+            return
         self._voir("erreur", niveau="ERROR", source="session",
                    texte=(f"{pourquoi} — le tour en cours ne rendra pas de bilan. "
                           "« débloque » relance la liaison en gardant la conversation."))
-        self.pompe_morte = True
-        if self.occupe:
-            self.occupe = False
-            self._voir("travail", actif=False)
-            self.journal.fin = "error_during_execution"
-            self.journal.erreurs = [pourquoi]
-            # La couche vocale attend cette fin pour reprendre la parole. Sans elle, le
-            # micro reste ferme et plus rien n'entre : bloque une seconde fois.
-            try:
-                self.events.put_nowait(("fin", self.journal))
-            except Exception:
-                log.debug("file d'evenements pleine a la cloture", exc_info=True)
+        # La couche vocale attend cette fin pour reprendre la parole. Sans elle, le
+        # micro reste ferme et plus rien n'entre : bloque une seconde fois.
+        try:
+            self.events.put_nowait(("fin", self.journal))
+        except Exception:
+            log.debug("file d'evenements pleine a la cloture", exc_info=True)
 
     async def _drainer_boucle(self):
         assert self.client
         async for message in self.client.receive_messages():
+            # Le signe de vie du tour. Pose ici, avant tout tri : ce qu'on surveille n'est
+            # pas « un message interessant », c'est « quelque chose arrive encore ».
+            self._dernier_signe = time.monotonic()
             sid = getattr(message, "session_id", None)
             if sid and not self.session_id:
                 self.session_id = sid
@@ -963,6 +1134,7 @@ class Worker:
                 self.journal = Journal(question=RELANCE_DE_FOND)
                 self.occupe = True
                 self._voir("travail", actif=True)
+                self._veille_demarrer()
             if isinstance(message, StreamEvent):
                 self._delta(message)
             elif isinstance(message, AssistantMessage):
@@ -1043,6 +1215,7 @@ class Worker:
                 for refus in message.permission_denials or []:
                     self.journal.refus.append(str(getattr(refus, "tool_name", refus)))
                 self.occupe = False
+                arret_voulu = self.arret_demande
                 self.arret_demande = False
                 self._agents_balayer()
                 # Ce qui fait de ce tour un « je te previens » plutot qu'une reponse. Deux
@@ -1069,6 +1242,11 @@ class Worker:
                     # page, mais un arret anormal se cherche dans les logs.
                     log.warning("tour termine en %s (%s tours) : %s", self.journal.fin,
                                 self.journal.tours, "; ".join(self.journal.erreurs) or "—")
+                # Une panne technique ne rend pas la parole : on repart, et c'est le tour
+                # abouti qui parlera. Tant qu'on reprend, aucun « fin » ne sort d'ici —
+                # sinon la voix annoncerait un abandon pendant qu'on reessaie derriere.
+                if self._relancer_ou_finir(self.journal, arret_voulu):
+                    continue
                 await self.events.put(("fin", self.journal))
 
     def _delta(self, message: StreamEvent):
@@ -1216,12 +1394,17 @@ class Worker:
                    recu=recu or None)
         self._veiller_au_contexte()
 
-    async def envoyer(self, texte: str):
+    async def envoyer(self, texte: str, reprise: Journal | None = None):
         """Queued server-side if a turn is already running, so he can speak mid-work.
 
         Si la liaison est morte, on relance AVANT d'envoyer plutot que de laisser la phrase
         tomber dans un tube que personne ne lit : c'est ce silence-la qu'on corrige, pas
         seulement l'affichage.
+
+        `reprise` est le tour mort qu'on redemarre. Le nouveau tour herite de SA question et
+        de ce qu'il avait deja fait : le bilan final doit parler de ce que j'ai demande, pas
+        de la phrase technique qui a servi a repartir, et les outils deja passes ne doivent
+        pas disparaitre du compte parce qu'une coupure est tombee au milieu.
         """
         assert self.client
         if self.pompe_morte:
@@ -1231,8 +1414,12 @@ class Worker:
                 return
         self.arret_demande = False
         if not self.occupe:
-            self.journal = Journal(question=texte)
+            self.journal = (Journal(question=texte) if reprise is None else Journal(
+                question=reprise.question, outils=list(reprise.outils),
+                textes=list(reprise.textes), refus=list(reprise.refus),
+                relances=reprise.relances + 1))
             self.occupe = True
+            self._veille_demarrer()
             # The page shows work in progress instead of the voice announcing it. Spoken
             # milestones were removed: "toujours dessus, je viens de lancer cat" is noise
             # you cannot skim, where a header indicator is glanceable and silent.
