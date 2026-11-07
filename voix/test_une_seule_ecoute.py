@@ -181,11 +181,98 @@ def une_demande_une_seule_ecoute():
              "l'écran dit ce qu'on attend pendant que la voix se tait")
 
 
+# --- TF : la suite promise ne vient jamais ------------------------------------------------
+
+def quand_la_suite_ne_vient_jamais():
+    """Le parcours vécu : je demande, ça répond « c'est lancé », et plus rien. Jamais.
+
+    Mesure du 7 novembre 2026 : sur les 26 conversations ouvertes depuis la version qui a
+    introduit la mise de côté, ONZE se terminent sur un message de moi resté sans réponse —
+    certaines fermées quatre à SEPT heures plus tard. Le bilan était là, gardé, attendant un
+    rappel du harnais qui n'est jamais venu. Les deux bornes existaient déjà, mais elles
+    n'étaient relues qu'à l'arrivée du tour suivant : exactement celui qui manquait.
+    """
+    print("\n= la suite ne vient pas : on finit par parler quand même =")
+    conv = FausseConv(tours=4, titre="déjà titrée")
+    v = neuve(conv)
+    v.DELAI_RECOUDRE = 0.05
+    dits, lus = [], []
+
+    class Mouchard:
+        async def dire_flux(self, j):
+            dits.append(j)
+            yield "bilan parlé."
+
+    v.porte_parole = Mouchard()
+
+    async def faux_lire(flux):
+        lus.append("".join([m async for m in flux]))
+
+    v._lire = faux_lire
+
+    async def scene():
+        v.worker.events = asyncio.Queue()
+        v.worker.occupe = True
+        tache = asyncio.create_task(v.pomper_evenements())
+        await v.worker.events.put(("fin", journal(
+            question="déploie et préviens-moi",
+            textes=["C'est lancé, je te préviens quand c'est fini."],
+            outils=[("Bash", "deploy.sh")], fond=["Bash deploy.sh"])))
+        await asyncio.sleep(0.02)
+        verifier(not dits, "d'abord on se tait, comme avant : rien n'a changé de ce côté")
+
+        # Un tour tourne vraiment : la suite arrive, on la laisse venir.
+        await asyncio.sleep(0.2)
+        verifier(not dits,
+                 "tant qu'un tour tourne pour de bon, on attend — la suite va tout dire")
+
+        # Plus rien ne tourne, et le rappel du harnais n'arrive pas. C'est LE cas.
+        v.worker.occupe = False
+        await asyncio.sleep(0.2)
+        tache.cancel()
+
+    asyncio.run(scene())
+    verifier(len(dits) == 1, "au bout du compte je l'entends, au lieu d'un silence définitif")
+    verifier(len(lus) == 1, "et il est bien lu à voix haute, une seule fois")
+    if dits:
+        verifier(dits[0].textes == ["C'est lancé, je te préviens quand c'est fini."],
+                 "ce qu'on avait gardé est dit intégralement")
+        verifier(dits[0].question == "déploie et préviens-moi",
+                 "et il répond toujours à ma demande")
+    verifier(v._tours_en_attente == [] and v._silence_depuis is None,
+             "l'ardoise est rendue propre : rien ne reste coincé derrière")
+    att = v.tableau.dernier("attente_fond")
+    verifier(att is not None and "pas venue" in (att.get("texte") or ""),
+             "et l'écran dit pourquoi on parle maintenant")
+
+
+def rien_ne_part_dans_la_tombe_a_la_fermeture():
+    """Fermer la conversation ne doit pas effacer ce qu'on gardait pour plus tard."""
+    print("\n= à la fermeture, ce qui était gardé est écrit =")
+    conv = FausseConv(tours=4, titre="déjà titrée")
+    v = neuve(conv)
+    v._tours_en_attente = [journal(question="range le dossier",
+                                   textes=["J'ai lancé le rangement."],
+                                   outils=[("Bash", "mv")], fond=["Bash mv"])]
+    v._silence_depuis = 1.0
+
+    verifier(v.vider_les_attentes() is True, "la vidange dit qu'elle avait quelque chose")
+    verifier(len(conv.tours_claude) == 1,
+             "le journal de bord garde la réponse : on la retrouve en rouvrant demain")
+    verifier("rangement" in " ".join(str(t) for t in conv.tours_claude),
+             "et c'est bien le texte gardé, pas un marqueur vide")
+    verifier(v._tours_en_attente == [], "l'ardoise est vidée")
+    verifier(v.vider_les_attentes() is False,
+             "une conversation sans rien en attente se ferme sans rien écrire")
+
+
 def principal():
     recoudre_ne_perd_rien()
     une_question_pendant_que_ca_tourne_se_repond_tout_de_suite()
     quatre_situations_rompent_le_silence()
     une_demande_une_seule_ecoute()
+    quand_la_suite_ne_vient_jamais()
+    rien_ne_part_dans_la_tombe_a_la_fermeture()
     print()
     sys.exit(0 if (ok and test_debrief.ok) else 1)
 

@@ -146,6 +146,10 @@ class Voix(Agent):
         # avec celui qui conclut, en une seule fois. Voir _en_attente_de_fond.
         self._tours_en_attente: list = []
         self._silence_depuis: float | None = None
+        # Celui dont le seul travail est de delivrer ce qu'on a mis de cote. Sans lui, les
+        # deux bornes ci-dessous ne valent rien : elles n'etaient relues qu'a l'arrivee du
+        # tour SUIVANT, donc jamais quand c'est justement ce tour-la qui ne vient pas.
+        self._livreur: asyncio.Task | None = None
         # « Retenir » : la dictée se dépose dans la barre de saisie au lieu de partir chez
         # Claude, pour pouvoir corriger une transcription avant de l'envoyer.
         self.retenir = False
@@ -655,6 +659,7 @@ class Voix(Agent):
                     self._voir("attente_fond", tours=len(self._tours_en_attente), quoi=quoi,
                                texte="je garde ce bilan pour le dire avec la suite — "
                                      + (", ".join(quoi) or "quelque chose") + " tourne encore")
+                    self._armer_la_delivrance()
                     continue
                 await self._lire(self._debrief(self._recoudre(charge)))
 
@@ -664,6 +669,69 @@ class Voix(Agent):
     # session. Ce defaut-la serait pire que celui qu'on corrige, donc il est borne.
     ATTENTES_MAX = 4
     SILENCE_MAX_S = 25 * 60
+
+    # Au bout de combien de temps on dit quand meme ce qu'on a garde. Mesure du 7 novembre
+    # 2026 : sur les 26 conversations ouvertes depuis la version precedente, ONZE se
+    # terminent sur un message de moi reste sans reponse — et plusieurs se sont fermees
+    # quatre a sept HEURES plus tard. Le bilan etait la, mis de cote, attendant une suite
+    # qui n'est jamais venue. Deux minutes et demie, c'est plus long qu'une tache de fond
+    # ordinaire et infiniment plus court qu'une matinee de silence.
+    DELAI_RECOUDRE = 150
+
+    def vider_les_attentes(self) -> bool:
+        """Écrire dans le journal de bord ce qu'on gardait, avant de fermer."""
+        if not self._tours_en_attente:
+            return False
+        garde = self._recoudre()
+        if self._livreur and not self._livreur.done():
+            self._livreur.cancel()
+        if self.conv:
+            self.conv.tour_claude(
+                "\n\n".join(t for t in (getattr(garde, "textes", None) or []) if t)
+                or "_(gardé pour être dit avec la suite, qui n'est jamais venue)_",
+                outils=journal_lignes(garde), jetons=getattr(garde, "jetons", None),
+                duree=getattr(garde, "duree_s", None))
+        log.warning("bilan garde ecrit au journal a la fermeture")
+        return True
+
+    def _armer_la_delivrance(self):
+        """Un bilan mis de côté doit TOUJOURS finir par être dit."""
+        if self._livreur and not self._livreur.done():
+            return
+        self._livreur = asyncio.create_task(self._delivrer_quand_meme())
+
+    async def _delivrer_quand_meme(self):
+        """Dire ce qu'on gardait quand la suite promise ne vient pas.
+
+        C'est le filet de la version precedente, et il manquait. Mettre un tour de cote est
+        un PARI : que le harnais va rappeler Claude a la fin de la tache de fond, et qu'on
+        dira tout d'un coup. Quand ce rappel n'arrive pas — tache qui ne finit jamais,
+        notification perdue, liaison tombee entre-temps — le pari se solde par un silence
+        definitif. Echanger deux ecoutes contre zero ecoute n'est pas une amelioration.
+        """
+        try:
+            while self._tours_en_attente:
+                await asyncio.sleep(self.DELAI_RECOUDRE)
+                if not self._tours_en_attente:
+                    return
+                trop_long = bool(self._silence_depuis) and (
+                    time.monotonic() - self._silence_depuis > self.SILENCE_MAX_S)
+                # Un tour qui tourne VRAIMENT est la suite qu'on attendait : on la laisse
+                # venir, elle dira tout. Mais pas au-dela du plafond — un tour qui dure une
+                # demi-heure ne justifie plus de me taire sur ce qui est deja fait.
+                if getattr(self.worker, "occupe", False) and not trop_long:
+                    continue
+                self._voir("attente_fond", tours=0, quoi=[],
+                           texte="la suite annoncée n'est pas venue — je dis maintenant "
+                                 "ce que j'avais gardé plutôt que de le garder pour rien")
+                log.warning("bilan delivre par le filet apres %s s d'attente",
+                            self.DELAI_RECOUDRE)
+                await self._lire(self._debrief(self._recoudre()))
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("le filet de delivrance est tombe")
 
     def _en_attente_de_fond(self, journal_) -> bool:
         """Ce tour est-il un accusé de réception plutôt qu'une réponse ?
@@ -689,15 +757,22 @@ class Voix(Agent):
             return False
         return True
 
-    def _recoudre(self, journal_):
-        """Un seul journal pour tout ce qu'on a tu, le tour qui conclut compris."""
+    def _recoudre(self, journal_=None):
+        """Un seul journal pour tout ce qu'on a tu, le tour qui conclut compris.
+
+        `journal_` absent, c'est le filet qui appelle : il n'y a pas de tour qui conclut,
+        justement, et on recoud ce qu'on a.
+        """
         if not self._tours_en_attente:
             return journal_
         tete, *milieu = self._tours_en_attente
         self._tours_en_attente = []
         self._silence_depuis = None
+        suite = [*milieu, journal_] if journal_ is not None else milieu
         enchainer = getattr(tete, "enchainer", None)
-        return enchainer(*milieu, journal_) if enchainer else journal_
+        if not enchainer:
+            return journal_ if journal_ is not None else tete
+        return enchainer(*suite)
 
     async def _attendre_son_tour(self):
         """Attendre qu'aucune autre conversation ne soit en train de lire.
@@ -1523,6 +1598,11 @@ async def entrypoint(ctx: JobContext):
     )
 
     async def fermer(*_):
+        # Ne pas emporter dans la tombe ce qu'on avait mis de cote. La voix n'a plus de
+        # salle ou parler a cet instant, mais le fichier, lui, reste : un bilan garde qui
+        # disparait au moment ou l'on ferme est exactement la reponse qu'on ne retrouve
+        # nulle part en rouvrant la conversation le lendemain.
+        agent.vider_les_attentes()
         conv.clore(worker.etat_a_la_fermeture())
         # Two claude subprocesses are alive at this point. Without this they outlive the
         # Ctrl+C, and the "coroutine AgentServer.aclose was never awaited" warning is the
