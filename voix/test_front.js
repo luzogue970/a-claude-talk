@@ -322,12 +322,31 @@ globalThis.AudioContext = function () {
     },
   });
 };
+// Ce que le navigateur emporte quand la page meurt. sendBeacon est le SEUL envoi qui
+// survive a un depart, et c est ce qui rend a la parole sa derniere chance : le test retient
+// ce qui est parti par la, et sait le faire refuser.
+globalThis.balises = [];
+globalThis.beaconRefuse = false;
+// Combien de fois d affilee getUserMedia echoue avant d accepter, et avec quel nom d erreur.
+// WebKit rend OverconstrainedError sur { audio: true } — qui ne contraint rien — quand sa
+// session de capture n est pas revenue d un passage en arriere-plan.
+globalThis.microRatesDAbord = 0;
+globalThis.erreurMicro = "OverconstrainedError";
 globalThis.navigator = {
   onLine: true,
   vibrate: (motif) => { globalThis.vibrations.push(motif); return true; },
+  sendBeacon: (url, corps) => {
+    globalThis.balises.push({ url, corps });
+    return !globalThis.beaconRefuse;
+  },
   mediaDevices: {
     getUserMedia: () => {
       globalThis.microDemandes++;
+      if (globalThis.microRatesDAbord > 0) {
+        globalThis.microRatesDAbord--;
+        const e = new Error("Invalid constraint"); e.name = globalThis.erreurMicro;
+        return Promise.reject(e);
+      }
       if (!globalThis.microAccorde) {
         const e = new Error("refus"); e.name = "NotAllowedError";
         return Promise.reject(e);
@@ -359,6 +378,7 @@ globalThis.envoyes = [];
 // Chaque socket ouverte est retenue : un test de reconnexion doit pouvoir verifier
 // COMBIEN ont ete ouvertes, pas seulement que la derniere existe.
 globalThis.sockets = [];
+globalThis.socketMuette = false;
 
 // La synthese du navigateur. Stub volontairement bete : il ENREGISTRE ce qu'on lui demande
 // de dire, parce que c'est la seule chose qu'on veuille verifier — qu'une phrase coupee en
@@ -388,6 +408,12 @@ globalThis.MediaRecorder = function (flux, opts) {
   this.start = () => {
     if (globalThis.startEchoue) { const e = new Error("flux inactif"); e.name = "InvalidStateError"; throw e; }
     self.state = "recording";
+  };
+  // Une tranche par seconde, a la demande du test. C est ce que fait start(1000) dans la
+  // vraie vie, et c est ce qui permet a la page d avoir deja de quoi envoyer au moment ou
+  // elle meurt — sans ça, le filet du depart n aurait rien a sauver et le test le louperait.
+  this.tranche = (taille) => {
+    if (self.ondataavailable) self.ondataavailable({ data: { size: taille || 50000, type: self.mimeType } });
   };
   this.stop = () => {
     if (globalThis.recorderZombie) return;        // gele : ni etat, ni donnees, ni onstop
@@ -635,8 +661,13 @@ globalThis.WebSocket = function () {
   // utilisable. Le test la promeut explicitement en OPEN quand il veut simuler la reussite
   // de la connexion — sinon on testerait un comportement impossible.
   this.readyState = 0;
+  // Une socket qui MENT : readyState a OPEN, et pourtant rien ne part. C'est le cas reel —
+  // telephone verrouille, reseau qui bascule — et send() ne jette pas : il remplit un
+  // tampon. bufferedAmount est la seule chose qui le dise.
+  this.bufferedAmount = 0;
   this.send = (d) => {
     if (this.readyState !== 1) throw new Error("socket fermee");
+    if (globalThis.socketMuette) { this.bufferedAmount += d.length; return; }
     globalThis.envoyes.push(JSON.parse(d));
   };
   this.close = () => { this.readyState = 3; };

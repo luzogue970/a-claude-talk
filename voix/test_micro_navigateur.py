@@ -165,8 +165,13 @@ async def parcours():
                     await asyncio.sleep(0.1)
                 dire(len(recus) == 1 and recus[0] >= 0.3,
                      f"et ce que j'ai dit est arrive sur le PC, decode par ffmpeg : {recus!r} s")
-                dire(await cdp.attendre("/transcrit par essai/.test(document.getElementById('note-barre').textContent)"),
-                     "la page dit que c'est transcrit")
+                # Partir en pleine dictee ne passe plus par `fetch` : la page meurt avant la
+                # reponse. C'est `sendBeacon` qui emporte la parole, et il ne rend rien — la
+                # page dit donc ce qu'elle SAIT, et le dit pour le retour, puisque c'est la
+                # qu'on se demande si la phrase est partie.
+                dire(await cdp.attendre(
+                    "/parti au PC/.test(document.getElementById('note-barre').textContent)"),
+                     "la page dit, pour le retour, que la parole est bien partie")
 
                 # 3. Je reviens, j'appuie : ça enregistre DE NOUVEAU. C'est LE point.
                 await cdp.js("""

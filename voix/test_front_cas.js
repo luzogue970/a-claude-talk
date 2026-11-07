@@ -2288,6 +2288,7 @@ async function testerRelaisVocal() {
   microDemandes = 0; microAccorde = true; enregistreurs.length = 0; requetes.length = 0;
   noteBarre(null); champ.value = '';
   DELAI_SESSION_AUDIO = 0;        // l ordre se verifie, le repit ne se dort pas
+  DELAI_SECONDE_CHANCE = 5;       // une ouverture ratee est reessayee : pas la peine d attendre
   lecteur.src = 'https://exemple/une-reponse.mp3';   // une lecture tenait la session audio
   // `pause()` et pas `tick()` : l ouverture du micro attend desormais que la session audio
   // d iOS soit rendue avant de la reclamer. Sans ce repit, le micro ouvert par-dessus une
@@ -2429,10 +2430,12 @@ async function testerRelaisVocal() {
   dire(/transcrit par deepgram/.test(document.getElementById('note-barre').textContent || ''),
        'le succes nomme le moteur, en clair : ' + document.getElementById('note-barre').textContent);
 
-  // Micro refuse : la raison, tout de suite — pas un bouton allume sur du vide.
+  // Micro refuse : la raison, tout de suite — pas un bouton allume sur du vide. Elle a
+  // change de mot : « refuse par le systeme » et non plus « autorise le micro dans les
+  // reglages », parce que la mesure a montre que l autorisation etait accordee.
   microAccorde = false; noteBarre(null); enregistreurs.length = 0;
-  btnDicter.onclick(); await tick();
-  dire(/micro refusé/.test(document.getElementById('note-barre').textContent || ''),
+  btnDicter.onclick(); await pause();
+  dire(/refusé le micro/.test(document.getElementById('note-barre').textContent || ''),
        'un refus d autorisation est dit : ' + document.getElementById('note-barre').textContent);
   dire(enregistreurs.length === 0 && btnDicter.getAttribute('aria-pressed') === 'false',
        'et rien ne demarre');
@@ -2662,10 +2665,13 @@ async function testerMicroApresRetour() {
     microDiffere = false; microResolveurs.length = 0; startEchoue = false; microMuet = false;
     microAccorde = true; audioEchoue = false; audioLent = false; vocalEnAttente = null;
     echecsMicro = 0; recharges = 0; champ.value = ''; majBoutonDictee();
+    balises.length = 0; beaconRefuse = false; microRatesDAbord = 0;
+    erreurMicro = 'OverconstrainedError'; niveauMicro = 40;
   };
   DELAI_SESSION_AUDIO = 0; DELAI_GARDE_ARRET = 10; DELAI_DEMUTE = 10;
   DELAI_OUVERTURE_MICRO = 30; DELAI_ATTENTE_LIAISON = 0; DELAI_TOLERANCE_LIAISON = 0;
   DELAI_RECHARGE_MICRO = 5; DELAI_NIVEAU_MS = 10; MESURES_MIN = 5; niveauMicro = 40;
+  DELAI_SECONDE_CHANCE = 5;
   etatContexteAudio = 'running'; contexteBloque = false;
 
   titre('micro : le systeme ne repond ni oui ni non');
@@ -2680,7 +2686,7 @@ async function testerMicroApresRetour() {
   btnDicter.onclick(); await tick();
   dire(microDemandes === 1, 'un second appui pendant l ouverture n en lance pas une deuxieme');
   dire(/un instant/.test(note()), 'il dit ou on en est : ' + note());
-  await dormir(60);
+  await dormir(110);
   dire(ouvertureVocal === false && vocalEnCours === false,
        'un micro qui ne repond pas est abandonne au bout du delai, le bouton est rendu');
   dire(/ne répond pas/.test(note()) && /réessayer/.test(note()),
@@ -2695,25 +2701,34 @@ async function testerMicroApresRetour() {
 
   titre('micro : deux echecs de suite, la page se repare elle-meme');
   propre(); microSuspendu = true;
-  btnDicter.onclick(); await dormir(60);
-  btnDicter.onclick(); await dormir(60);
+  btnDicter.onclick(); await dormir(110);
+  btnDicter.onclick(); await dormir(110);
   dire(echecsMicro === 2, 'deux ouvertures ratees d affilee sont comptees');
   dire(/se recharge/.test(note()), 'et on annonce le rechargement : ' + note());
   await dormir(20);
   dire(recharges === 1, 'la page se recharge toute seule : c est ce qui rend le micro');
   // Mais jamais sur un brouillon : ce qui est dans la barre vaut plus que le micro.
   propre(); microSuspendu = true; champ.value = 'un brouillon pas encore parti';
-  btnDicter.onclick(); await dormir(60);
-  btnDicter.onclick(); await dormir(80);
+  btnDicter.onclick(); await dormir(110);
+  btnDicter.onclick(); await dormir(130);
   dire(recharges === 0, 'avec un brouillon dans la barre, on ne recharge pas');
   dire(/recharge la page/.test(note()) && /perdu/.test(note()),
        'on dit de le faire a la main, et ce que ça couterait : ' + note());
-  // Et un REFUS d autorisation n est pas un echec de la page : recharger n y changerait rien.
+  // Un « refus » d autorisation, lui, N EST PAS un refus — et c est une mesure qui l a dit.
+  // Sur 301 appuis reels, l autorisation etait accordee 275 fois ; les NotAllowedError
+  // arrivent toutes juste apres un retour dans l application, la ou la session de capture de
+  // WebKit n est pas encore revenue. L ancienne version ne les comptait pas, donc le seul
+  // filet qui rend vraiment le micro — le rechargement — ne se declenchait jamais, et le
+  // message accusait quelqu un d un refus qu il n avait pas donne.
   propre(); microAccorde = false;
-  btnDicter.onclick(); await pause();
-  btnDicter.onclick(); await pause();
-  dire(echecsMicro === 0 && recharges === 0,
-       'deux refus d autorisation ne font pas recharger : ce n est pas la page qui est cassee');
+  btnDicter.onclick(); await dormir(40);
+  dire(microDemandes === 2, 'un refus a droit a une seconde chance avant d etre cru');
+  dire(!/dans les réglages/.test(note()) && /réessayer/.test(note()),
+       'et on n accuse plus l autorisation sans preuve : ' + note());
+  btnDicter.onclick(); await dormir(40);
+  dire(echecsMicro === 2, 'deux refus d affilee sont comptes comme une panne de capture');
+  await dormir(20);
+  dire(recharges === 1, 'et la page se recharge : c est ce qui rend le micro');
   microAccorde = true;
 
   titre('micro : partir pendant que le systeme reflechit');
@@ -2757,6 +2772,126 @@ async function testerMicroApresRetour() {
        'apres le delai, le verdict : ' + note());
   dire(derniere().arretee === true, 'et le flux muet est rendu, pas garde ouvert');
   microMuet = false; DELAI_DEMUTE = 10;
+
+  titre('micro : le systeme COUPE la piste pendant qu on parle');
+  // Le defaut le plus couteux, et celui qu on vit : le petit son a sonne — il part apres
+  // start(), donc il ne ment pas —, on parle, et le systeme reprend le micro sans tuer la
+  // piste : il la rend seulement « muted ». Avant, c etait NOTE et rien d autre. On finissait
+  // sa phrase dans le vide et on l apprenait a l arrivee, par un message rouge. Douze fois
+  // dans les journaux reels.
+  propre(); DELAI_DEMUTE = 60; notes.length = 0;
+  btnDicter.onclick(); await pause();
+  dire(vocalEnCours === true && notes.length === 2 && notes[1] > notes[0],
+       'le son de confirmation a sonne : on croit, a juste titre, qu on est entendu');
+  derniere().muted = true; derniere().onmute();
+  dire(vocalEnCours === true, 'une coupure d une seconde ne coupe pas : iOS en fait tout le temps');
+  derniere().muted = false; derniere().onunmute();
+  await dormir(90);
+  dire(vocalEnCours === true, 'la piste revient : rien ne s est passe, et on n a rien dit');
+  btnDicter.onclick(); await pause();
+  // Mais une piste qui NE revient pas est un micro perdu, et se taire dessus est la faute.
+  propre(); DELAI_DEMUTE = 60; vibrations.length = 0;
+  btnDicter.onclick(); await pause();
+  enregistreurs[0].tranche(50000);          // une seconde de parole est deja dans la boite
+  derniere().muted = true; derniere().onmute();
+  await dormir(120);
+  dire(vocalEnCours === false, 'une piste qui reste muette arrete la dictee au lieu de la laisser courir');
+  dire(/coupé le micro/.test(note()), 'et le DIT, au lieu de laisser « transcrit par… » '
+       + 'ecraser la cause : ' + note());
+  dire(vibrations.length > 0, 'avec une alerte qu on sent : on ne regarde pas l ecran');
+  dire(requetes.some(r => /\/audio$/.test(r.url)),
+       'et ce qui a ete dit AVANT la coupure part quand meme : on ne le jette pas');
+  await pause();
+  dire(/coupé le micro/.test(note()) && /transcrit par/.test(note()),
+       'et la cause SURVIT au verdict : sinon on ne saurait jamais que la phrase est '
+       + 'tronquee, ni pourquoi Claude repond a cote : ' + note());
+  DELAI_DEMUTE = 10;
+
+  titre('micro : un enregistrement qui pese ne se jette pas sur une mesure');
+  // Mesure, sur les journaux reels : 141 Ko en 8 s et 115 Ko en 7 s ont ete mis a la poubelle
+  // avec « rien n a été capté ». Dans les deux cas la piste avait ete coupee en route — la
+  // mesure, qui demarre « suspended » sur iOS, ne s est reveillee que pendant la partie
+  // muette et a conclu sur elle. Un fichier qui pese n est pas un silence.
+  propre(); niveauMicro = 0; DELAI_NIVEAU_MS = 5; MESURES_MIN = 3; DELAI_SILENCE_MS = 5000;
+  btnDicter.onclick(); await pause();
+  enregistreurs[0].tranche(120000);         // de la parole, en quantite
+  await dormir(60);                         // le temps que la mesure conclue au silence
+  btnDicter.onclick(); await pause();
+  dire(requetes.some(r => /\/audio$/.test(r.url)),
+       'cent vingt kilo-octets declares muets partent quand meme : c est le PC qui tranche');
+  dire(/coupé en route/.test(note()), 'et on dit pourquoi on doute de la mesure : ' + note());
+  niveauMicro = 40; DELAI_NIVEAU_MS = 10; MESURES_MIN = 5; DELAI_SILENCE_MS = 3000;
+
+  titre('micro : une ouverture ratee a droit a une seconde chance');
+  // WebKit rend « OverconstrainedError Invalid constraint » sur { audio: true } — qui ne
+  // contraint RIEN — quand sa session de capture n est pas revenue d un passage en arriere-
+  // plan. Vu deux fois dans les journaux, les deux apres un aller-retour. Ce n est pas la
+  // demande qui est refusee : il n y a rien a corriger, il y a a redemander.
+  propre(); microRatesDAbord = 1; erreurMicro = 'OverconstrainedError';
+  btnDicter.onclick(); await dormir(40);
+  dire(microDemandes === 2, 'le micro est redemande une fois avant qu on declare forfait');
+  dire(vocalEnCours === true && enregistreurs.length === 1,
+       'et la seconde demande aboutit : l appui a bien enregistre, sans rien demander de plus');
+  dire(echecsMicro === 0, 'un essai rattrape ne compte pas comme un echec');
+  btnDicter.onclick(); await pause();
+  // Deux fois de suite, en revanche, c est un vrai refus du systeme, et on le dit.
+  propre(); microRatesDAbord = 2;
+  btnDicter.onclick(); await dormir(40);
+  dire(vocalEnCours === false && /micro indisponible/.test(note()),
+       'deux essais rates : on nomme la panne au lieu d inventer une cause : ' + note());
+
+  titre('micro : partir en pleine dictee n emporte plus la phrase');
+  // Mesure, sur 301 appuis reels : 9 pertes ou le micro avait bien demarre et ou PLUS RIEN
+  // n est trace ensuite — ni arret, ni envoi — dont cinq finissent sur « pagehide — en
+  // pleine dictée ». arreterVocal attend onstop, envoyerVocal attend un fetch : une page
+  // qu iOS range dans son cache arriere n a ni l un ni l autre. sendBeacon, si.
+  propre();
+  btnDicter.onclick(); await pause();
+  enregistreurs[0].tranche(60000);          // une seconde de parole, deja rendue par start(1000)
+  requetes.length = 0;
+  document.visibilityState = 'hidden'; declencher('visibilitychange');
+  dire(balises.length === 1 && /\/audio$/.test(balises[0].url),
+       'la parole part par sendBeacon AU MOMENT du depart, pas apres : '
+       + JSON.stringify(balises.map(b => b.url)));
+  dire(balises[0].corps && balises[0].corps.champs
+       && balises[0].corps.champs.some(ch => ch.n === 'audio'),
+       'dans le meme champ « audio » que l envoi normal : le PC ne voit pas la difference');
+  await pause();
+  dire(requetes.filter(r => /\/audio$/.test(r.url)).length === 0,
+       'et onstop, s il finit par venir, n envoie pas une seconde fois : '
+       + 'Claude recevrait deux messages pour une parole');
+  document.visibilityState = 'visible'; declencher('visibilitychange');
+  // Rien a sauver : on n envoie pas un entete de conteneur pour faire repondre « rien compris ».
+  propre();
+  btnDicter.onclick(); await pause();
+  document.visibilityState = 'hidden'; declencher('visibilitychange');
+  dire(balises.length === 0, 'une dictee qui n a encore rien capte ne declenche pas de balise');
+  document.visibilityState = 'visible'; declencher('visibilitychange');
+  await pause();
+
+  titre('micro : une trace perdue se voit, au lieu de se taire');
+  // socket.send() sur une socket morte-mais-OPEN ne jette pas : il remplit un tampon que
+  // personne ne videra. L etape etait perdue SANS TRACE DE SA PERTE — trois fois dans les
+  // journaux reels, un « getUserMedia a échoué » sans l appui qui l avait demande. Un numero
+  // qui saute se voit ; un trou ne se voit pas.
+  propre(); envoyes.length = 0; tracesEnAttente.length = 0;
+  tracerMicro('un essai');
+  tracerMicro('un autre');
+  const traces = envoyes.filter(o => o && o.cmd === 'trace').map(o => o.texte);
+  dire(traces.length === 2 && /#\d+$/.test(traces[1]),
+       'chaque trace porte son numero : ' + JSON.stringify(traces));
+  const nums = traces.map(t => Number(t.match(/#(\d+)$/)[1]));
+  dire(nums[1] === nums[0] + 1, 'et les numeros se suivent : un trou dans le journal se lit');
+  // Et la socket qui ment : OPEN, send() ne jette pas, et rien n arrive. Sans bufferedAmount
+  // l etape etait perdue en croyant etre partie.
+  envoyes.length = 0; socketMuette = true;
+  tracerMicro('pendant que la socket ment');
+  socketMuette = false;
+  dire(envoyes.length === 0 && tracesEnAttente.length === 1,
+       'une trace qui n est pas vraiment partie est GARDEE pour la liaison suivante');
+  dire(/#\d+$/.test(tracesEnAttente[0].texte),
+       'avec son numero, pour qu on sache a quel moment elle manquait');
+  tracesEnAttente.length = 0;
 
   titre('micro : le systeme reprend le micro pendant qu on parle');
   // Appel entrant, Siri, autre application : la piste se termine sans que la page change de
