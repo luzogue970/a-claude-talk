@@ -1534,27 +1534,20 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 .q.vide{border-style:dashed;color:#5a636e}
 .q.tiede{border-color:#8a6d1f} .q.tiede b{color:#e3b341}
 .q.chaud{border-color:var(--erreur)} .q.chaud b{color:#ffb3ad}
-/* Icone + libelle, alignes, et c'est l'icone qui porte l'etat : la rature apparait sur le
-   micro coupe, de sorte que la FORME dit l'etat autant que la couleur. Un bouton qui ne se
-   distingue que par sa teinte est illisible en plein soleil, et c'est la que le telephone
-   sert le plus. */
-/* 15 px, pas 17 : mesure par test_rendu, l'en-tete passait de 110 a 124 px — donc d'un rang
+/* Icone + libelle : la forme carree dit « arreter » avant que le mot soit lu, et elle le dit
+   encore en plein soleil, la ou une difference de teinte ne passe plus.
+   15 px, pas 17 : mesure par test_rendu, l'en-tete passait de 110 a 124 px — donc d'un rang
    a l'autre. Deux pixels d'icone en valent quatorze en hauteur de page, et cette hauteur-la
    est prise sur le flux a chaque defilement. */
-#micro .ico,#arreter .ico,#couper-lecture svg{width:15px;height:15px;fill:none;
+#arreter .ico,#couper-lecture svg{width:15px;height:15px;fill:none;
   stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
 #couper-lecture svg{width:17px;height:17px}
 #arreter .ico rect{fill:currentColor;stroke:none}
-#micro .rature{display:none}
-#micro.coupe .rature{display:block}
-#micro,#arreter{display:inline-flex;align-items:center;gap:6px;
+#arreter{display:inline-flex;align-items:center;gap:6px;
   background:transparent;color:var(--faible);border:1px solid var(--bord);
   border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:inherit;
   white-space:nowrap}
-#micro:hover,#arreter:not(:disabled):hover{border-color:#4b5563;color:var(--texte)}
-#micro.coupe{background:#3d1518;border-color:var(--erreur);color:#ffb3ad;font-weight:650}
-/* Un clic parti dans le vide doit se voir attendre, pas passer pour un clic sans effet. */
-#micro.attente{border-color:#8a6d1f;color:#e3b341;animation:pulse 1s ease-in-out infinite}
+#arreter:not(:disabled):hover{border-color:#4b5563;color:var(--texte)}
 #arreter:not(:disabled){border-color:#8a6d1f;color:#e3b341}
 #arreter:disabled{opacity:.35;cursor:default}
 #modele,#effort{background:var(--carte);color:var(--texte);border:1px solid var(--bord);
@@ -1769,9 +1762,14 @@ body{overflow-x:hidden}
 #joindre:hover{color:var(--texte)}
 #joindre svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.5;
   stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
-#dicter-ici svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;
+#dicter-ici svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
-#dicter-ici{color:#8b95a3}
+/* Plus gros que les autres ronds, et c'est mesurable, pas decoratif : la loi de Fitts dit que
+   le temps pour atteindre une cible depend de sa taille ET de sa distance. Dicter est le
+   geste qu'on fait le plus souvent sur cette page — c'est donc la plus grande cible, et la
+   plus proche du pouce. Les autres restent a 48 px : assez pour ne pas se rater, assez peu
+   pour que celui-la se distingue sans qu'on ait a lire son icone. */
+#dicter-ici{color:#8b95a3;width:56px;height:56px}
 /* Bleu, comme tout ce qui vient de TOI dans cette page — et comme le micro du PC juste a
    cote, qui porte deja cette couleur quand il est ouvert. Il etait rouge, et c'etait deux
    fautes en une : le rouge est la couleur de l'erreur ici, et un micro qui ecoute n'est pas
@@ -1820,8 +1818,16 @@ body{overflow-x:hidden}
 }
 /* Au bout de combien de silence le message part. Sous la barre, parce que c'est un
    réglage de la dictée, pas de la session. */
-/* La marge auto coupe la seconde ligne en deux : à gauche ce qui touche à la parole (micro,
-   couper la lecture, joindre), à droite le seul geste qui fait partir le message. */
+/* La marge auto coupe la seconde ligne en deux, et la coupure suit le POUCE, pas la logique
+   du code. Un telephone se tient d'une main : l'arc confortable du pouce droit est le coin
+   bas-droit, et le bas-GAUCHE est presque aussi loin que le haut de l'ecran. Tout ce qui se
+   presse a chaque tour vit donc a droite — lire, dicter, envoyer — et ce qui ne sert qu'a
+   l'occasion reste a gauche : joindre une photo, et le micro du PC qu'un telephone n'ouvre
+   jamais. C'est la seule raison de l'ordre, et elle vaut pour la main droite comme pour la
+   gauche : la cible la plus grande est au centre-droit, pas dans le coin.
+   « couper la lecture » reste a gauche malgre son urgence, parce qu'il apparait et disparait :
+   place a droite, il decalerait le micro sous le pouce en pleine phrase. Un bouton qui bouge
+   se rate plus surement qu'un bouton un peu loin. Sur telephone il est masque de toute façon. */
 #depart{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
 /* Pendant qu'on dicte, la barre montre que ce texte n'est pas encore le tien. */
 #saisie.dictee{border-color:var(--toi);color:#8fd6de;font-style:italic}
@@ -2107,13 +2113,20 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   /* Reduit a rien, il reste son point colore : une pastille de huit pixels qui dit encore
      « ça se reconnecte » ou « c'est perdu ». Mieux qu'un mot coupe en deux. */
   #etat::before { flex: none; }
-  .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  /* Alignes a DROITE, et seulement sur petit ecran : c'est le cote ou se trouve le pouce
+     d'une main qui tient le telephone, et le haut de l'ecran est deja la zone la plus
+     penible a atteindre — autant ne pas y ajouter la traversee complete de la largeur.
+     Sur grand ecran la souris ne connait pas cette peine, et le bord gauche reste le bon
+     bord pour LIRE une rangee. On ne deplace donc que ce qui se presse. */
+  .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px;
+    justify-content: flex-end; }
   .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
-  .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px; }
+  .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px;
+    justify-content: flex-end; }
   #alerte-entete { order: 1; flex: 0 1 auto; min-width: 0; max-width: 100%;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pupitre { order: 4; width: 100%; font-size: 12px; }
-  #activite { order: 5; width: 100%; gap: 5px; }
+  #pupitre { order: 4; width: 100%; font-size: 12px; justify-content: flex-end; }
+  #activite { order: 5; width: 100%; gap: 5px; justify-content: flex-end; }
   .act { font-size: 11px; padding: 2px 8px; }
   .rang-bas { order: 9; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
   #filtres, #compteurs {
@@ -2168,15 +2181,24 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      que les mesures propres au pouce — cibles a 44 px minimum, et un champ a 16 px sans
      quoi iOS zoome dessus a la mise au point et desaxe toute la page. */
   #saisie-barre { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
-  /* 40 et non 44 : trois ronds, un selecteur et deux boutons doivent tenir sur UNE rangee.
-     A 44 ils debordaient de quelques pixels, et le debordement coute une rangee entiere —
-     donc un tiers de la hauteur de la barre, pris sur la conversation. 40 px reste au-dessus
-     de la cible tactile confortable. */
-  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 40px; height: 40px; }
+  /* 44 px, et c'est un plancher, pas un choix de gout : les regles d'accessibilite d'Apple
+     comme celles de Google posent 44 px (44 pt / 48 dp) comme la plus petite cible qu'un
+     doigt atteint sans viser. Cette barre etait a 40 — en dessous des deux — et ça se
+     sentait exactement comme « le bouton est un peu petit ».
+     Elle y etait pour une bonne raison, qui a disparu : il fallait loger trois ronds, un
+     selecteur de delai et deux boutons sur UNE rangee, et a 44 px ça debordait. Le selecteur
+     de delai et « retenir » n'existent plus, et sur un telephone le micro du PC est masque :
+     il reste trois ronds et « envoyer ». La place est revenue, on rend les pixels au doigt. */
+  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 44px; height: 44px; }
+  #dicter-ici { width: 52px; height: 52px; }
   /* Quand CET appareil sait ecouter, le micro du PC n'a rien a faire ici : on n'est pas
-     dans la piece ou il se trouve. Il reste pilotable depuis l'en-tete, ou il a toujours
-     ete. Sans ce retrait, la rangee de boutons passait a deux lignes — et une barre de
-     saisie qui occupe trois lignes sur un telephone ne laisse plus voir la conversation. */
+     dans la piece ou il se trouve. Sans ce retrait, la rangee de boutons passait a deux
+     lignes — et une barre de saisie qui occupe trois lignes sur un telephone ne laisse plus
+     voir la conversation.
+     Consequence assumee, depuis que l'en-tete n'a plus son bouton : depuis un telephone, il
+     n'existe aucun moyen TACTILE de couper le micro du PC. L'ordre vocal « coupe le micro »
+     le fait toujours, et c'est le geste qu'on a quand on parle. Un bouton qui pilote une
+     machine qu'on ne voit pas ne valait pas la place qu'il prenait. */
   #composer.dictee-locale #micro-bas { display: none; }
   /* Mesure a 390 px : 384 px de contrôles pour 366 disponibles — et 432 dès qu'une lecture
      joue. Deux rangées de boutons sous le champ, sur un écran où la conversation se joue
@@ -2187,7 +2209,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      — le délai règle au bout de combien de silence la dictée du PC part toute seule. En
        dictant depuis le téléphone, c'est le doigt qui décide : ce réglage ne s'applique à
        rien. Il reste sur grand écran, où il a tout son sens. */
-  #composer.dictee-locale #couper-lecture,
+  #composer.dictee-locale #couper-lecture { display: none; }
   #saisie-barre form { gap: 8px; }
   #depart { gap: 5px; }
   #saisie {
@@ -2230,8 +2252,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      espaces, donc quinze de trop, et « envoyer » repartait sur une troisieme ligne.
      Une barre de saisie qui occupe trois lignes sur un telephone ne laisse plus voir la
      conversation : c'est la hauteur qu'on defend ici, pas l'esthetique.
-     On reprend sur les marges internes, jamais sous 40 px de cible tactile. */
-  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 40px; height: 40px; }
+     On reprend sur les marges internes, jamais sous les 44 px de cible tactile. */
+  #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 44px; height: 44px; }
+  /* 50 et non 52 : au cas, rare, ou CET appareil ne sait pas enregistrer, les cinq ronds
+     restent sur la rangee jusqu'a 360 px de large — la plus etroite qu'on rencontre. */
+  #dicter-ici { width: 50px; height: 50px; }
   #composer { gap: 8px 6px; }
   #depart { gap: 4px; }
   #envoyer { padding: 0 11px; font-size: 13px; }
@@ -2288,10 +2313,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
        selon la largeur de la fenêtre, et on ne savait plus quoi lire où. -->
   <span id="pupitre" class="zone"></span>
   <span class="zone zone-controles">
-    <button id="micro" title="couper le micro (touche m)"><svg class="ico" viewBox="0 0 24 24"
-        aria-hidden="true"><rect x="9.2" y="3" width="5.6" height="10.4" rx="2.8"/>
-        <path d="M5.8 11.4a6.2 6.2 0 0 0 12.4 0"/><path d="M12 17.6V21"/>
-        <path class="rature" d="M4.6 20.4 19.4 3.6"/></svg><span class="lib">micro</span></button>
+    <!-- Le micro du PC n'a plus de bouton ICI. Il en avait un depuis le debut, et il ne
+         servait a rien : le seul micro qu'on ouvre depuis un telephone est celui du
+         telephone, et il s'ouvre en bas, dans la barre. Le rond de la barre (#micro-bas)
+         reste, pour qui travaille devant la machine. -->
     <button id="arreter" title="arrêter le travail en cours (touche s)" disabled><svg class="ico"
         viewBox="0 0 24 24" aria-hidden="true"><rect x="6.4" y="6.4" width="11.2" height="11.2"
         rx="2.6"/></svg><span class="lib">arrêter</span></button>
@@ -2424,10 +2449,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <textarea id="saisie" rows="1" class="une-ligne"
               placeholder="écrire au lieu de parler"
               aria-label="message à envoyer"></textarea>
-    <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
-         regard est quand on dicte : le texte s'y ecrit, et la relecture s'y fait. Devoir
-         remonter en haut pour couper l'ecoute avant de corriger un mot casse le geste. Les
-         deux boutons pilotent le meme etat — il n'y a qu'un micro. -->
+    <!-- Le micro du PC, et il n'a plus que ce bouton-ci : celui de l'en-tete a ete retire,
+         il ne servait a rien. C'est au bas de la page que le regard est quand on dicte — le
+         texte s'y ecrit, et la relecture s'y fait. A gauche, parce que depuis un telephone on
+         n'est pas dans la piece ou ce micro se trouve : il est masque la-bas, et ici il ne
+         prend pas la place du pouce. -->
     <button id="micro-bas" type="button" class="micro-rond"
             title="couper ou rouvrir le micro (touche m)">
       <span class="ondes"><i></i><i></i><i></i><i></i><i></i></span>
@@ -2441,42 +2467,48 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
             title="couper la lecture en cours (ou dis « chut »)">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="6.4" y="6.4" width="11.2" height="11.2" rx="2.6"/></svg></button>
-    <!-- Lire les reponses SUR CET APPAREIL. Rien a voir avec le bouton precedent : celui-la
-         coupe la voix qui sort du PC, celui-ci fait parler le telephone qu'on tient.
-         Eteint au chargement, toujours, et ce n'est pas un reglage prudent — c'est une
-         contrainte de WebKit. iOS refuse toute synthese qui ne descend pas d'un geste de
-         l'utilisateur : une page qui tenterait de parler toute seule a l'ouverture resterait
-         muette pour le reste de la session, sans erreur. Le premier appui sert donc de clef,
-         et c'est exactement le geste demande. -->
-    <button id="lire-ici" type="button" class="micro-rond" hidden
-            aria-pressed="false" title="lire les réponses sur cet appareil">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path
-        d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Z"/>
-        <path class="onde1" d="M15.6 9.2a4 4 0 0 1 0 5.6"/>
-        <path class="onde2" d="M18.1 6.8a7.5 7.5 0 0 1 0 10.4"/></svg>
-    </button>
-    <!-- Dicter AVEC CET APPAREIL. Le micro rond, a gauche, pilote le micro du PC — celui
-         qui tient la session et la chaine de reconnaissance. Vu du telephone, il est donc
-         inutilisable : on n'est pas dans la piece. Celui-ci fait ecouter le telephone qu'on
-         tient, et ecrit dans la barre comme le ferait la dictee du PC. -->
-    <button id="dicter-ici" type="button" class="micro-rond" hidden
-            aria-pressed="false" title="dicter avec le micro de cet appareil">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="9.2" y="3" width="5.6" height="10.4" rx="2.8"/>
-        <path d="M5.8 11.4a6.2 6.2 0 0 0 12.4 0"/><path d="M12 17.6V21"/></svg>
-    </button>
-    <!-- Joindre une image. Le bouton est a cote du micro parce qu'il repond au meme
-         besoin : dire quelque chose qu'on ne veut pas taper. -->
+    <!-- Joindre une image. A gauche, volontairement : c'est un geste de circonstance, pas un
+         geste de chaque tour. Lui donner la place du pouce la prendrait a ce qui sert dix
+         fois plus souvent. -->
     <label id="joindre" class="micro-rond" title="joindre une photo ou une capture">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path
         d="M3.75 8.75h2.9l1.4-2.5h7.9l1.4 2.5h2.9a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H3.75a1 1 0
            0 1-1-1v-8.5a1 1 0 0 1 1-1Z"/><circle cx="12" cy="14" r="3.4"/></svg>
       <input type="file" accept="image/*" multiple hidden>
     </label>
-    <!-- Un seul geste de depart, parce qu'il n'y en a plus qu'un : rien ne part sans cet
-         appui. « quand partir » et « retenir » reglaient un envoi automatique qui n'existe
-         plus. -->
+    <!-- La zone du pouce : lire, dicter, envoyer, dans l'ordre ou la main les rencontre.
+         Rien ne part sans l'appui sur « envoyer » — « quand partir » et « retenir » reglaient
+         un envoi automatique qui n'existe plus.
+         « envoyer » reste le dernier, a l'extremite : c'est la place qu'il occupe dans toutes
+         les messageries, et une habitude de dix ans vaut mieux qu'un rangement plus logique.
+         Il est de surcroit DESACTIVE tant que la barre est vide — donc pendant toute la
+         dictee, la seule cible vivante sous le pouce est le micro. On ne peut pas se tromper
+         de bouton quand un seul repond. -->
     <div id="depart">
+      <!-- Lire les reponses SUR CET APPAREIL. Rien a voir avec le bouton precedent : celui-la
+           coupe la voix qui sort du PC, celui-ci fait parler le telephone qu'on tient.
+           Eteint au chargement, toujours, et ce n'est pas un reglage prudent — c'est une
+           contrainte de WebKit. iOS refuse toute synthese qui ne descend pas d'un geste de
+           l'utilisateur : une page qui tenterait de parler toute seule a l'ouverture resterait
+           muette pour le reste de la session, sans erreur. Le premier appui sert donc de clef,
+           et c'est exactement le geste demande. -->
+      <button id="lire-ici" type="button" class="micro-rond" hidden
+              aria-pressed="false" title="lire les réponses sur cet appareil">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path
+          d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Z"/>
+          <path class="onde1" d="M15.6 9.2a4 4 0 0 1 0 5.6"/>
+          <path class="onde2" d="M18.1 6.8a7.5 7.5 0 0 1 0 10.4"/></svg>
+      </button>
+      <!-- Dicter AVEC CET APPAREIL. Le micro rond, a gauche, pilote le micro du PC — celui
+           qui tient la session et la chaine de reconnaissance. Vu du telephone, il est donc
+           inutilisable : on n'est pas dans la piece. Celui-ci fait ecouter le telephone qu'on
+           tient, et ecrit dans la barre comme le ferait la dictee du PC. -->
+      <button id="dicter-ici" type="button" class="micro-rond" hidden
+              aria-pressed="false" title="dicter avec le micro de cet appareil">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9.2" y="3" width="5.6" height="10.4" rx="2.8"/>
+          <path d="M5.8 11.4a6.2 6.2 0 0 0 12.4 0"/><path d="M12 17.6V21"/></svg>
+      </button>
       <button id="envoyer" type="submit" disabled>envoyer</button>
     </div>
   </form>
@@ -3654,7 +3686,6 @@ function viderFile() {
 function reconnecter() {
   rebrancherMaintenant("une commande attend la liaison");
 }
-const btnMicro = document.getElementById("micro");
 const microBas = document.getElementById("micro-bas");
 // La parole est-elle détectée EN CE MOMENT. Vient du serveur (le VAD), jamais d'une
 // supposition : une animation qui bouge sans raison donnerait une fausse confirmation d'être
@@ -3663,13 +3694,11 @@ const microBas = document.getElementById("micro-bas");
 // ce qu'on sait (« ça t'entend »), pas ce qu'on n'a pas (« à ce volume »).
 let paroleDetectee = false;
 
-// Un seul endroit décide de l'apparence des DEUX boutons : il n'y a qu'un micro, et deux
-// mises à jour séparées finissent toujours par se contredire — le symptôme serait le pire
-// possible, croire qu'on est écouté alors qu'on ne l'est pas.
+// Le micro du PC n'a plus qu'un bouton, celui de la barre. Il en a eu deux — un dans
+// l'en-tete, un en bas — et c'etait deja une seule fonction pour les tenir a jour : deux
+// mises a jour separees finissent toujours par se contredire, et le symptome serait le pire
+// possible, croire qu'on est ecoute alors qu'on ne l'est pas.
 function majMicro() {
-  btnMicro.querySelector(".lib").textContent = microActif ? "micro" : "micro coupé";
-  btnMicro.className = microActif ? "" : "coupe";
-  btnMicro.title = (microActif ? "couper" : "rouvrir") + " le micro (touche m)";
   if (!microBas) return;
   microBas.className = "micro-rond " + (!microActif ? "coupe"
     : paroleDetectee ? "ouvert parle" : "ouvert");
@@ -3684,11 +3713,11 @@ function basculerMicro() {
   // Retour immediat : un clic doit toujours se voir, meme si la reponse tarde. L'etat REEL
   // reste celui du serveur — c'est une attente affichee, pas une verite affirmee.
   const parti = envoyerCmd({ cmd: "micro", actif: voulu });
-  btnMicro.classList.toggle("attente", !parti);
-  if (!parti) btnMicro.title = "en attente de la reconnexion…";
+  if (!microBas) return;
+  microBas.classList.toggle("attente", !parti);
+  if (!parti) microBas.title = "en attente de la reconnexion…";
 }
-btnMicro.onclick = basculerMicro;
-if (microBas) microBas.onclick = basculerMicro;   // le même geste, à l'autre bout de la page
+if (microBas) microBas.onclick = basculerMicro;
 {
   const bc = document.getElementById("couper-lecture");
   if (bc) bc.onclick = () => envoyerCmd({ cmd: "couper_lecture" });
@@ -4884,7 +4913,7 @@ function recevoir(e, etat = false) {
       // alors que plus rien n'était entendu — une confirmation FAUSSE d'être écouté, donc
       // exactement le défaut que cet indicateur est censé éviter.
       paroleDetectee = false;
-      btnMicro.classList.remove("attente");   // le serveur a repondu : plus d'attente
+      if (microBas) microBas.classList.remove("attente");  // le serveur a repondu
       majMicro();
     }
     if (e.genre === "travail") {

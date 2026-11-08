@@ -303,11 +303,20 @@ setTimeout(async () => {
   });
 
   releve.entete = document.querySelector("header").offsetHeight;
+  // Dicter et lire sont caches tant que le navigateur n'a pas dit qu'il savait enregistrer
+  // ou parler. On les decouvre pour les mesurer : c'est l'etat dans lequel un telephone les
+  // voit, donc le seul qui nous interesse ici.
+  for (const id of ["dicter-ici", "lire-ici"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = false;
+  }
+  releve.entete = document.querySelector("header").offsetHeight;
   releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
                     modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct"),
                     microBas: b("#micro-bas"), champBoite: b("#saisie"),
                     depart: b("#depart"), envoi: b("#envoyer"), forme: b("#composer"),
-                    travail: b("#travail"),
+                    travail: b("#travail"), dicter: b("#dicter-ici"), lire: b("#lire-ici"),
+                    joindre: b("#joindre"),
                     convs: b("#convs") };
   releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
@@ -455,6 +464,34 @@ if (bo.microBas && bo.champBoite) {
   dire(bo.microBas.l <= bo.champBoite.l + 1,
        `et il ouvre la ligne, du cote ou va la main (${bo.microBas.l} vs ${bo.champBoite.l})`);
 }
+// --- la zone du pouce : mesuree, pas supposee ---------------------------------------------
+// Un telephone se tient d'une main, et l'arc confortable du pouce est le coin bas-droit. Les
+// deux gestes de CHAQUE tour — dicter, envoyer — doivent donc etre a droite, et dicter doit
+// etre la plus grande cible de la barre : c'est celle qu'on cherche en premier, et la loi de
+// Fitts dit que le temps pour l'atteindre depend de sa taille autant que de sa distance.
+if (bo.dicter && bo.lire && bo.joindre && bo.envoi) {
+  dire(bo.dicter.l > bo.joindre.l,
+       `dicter est a DROITE de joindre (${bo.dicter.l} > ${bo.joindre.l})`);
+  dire(bo.lire.l > bo.joindre.l,
+       `lire aussi (${bo.lire.l} > ${bo.joindre.l})`);
+  dire(bo.dicter.l > bo.lire.l && bo.envoi.l > bo.dicter.l,
+       `et l'ordre sous le pouce est lire · dicter · envoyer `
+       + `(${bo.lire.l} < ${bo.dicter.l} < ${bo.envoi.l})`);
+  // 44 px est le plancher pose par Apple comme par Google. La barre etait a 40 sur telephone,
+  // en dessous des deux — et c'est exactement ce que « le bouton est un peu petit » decrit.
+  dire(bo.lire.w >= 44 && bo.joindre.w >= 44,
+       `les ronds tiennent le plancher tactile de 44 px (${bo.lire.w}, ${bo.joindre.w})`);
+  dire(bo.dicter.w > bo.lire.w,
+       `et dicter est plus gros que les autres (${bo.dicter.w} > ${bo.lire.w} px)`);
+  // Deborder coute une rangee entiere sous le champ, donc un tiers de la hauteur de la barre,
+  // pris sur la conversation. C'est la raison pour laquelle ces tailles ont ete rabotees une
+  // premiere fois : si les agrandir fait repasser la barre a trois lignes, on a recule.
+  dire(bo.envoi.l + bo.envoi.w <= bo.forme.l + bo.forme.w + 1
+       && bo.dicter.t >= bo.champBoite.b - 1,
+       `et la rangee tient toujours sur UNE ligne sous le champ `
+       + `(${bo.envoi.l + bo.envoi.w} <= ${bo.forme.l + bo.forme.w})`);
+}
+
 // Le champ prend TOUTE la largeur de la barre : c'est la mesure qui dit que rien ne partage
 // sa ligne. Un controle revenu a cote de lui la ferait retomber sous la largeur du formulaire.
 if (bo.champBoite && bo.forme) {

@@ -718,14 +718,14 @@ envoyes.length = 0; enAttente = []; microActif = true; reconnexionPrevue = false
 basculerMicro();
 dire(envoyes.length === 1 && envoyes[0].cmd === 'micro' && envoyes[0].actif === false,
      'socket vivante : la commande part immediatement');
-dire(!btnMicro.classList.contains('attente'), 'aucune attente affichee');
+dire(!microBas.classList.contains('attente'), 'aucune attente affichee');
 
 socket.readyState = 3; envoyes.length = 0; enAttente = []; reconnexionPrevue = false;
 basculerMicro();
 dire(envoyes.length === 0, 'socket morte : rien n est parti (attendu)');
 dire(enAttente.length === 1 && enAttente[0].actif === false,
      'mais la commande est en file, pas perdue');
-dire(btnMicro.classList.contains('attente'), 'le bouton montre qu il attend');
+dire(microBas.classList.contains('attente'), 'le bouton montre qu il attend');
 
 basculerMicro(); basculerMicro();
 dire(enAttente.length === 1,
@@ -918,18 +918,22 @@ dire(envoyes.some(o => o.cmd === 'nouvelle_conversation'),
      'et le clic est branche la aussi — les deux branches du dessin doivent l armer');
 
 // ---- le micro du bas ---------------------------------------------------------------------
-titre('deux boutons, un seul micro');
+titre('le micro du PC n a plus qu un bouton, et il est en bas');
 // Le geste que ça sert : couper le micro pour corriger le texte, le rouvrir pour continuer.
-// Devoir remonter dans l en-tete pour ça casse le geste — le regard est en bas, ou le texte
-// s ecrit. Mais il n y a qu UN micro : deux mises a jour separees finiraient par se
-// contredire, et le symptome serait de croire qu on est ecoute alors qu on ne l est pas.
+// Il y a eu DEUX boutons pour ça, un dans l en-tete et un dans la barre. Celui du haut est
+// parti : depuis un telephone on n est pas dans la piece ou ce micro se trouve, et le seul
+// micro qu on y ouvre est celui de l appareil (#dicter-ici). Deux boutons pour un seul etat,
+// c etaient surtout deux mises a jour qui finissent par se contredire — et le symptome
+// serait le pire possible : croire qu on est ecoute alors qu on ne l est pas.
+dire(!/id="micro"/.test(__html),
+     'plus de bouton micro dans l en-tete — il ne pilotait rien d atteignable d ici');
 const microBasEl = document.getElementById('micro-bas');
 emettre({ genre: 'micro', actif: true, voulu: true, bail: true });
-dire(/ouvert/.test(microBasEl.className) && btnMicro.className === '',
-     'micro ouvert : les deux boutons le disent (' + microBasEl.className + ')');
+dire(/ouvert/.test(microBasEl.className),
+     'micro ouvert : le bouton de la barre le dit (' + microBasEl.className + ')');
 emettre({ genre: 'micro', actif: false, voulu: false, bail: true });
-dire(/coupe/.test(microBasEl.className) && /coupe/.test(btnMicro.className),
-     'micro coupe : les deux aussi (' + microBasEl.className + ')');
+dire(/coupe/.test(microBasEl.className),
+     'micro coupe : il le dit aussi (' + microBasEl.className + ')');
 dire(/rouvrir/.test(microBasEl.title) && /corriger le texte/.test(microBasEl.title),
      'et son infobulle dit le geste, pas seulement l etat');
 
@@ -946,11 +950,38 @@ emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5, fin: Date.now() + 500
 dire(!/parle/.test(microBasEl.className),
      'le silence commence : les ondes s arretent, le decompte prend le relais');
 
-// Cliquer en bas fait la meme chose que cliquer en haut.
 socket.readyState = 1;
 envoyes.length = 0;
 microBasEl.onclick();
 dire(envoyes.some(o => o.cmd === 'micro'), 'le bouton du bas envoie bien l ordre micro');
+
+// ---- la zone du pouce --------------------------------------------------------------------
+titre('ce qu on presse a chaque tour est du cote du pouce');
+// Un telephone se tient d une main : l arc confortable du pouce droit est le coin bas-droit.
+// Le bas-GAUCHE est presque aussi penible a atteindre que le haut de l ecran. Dicter et
+// envoyer sont les deux gestes de CHAQUE tour — ils doivent donc etre a droite, et dicter
+// doit etre la plus grosse cible des deux, parce que c est celui qu on cherche en premier.
+// Joindre une photo est un geste de circonstance : il reste a gauche, et c est voulu.
+// Mesure sur le BALISAGE, pas sur le DOM : la doublure de ce harnais est plate, elle ne
+// construit pas d arbre. C est de toute façon l ordre de la source qui decide ce que la main
+// rencontre, puisque #depart est le dernier enfant du formulaire et qu il le ferme.
+const ouDansBarre = (id) => __html.indexOf('id="' + id + '"');
+dire(ouDansBarre('depart') > 0 && ouDansBarre('dicter-ici') > ouDansBarre('depart'),
+     'dicter est dans la zone de droite, sous le pouce');
+dire(ouDansBarre('lire-ici') > ouDansBarre('depart'),
+     'lire aussi — on le presse pour ecouter la reponse, pas une fois par jour');
+dire(ouDansBarre('joindre') > 0 && ouDansBarre('joindre') < ouDansBarre('depart'),
+     'joindre reste a gauche : situationnel, il ne vole pas la place du pouce');
+dire(ouDansBarre('micro-bas') > 0 && ouDansBarre('micro-bas') < ouDansBarre('depart'),
+     'le micro du PC reste a gauche : masque sur telephone, inutile sous le pouce');
+// « couper la lecture » apparait et disparait. Place a droite il decalerait le micro sous le
+// pouce en pleine phrase, et un bouton qui bouge se rate plus surement qu un bouton un peu
+// loin. C est la seule raison pour laquelle il n y est pas, malgre son urgence.
+dire(ouDansBarre('couper-lecture') > 0 && ouDansBarre('couper-lecture') < ouDansBarre('depart'),
+     'couper la lecture reste a gauche : il va et vient, il ne doit rien decaler');
+dire(ouDansBarre('envoyer') > ouDansBarre('dicter-ici') && ouDansBarre('dicter-ici') > ouDansBarre('lire-ici'),
+     'et l ordre sous le pouce est lire · dicter · envoyer — « envoyer » ferme la marche, '
+     + 'la ou toutes les messageries le mettent');
 
 // ---- la sequence REELLE du moteur de tete ------------------------------------------------
 titre('la dictee suit AssemblyAI, mesure sur une vraie phrase');
