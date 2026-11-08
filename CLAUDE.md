@@ -183,3 +183,35 @@ l'historique dans un fichier. Il part donc juste après `tableau.demarrer()`.
 `voix/test_historique_tot.py` tient les trois, et vérifie dans la source que le
 rejeu part bien **avant** `worker.start()` : c'est tout l'objet du correctif, et
 c'est la première chose qu'un refactor remettrait au mauvais endroit.
+
+### Un transcript n'a pas de taille bornée : on en lit la FIN, jamais le tout
+
+Le 8 novembre 2026, rouvrir la conversation d'insnap prenait **deux minutes** et
+laissait la page vide tout ce temps. Le transcript de la session pesait **334 Mo**,
+et `get_session_messages` le chargeait **entier** — mesuré : **164 secondes** et
+1,9 Go de RSS sur une machine qui en a 4,7 — pour en tirer les lignes affichées.
+
+Or `rejouer_session` renvoie déjà `evenements[-limite:]` : **tout ce qui précède
+était lu, parsé, puis jeté.** On se place donc à `taille - REJEU_OCTETS` (8 Mo) et
+on lit la fin. Même résultat à l'écran, **164 s → 1,1 s**.
+
+Trois choses que le raccourci a coûtées, et qu'il ne faut pas redéfaire :
+
+- **La première ligne du budget est jetée** : elle est coupée en deux par la
+  position de départ. L'oublier ne lève rien — l'erreur est avalée ligne par
+  ligne — ça mange juste le plus ancien message, en silence.
+- **On filtre avant de parser** (`b'"message"' not in ligne`), la même leçon que
+  `poids_contexte` : c'est elle qui fait la différence entre une seconde et une
+  minute.
+- **`isSidechain` est écarté.** Le travail intérieur d'un sous-agent n'est pas la
+  conversation ; le rejouer ferait apparaître, sous le nom de l'utilisateur, des
+  consignes qu'il n'a jamais écrites. Le SDK le faisait pour nous.
+
+Le repli par le SDK reste, pour le seul cas où le fichier n'est pas là où on
+l'attend. `test_rejeu_gros` piège `get_session_messages` : s'il est appelé alors
+que le fichier existe, le test tombe.
+
+Et la conséquence qu'on ne voyait pas : pendant ces deux minutes, la page de
+l'agent ne répondait pas, donc le lanceur du tableau le déclarait mort et **tuait
+son groupe de processus**. Le poids du transcript ne ralentissait pas l'ouverture,
+il l'empêchait.

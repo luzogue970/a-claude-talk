@@ -713,6 +713,20 @@ REJEU_MAX = 2000
 # outil a rendu quelque chose, et son debut.
 RESULTAT_MAX = 400
 
+# Combien d'octets de la FIN du transcript on relit. Une transcription de Claude Code n'a
+# aucune taille bornee : celle d'insnap pesait 334 Mo le 8 novembre 2026, et le chargement
+# complet du SDK en tirait les 21 lignes qu'on affiche en 164 SECONDES, pour 1,9 Go de RSS
+# sur une machine qui en a 4,7. Pendant ce temps la page de l'agent ne repondait pas, le
+# lanceur le declarait mort et tuait son groupe de processus : « je reviens sur la
+# conversation et elle rouvre a neuf ». Le cout etait invisible tant que les transcripts
+# restaient petits ; il ne l'est plus.
+#
+# On ne lit donc que la fin. Ce n'est pas une approximation : `rejouer_session` renvoie
+# deja `evenements[-limite:]`, donc tout ce qui precede etait parse pour etre jete. Huit
+# megaoctets couvrent tres largement les 2 000 evenements de REJEU_MAX — la session de
+# soixante tours qui en produit 1 200 pese 5,6 Mo en entier.
+REJEU_OCTETS = 8 * 1024 * 1024
+
 
 # Ce que la machine glisse dans le fil SOUS LE ROLE « user », et que l'utilisateur n'a jamais
 # tape. Mesure du 13 octobre 2026 sur les 1 982 messages « user » a contenu texte de toutes
@@ -779,6 +793,74 @@ def libelle_injecte(texte: str) -> str:
     return "message inséré par la machine"
 
 
+class _Message:
+    """Juste assez pour que la boucle de rejeu ne sache pas d'ou vient la ligne.
+
+    `rejouer_session` ne lit qu'un attribut du message, `.message`. Reproduire ca ne
+    demande pas le SDK — et le SDK, lui, demande le fichier entier."""
+
+    __slots__ = ("message",)
+
+    def __init__(self, charge: dict):
+        self.message = charge
+
+
+def fichier_de_session(sid: str, dossier: str | None = None) -> Path | None:
+    """Le `.jsonl` d'une session, s'il existe."""
+    if not sid or not SESSIONS.is_dir():
+        return None
+    for fichier in SESSIONS.glob(f"*/{sid}.jsonl"):
+        return fichier
+    return None
+
+
+def messages_de_la_fin(sid: str, dossier: str | None = None,
+                       octets: int = REJEU_OCTETS) -> list | None:
+    """Les derniers messages du transcript, lus par la FIN du fichier.
+
+    Renvoie None si le fichier est introuvable — a l'appelant de se rabattre sur le SDK.
+
+    Un fichier plus petit que le budget est lu en entier : la lecture par la fin ne doit
+    rien changer au cas courant, qui est le seul que les tests voyaient jusqu'ici.
+    Au-dela, on se place a `taille - octets` et on JETTE la premiere ligne, forcement
+    coupee en deux. L'oublier donnerait un `json.JSONDecodeError` sur la ligne la plus
+    ancienne a chaque rejeu d'une grosse conversation — une erreur qui ne se voit pas,
+    puisqu'elle est avalee ligne par ligne, mais qui mange un message.
+    """
+    fichier = fichier_de_session(sid, dossier)
+    if fichier is None:
+        return None
+    messages: list = []
+    try:
+        taille = fichier.stat().st_size
+        with fichier.open("rb") as fh:
+            if taille > octets:
+                fh.seek(taille - octets)
+                fh.readline()
+            for brute in fh:
+                # Filtrer avant de parser : la meme lecon que `poids_contexte`, et c'est
+                # elle qui fait la difference entre une seconde et une minute.
+                if b'"message"' not in brute:
+                    continue
+                try:
+                    d = json.loads(brute.decode("utf-8", "replace"))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                # Le travail interieur d'un sous-agent n'est pas la conversation : le
+                # rejouer ferait apparaitre, sous le nom de l'utilisateur, des consignes
+                # qu'il n'a jamais ecrites. Le direct ne les publie pas davantage.
+                if d.get("isSidechain"):
+                    continue
+                charge = d.get("message")
+                if isinstance(charge, dict):
+                    messages.append(_Message(charge))
+    except OSError:
+        return None
+    return messages
+
+
 def rejouer_session(sid: str, dossier: str | None = None,
                     limite: int = REJEU_MAX) -> tuple[list[dict], int]:
     """L'historique d'une session, converti en evenements du tableau.
@@ -805,11 +887,14 @@ def rejouer_session(sid: str, dossier: str | None = None,
     """
     if not sid:
         return [], 0
-    try:
-        from claude_agent_sdk import get_session_messages
-        messages = get_session_messages(sid, directory=dossier)
-    except Exception:
-        return [], 0
+    messages = messages_de_la_fin(sid, dossier)
+    if messages is None:
+        # Pas de fichier la ou on l'attend : le SDK sait peut-etre le trouver ailleurs.
+        try:
+            from claude_agent_sdk import get_session_messages
+            messages = get_session_messages(sid, directory=dossier)
+        except Exception:
+            return [], 0
 
     from worker import _cible
 
