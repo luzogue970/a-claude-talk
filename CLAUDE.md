@@ -142,3 +142,44 @@ graphique, il attend pour toujours, la requête n'atteint même pas le serveur, 
 `visibilitychange` fabriqué sans `bubbles: true` ne quitte jamais le document : la page
 écoute sur la fenêtre, donc elle ne le voit pas, et le test croit à tort qu'elle ne réagit
 pas.
+
+## L'historique de la page n'attend pas « claude » — et ce n'est pas le même historique
+
+Deux choses portent le même nom, et les confondre coûte une journée. Le contexte de
+**Claude** est rendu par la reprise de session : il est complet dès que le worker
+démarre. L'historique de la **page** est un `deque` en mémoire du processus
+(`MEMOIRE = 3000`) : un processus neuf part de rien, et la page affiche une
+conversation vide même quand Claude se souvient de tout.
+
+Mesure du 8 novembre 2026, à l'ouverture d'une conversation :
+
+- ~7 s : la page de l'agent répond. C'est à cet instant que le tableau rend la main
+  (`TALK_ATTENDRE=page`) et que le téléphone y arrive.
+- ~13 s : le worker est debout.
+
+Le rejeu de l'historique partait après le second. Six secondes devant une page
+vide, puis des lignes vieilles de trois jours arrivant **en direct**, avec
+l'animation du direct, après un `_bonjour` qui avait déjà annoncé « 0 ligne ».
+C'était la moitié du « ça rouvre une nouvelle conversation comme si elle n'était
+pas ouverte » — l'autre moitié étant le lanceur du tableau, qui tuait pour de bon
+un agent lent à répondre.
+
+Rien dans ce rejeu n'a besoin du worker : la session se lit dans l'index local,
+l'historique dans un fichier. Il part donc juste après `tableau.demarrer()`.
+
+- **`journal.session_a_reprendre` est le seul juge** de « quelle conversation ».
+  `Worker._a_reprendre` lit le même index par la même fonction. Deux chemins qui
+  décident séparément finissent par décider différemment, et ce jour-là la page
+  montrerait l'historique d'une conversation pendant qu'on parle à une autre.
+- **Le rejeu d'après le worker reste, en filet.** La devinette a parié sur l'index
+  local ; « claude » peut avoir repris autre chose, ou rien si la reprise a échoué.
+  Un garde-fou évite la double copie, et **vide le flux** si le pari était perdu —
+  garder les deux conversations à l'écran est le pire des trois états.
+- **Changer de conversation oublie ce qui a été rejoué.** Sans cette ligne, revenir
+  sur une conversation qu'on vient de quitter laisse la page VIDE : le garde-fou la
+  croit déjà affichée, et il a raison — mais le flux vient d'être vidé, donc plus
+  personne ne la voit. Trouvé en relisant le correctif, pas en le subissant.
+
+`voix/test_historique_tot.py` tient les trois, et vérifie dans la source que le
+rejeu part bien **avant** `worker.start()` : c'est tout l'objet du correctif, et
+c'est la première chose qu'un refactor remettrait au mauvais endroit.
