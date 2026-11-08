@@ -252,28 +252,25 @@ class Voix(Agent):
 
     # --- la fenetre avant envoi -----------------------------------------------------------
 
-    def pourquoi_retenir(self) -> str | None:
-        """La SEULE fonction qui decide si ce tour doit etre retenu, et qui dit pourquoi.
+    def pourquoi_retenir(self) -> str:
+        """Pourquoi ce tour se depose dans la barre — et il s'y depose TOUJOURS.
 
-        Trois raisons, dans cet ordre de priorite. « tour » est le rattrapage explicite d'un
-        message pendant son decompte ; il gagne sur tout le reste parce que c'est un geste
-        volontaire et immediat. « mode » est l'interrupteur global. « occupe » est la retenue
-        d'office pendant que Claude travaille : c'est le moment ou l'on parle pour reagir a
-        ce qu'on voit passer, donc celui ou une phrase mal transcrite coute le plus cher.
+        Une phrase dictee ne part plus jamais toute seule. L'envoi automatique avait une
+        logique defendable — parler, se taire, et que ça parte — mais il se trompait au
+        mauvais moment : au telephone on se relit, et la reconnaissance se trompe. Trois
+        garde-fous avaient ete empiles pour le retenir (le mode « retenir », le rattrapage
+        pendant le decompte, la retenue d'office pendant que Claude travaille) ; empiler des
+        garde-fous autour d'un comportement est la facon longue de dire qu'on n'en veut pas.
+        On a donc retire le comportement, et les trois avec.
 
-        Renvoyer la RAISON et pas un booleen n'est pas un detail : le tableau affiche « retenu
-        parce que Claude travaille » plutot que « retenu », et la difference entre les deux est
-        toute la difference entre comprendre et subir.
+        Reste une distinction, la seule qui change ce qu'on lit : « attente » dit que le
+        texte s'AJOUTE a ce qui etait deja dans la barre. C'est le seul cas ou l'on peut
+        croire qu'on a perdu ce qu'on avait dit juste avant.
+
+        Les reponses aux questions et aux demandes de permission, elles, partent toujours
+        sans passer par ici : ce sont des reactions, pas des messages a relire.
         """
-        if self._retenir_ce_tour:
-            return "tour"
-        if self._retenu_en_attente:
-            return "attente"
-        if self.retenir:
-            return "mode"
-        if config.RETENIR_SI_OCCUPE and self.worker.occupe:
-            return "occupe"
-        return None
+        return "attente" if self._retenu_en_attente else "toujours"
 
     # Un ordre local est court par nature : « stop », « chut », « coupe le micro ». La
     # detection, elle, accepte aussi des combinaisons — « arrêter » + « ça » suffit a declarer
@@ -319,16 +316,6 @@ class Voix(Agent):
         self._dit = (self._dit + " " + texte).strip()
         return True
 
-    def _delai_fenetre(self) -> float:
-        """Le delai courant, lu depuis la session et non depuis la constante.
-
-        Apres un reglage fait dans le tableau, la constante ne dit plus la verite et le
-        decompte mentirait — c'est deja arrive."""
-        try:
-            return float(self.sess._opts.endpointing.get("min_delay", config.ECOUTE_MIN))
-        except Exception:
-            return config.ECOUTE_MIN
-
     def fermer_fenetre(self, publier: bool = True) -> None:
         """Annule la fenetre en cours. Ne commet rien : c'est une non-action, donc sure."""
         if self._fenetre and not self._fenetre.done():
@@ -340,17 +327,16 @@ class Voix(Agent):
     def ouvrir_fenetre(self) -> None:
         """La parole vient de s'arreter : decide quoi faire de ce qui a ete dit.
 
-        Un seul endroit tranche entre les quatre issues possibles, et dans cet ordre :
+        Le nom est reste, le decompte a disparu. Un seul endroit tranche, entre trois issues :
 
-        1. **rien a envoyer** — aucune transcription : on n'arme rien. Armer sur un silence
-           produisait un decompte qui s'achevait sur un tour vide.
-        2. **une reponse a une permission, ou un ordre local** — ça part TOUT DE SUITE. Faire
-           attendre « arrete » cinq secondes de silence est absurde : c'est une reaction, pas
-           une phrase a relire. C'est le gain le plus sensible du passage en manuel.
-        3. **une raison de retenir** — on ne commet pas. Le texte est deja dans la barre
-           (les resultats intermediaires l'y ont mis au fil de la parole), donc « retenir »
-           n'a rien a deplacer : il suffit de ne rien faire, et le tour en attente est vide.
-        4. **le cas courant** — on arme la fenetre et on publie son echeance exacte.
+        1. **rien a envoyer** — aucune transcription : on ne fait rien. Armer sur un silence
+           produisait un tour vide.
+        2. **une reponse a une permission ou a une question, ou un ordre local** — ça part
+           TOUT DE SUITE. Faire attendre « arrete » est absurde : c'est une reaction, pas une
+           phrase a relire. Ces trois cas sont les SEULS qu'une parole puisse envoyer seule.
+        3. **tout le reste** — la phrase se depose dans la barre, et elle y attend l'appui
+           sur « envoyer ». Plus de decompte, donc plus de course entre une horloge et une
+           relecture : au telephone, on se relit toujours, et la reconnaissance se trompe.
         """
         self.fermer_fenetre(publier=False)
         texte = self._dit.strip()
@@ -367,47 +353,14 @@ class Voix(Agent):
             self._envoyer_maintenant("immédiat")
             return
 
-        raison = self.pourquoi_retenir()
-        if raison:
-            # Le tour en attente est abandonne : sans ça il resterait dans LiveKit et
-            # repartirait au prochain envoi, ce qui faisait reapparaitre du texte deja parti.
-            self._oublier_tour()
-            self._voir("dictee", texte=texte, raison=raison,
-                       auto=(raison == "occupe"))
-            self._dit = ""
-            self._dictee_ouverte = False
-            self._tour_vocal = False
-            self._retenu_en_attente = True
-            return
-
-        delai = self._delai_fenetre()
-        self._fin_fenetre = time.monotonic() + delai
-        self._voir("ecoute", actif=True, delai=delai,
-                   # L'echeance en horloge murale : la page compte en local, sans rien
-                   # demander, et affiche le temps REEL qui reste avant l'envoi.
-                   fin=(time.time() + delai) * 1000.0,
-                   min=delai, max=config.plafond_ecoute(delai))
-        self._fenetre = asyncio.create_task(self._attendre_puis_envoyer(delai))
-
-    async def _attendre_puis_envoyer(self, delai: float) -> None:
-        try:
-            await asyncio.sleep(delai)
-        except asyncio.CancelledError:
-            return
-        # Relu a l'echeance, pas au depart : « retenir » peut avoir ete arme PENDANT le
-        # decompte, et c'est meme son usage principal.
-        raison = self.pourquoi_retenir()
-        if raison:
-            self._oublier_tour()
-            self._voir("dictee", texte=self._dit.strip(), raison=raison,
-                       auto=(raison == "occupe"))
-            self._dit = ""
-            self._dictee_ouverte = False
-            self._tour_vocal = False
-            self._retenu_en_attente = True
-            self.fermer_fenetre()
-            return
-        self._envoyer_maintenant("échéance")
+        # Le tour en attente est abandonne : sans ça il resterait dans LiveKit et
+        # repartirait au prochain envoi, ce qui faisait reapparaitre du texte deja parti.
+        self._oublier_tour()
+        self._voir("dictee", texte=texte, raison=self.pourquoi_retenir(), auto=False)
+        self._dit = ""
+        self._dictee_ouverte = False
+        self._tour_vocal = False
+        self._retenu_en_attente = True
 
     def _envoyer_maintenant(self, pourquoi: str) -> None:
         self.fermer_fenetre(publier=False)
@@ -1349,7 +1302,6 @@ async def entrypoint(ctx: JobContext):
             tableau.publier(e.pop("genre"), passe=True, **e)
             if i % 100 == 99:
                 await asyncio.sleep(0.05)
-        tableau.publier("reprise", texte="↓ ici commence le direct")
         log.info("historique rejoué : %d lignes", len(evenements))
 
     try:

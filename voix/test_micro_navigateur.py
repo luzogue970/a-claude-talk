@@ -93,11 +93,16 @@ async def parcours():
         print("  Chrome introuvable — parcours ignore")
         return
     recus = []
+    # Ce que la page a demande d'ENVOYER a Claude. C'est la liste qui doit rester vide tant
+    # que personne n'a appuye sur « envoyer » : dicter ne vaut pas envoyer.
+    textes = []
 
     async def commande(nom, donnees):
         if nom == "vocal":
             recus.append(round(donnees["secondes"], 1))
             return {"texte": "bonjour", "moteur": "essai", "secondes": round(donnees["secondes"], 1)}
+        if nom == "texte":
+            textes.append(donnees.get("texte"))
         return None
 
     t = Tableau(port=7894, ouvrir=False, on_commande=commande)
@@ -212,6 +217,30 @@ async def parcours():
                 dire(etapes.count("enregistre") == 2 and etapes.count("arrêt") == 2
                      and "page cachée" in etapes and "page visible" in etapes,
                      f"le journal de l'agent raconte le parcours : {etapes}")
+
+                # 5. Et apres tout ça, RIEN n'est parti chez Claude. C'est le point que les
+                # deux autres niveaux ne peuvent pas prouver : ici, c'est un vrai navigateur,
+                # un vrai micro, un vrai aller-retour HTTP, et un vrai serveur a l'autre
+                # bout. S'il existait encore un chemin qui envoie tout seul — un decompte,
+                # une retenue oubliee, une reconnexion qui rejoue — il aurait tire ici.
+                dire(textes == [], f"j'ai dicte deux fois et rien n'est parti : {textes!r}")
+
+                # Le texte arrive par le flux d'evenements, comme une dictee du PC.
+                t.publier("dictee", texte="bonjour", raison="toujours")
+                dire(await cdp.attendre(
+                    "document.getElementById('saisie').value.includes('bonjour')"),
+                     "la phrase transcrite se depose dans la barre, a relire")
+                dire(textes == [], "et s'y poser ne l'envoie pas davantage")
+
+                # Le seul geste qui envoie.
+                await cdp.js("document.getElementById('composer')"
+                             ".dispatchEvent(new Event('submit', {cancelable: true})); true",
+                             geste=True)
+                fin = time.monotonic() + 5
+                while time.monotonic() < fin and not textes:
+                    await asyncio.sleep(0.1)
+                dire(textes == ["bonjour"],
+                     f"j'appuie sur « envoyer » : la phrase part, une fois : {textes!r}")
     finally:
         journal.removeHandler(h)
         proc.terminate()

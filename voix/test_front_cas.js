@@ -161,20 +161,20 @@ let repet = 0, prec = null;
 for (let i = 0; i < 20000; i++) { const m = motSuivant(); if (m === prec) repet++; prec = m; }
 dire(repet === 0, '0 repetition immediate sur 20000 tirages (obtenu ' + repet + ')');
 
-// ---- decompte avant envoi ---------------------------------------------------------------
-titre('decompte avant envoi');
-arreterCompte();
-dire(zoneCompte.className === '', 'au repos : pastille cachee');
-lancerCompte(60, 120);
-dire(zoneCompte.className === 'montre', 'parole finie : "' + zoneReste.textContent + '"');
-finMin = Date.now() - 1;                       // comme si le plancher venait d expirer
-majCompte();
-dire(zoneCompte.className === 'montre prolonge',
-     'plancher depasse : "' + zoneReste.textContent + '"');
-dire(/inachev/.test(zoneReste.textContent), 'explique la prolongation, pas un zero bloque');
-lancerCompte(60, 120);
-envoyerVite();
-dire(zoneCompte.className === '', 'envoyer eteint le decompte aussitot');
+// ---- la fin de la parole ne commet rien -------------------------------------------------
+titre('finir de parler ne declenche aucun envoi');
+socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
+champ.value = ''; fermerDictee(null);
+emettre({ genre: 'ecoute', actif: false, parle: true });
+emettre({ genre: 'partiel', texte: 'relis ce fichier', final: true });
+emettre({ genre: 'ecoute', actif: true, delai: 5, fin: Date.now() + 5000, min: 5, max: 12 });
+dire(envoyes.length === 0,
+     'le silence qui suit la parole n envoie rien : ' + JSON.stringify(envoyes));
+dire(champ.value === 'relis ce fichier',
+     'ce qui a ete dit attend dans la barre : ' + JSON.stringify(champ.value));
+dire(!document.getElementById('compte'),
+     'et aucune pastille ne promet un envoi qui n aura pas lieu');
+fermerDictee(null); champ.value = '';
 
 // ---- selecteur d effort -----------------------------------------------------------------
 titre('selecteur d effort');
@@ -247,7 +247,9 @@ const histoire = [
 ];
 histoire.filter(ev => !dejaVu(ev)).forEach(ajouter);
 const apres1 = flux.children.length;
-dire(apres1 === histoire.length, 'premier rendu : ' + apres1 + ' lignes');
+// Une de moins que l histoire : « config » ne pose plus de carte, il ne fait plus que
+// nommer la fenetre. Le compte qui suit est celui qui compte — aucune duplication.
+dire(apres1 === histoire.length - 1, 'premier rendu : ' + apres1 + ' lignes');
 // la page se rebranche : le serveur renvoie TOUTE l histoire
 histoire.filter(ev => !dejaVu(ev)).forEach(ajouter);
 dire(flux.children.length === apres1, 'reconnexion : aucune ligne ajoutee');
@@ -339,21 +341,37 @@ soumis = false;
 champ._declenche('keydown', { key: 'Enter', shiftKey: true, preventDefault: () => {} });
 dire(!soumis, 'Maj+Entree passe a la ligne sans envoyer');
 
-// ---- « retenir » -----------------------------------------------------------------------
-titre('retenir');
+// ---- rien ne part sans l appui ----------------------------------------------------------
+// Le vrai defaut vecu : on dicte, et la phrase s envoie toute seule pendant qu on se relit.
+// « retenir » etait le pansement — une case a cocher qu il fallait penser a cocher AVANT de
+// parler. On l a retiree en retirant ce qu elle protegeait : plus aucun chemin n envoie.
+titre('une phrase dictee attend l appui sur « envoyer »');
 socket = new WebSocket(); socket.readyState = 1;
-envoyes.length = 0; enAttente = []; retenir = false; majRetenir();
+envoyes.length = 0; enAttente = []; champ.value = '';
 
-dire(!/id="retenir-info"/.test(__html), 'le « i » a quitte le balisage');
-dire(!/id="retenir-aide"/.test(__html), 'son info-bulle aussi');
-dire(!/class="info"|\.info\{|\.bulle\{/.test(__html), 'et le style qui les habillait');
+dire(!/id="retenir"/.test(__html), 'le bouton « retenir » a quitte le balisage');
+dire(!/id="delai"/.test(__html), 'le reglage « quand partir » aussi : il ne reglait plus rien');
+dire(!/id="compte"|id="reste"|id="envoi-vite"/.test(__html),
+     'et le decompte « envoyer ... », qui s affichait la ou on appuie pour envoyer');
 
-// Ce qui compte reste : la bascule, et l ordre qui part au serveur.
-const avantRetenir = retenir;
-btnRetenir.onclick();
-dire(retenir === !avantRetenir, 'le bouton « retenir » bascule le reglage');
-dire(envoyes.some(o => o.cmd === 'retenir'), 'et la commande part au serveur');
-btnRetenir.onclick();
+emettre({ genre: 'dictee', texte: 'une phrase que je veux relire' });
+dire(champ.value === 'une phrase que je veux relire', 'la dictee se depose dans la barre');
+dire(envoyes.filter(o => o.cmd === 'texte').length === 0 && enAttente.length === 0,
+     'et RIEN n est parti : ni au serveur, ni en file');
+
+// Meme apres la fin de la fenetre d ecoute — c est la que l envoi automatique se declenchait.
+emettre({ genre: 'ecoute', actif: false });
+dire(envoyes.filter(o => o.cmd === 'texte').length === 0,
+     'finir de parler ne declenche aucun envoi');
+dire(champ.value === 'une phrase que je veux relire', 'et le texte est toujours la, intact');
+
+// Le seul geste qui envoie, et il envoie bien.
+composer.onsubmit({ preventDefault() {} });
+const partiesApresAppui = envoyes.filter(o => o.cmd === 'texte');
+dire(partiesApresAppui.length === 1
+     && partiesApresAppui[0].texte === 'une phrase que je veux relire',
+     'l appui sur « envoyer » envoie, lui, et envoie le texte entier');
+dire(champ.value === '', 'et la barre se vide');
 
 // ---- cycle de vie de la dictee ----------------------------------------------------------
 // Deux bugs reproduits avant correction, et ce sont les cas les plus couteux du systeme :
@@ -456,8 +474,8 @@ emettre({ genre: 'moteurs_stt',
   chaine: ['local'], actif: 'local', direct: false, impose: false });
 dire(/sans direct/.test(pastilleMoteur.textContent),
      'un moteur sans direct est marque : « ' + pastilleMoteur.textContent + ' »');
-dire(/retenir/.test(pastilleMoteur.title),
-     'et l infobulle explique la consequence sur « retenir »');
+dire(/d un coup|d'un coup/.test(pastilleMoteur.title),
+     'et l infobulle dit la consequence : le texte arrive d un coup, pas au fil des mots');
 
 emettre({ genre: 'moteurs_stt',
   liste: [{ cle: 'azure', libelle: 'Azure', gratuit: '5 h/mois', renouvelable: true,
@@ -465,7 +483,7 @@ emettre({ genre: 'moteurs_stt',
   chaine: ['azure'], actif: 'azure', direct: true, impose: false });
 dire(pastilleMoteur.textContent === 'Azure',
      'avec du direct, aucune mention parasite : « ' + pastilleMoteur.textContent + ' »');
-dire(!/retenir/.test(pastilleMoteur.title), 'et pas d avertissement inutile');
+dire(!/d un coup|d'un coup/.test(pastilleMoteur.title), 'et pas d avertissement inutile');
 
 // ---- quel moteur transcrit --------------------------------------------------------------
 titre('choix du moteur de reconnaissance');
@@ -680,53 +698,18 @@ socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
 majCompteurs(); majCompteurs();
 dire(envoyes.length === 0, 'le decompte n envoie aucune requete');
 
-// ---- delai d envoi reglable -------------------------------------------------------------
-titre('delai d envoi');
-remplirDelais([{s:2},{s:3},{s:5},{s:8},{s:10},{s:15},{s:20}], 5, 12.5);
-dire(/value="3"/.test(selDelai.innerHTML) && /value="10"/.test(selDelai.innerHTML),
-     'les paliers 3 / 5 / 10 sont proposes');
-dire(selDelai.value === '5', 'le reglage courant est preselectionne');
-dire(/12.5 s/.test(selDelai.title), 'le titre annonce le plafond : ' + selDelai.title);
-// une valeur venue de la configuration, absente des paliers, doit rester visible
-remplirDelais([{s:3},{s:5},{s:10}], 7, 17.5);
-dire(/value="7"/.test(selDelai.innerHTML) && selDelai.value === '7',
-     'une valeur hors paliers reste proposee');
-
-socket = new WebSocket(); socket.readyState = 1; envoyes.length = 0;
-selDelai.value = '10'; selDelai.onchange();
-dire(envoyes.length === 1 && envoyes[0].cmd === 'delai' && envoyes[0].secondes === 10,
-     'changer le palier envoie la commande : ' + JSON.stringify(envoyes[0]));
-
-// ---- rattraper un message pendant son decompte -----------------------------------------
-titre('retenir au dernier moment');
-retenir = false; arreterCompte();
-lancerCompte(60, 150);
-dire(/envoi dans/.test(zoneReste.textContent),
-     'avant rattrapage : "' + zoneReste.textContent + '"');
-dire(btnEnvoiVite.textContent === 'envoyer', 'le bouton dit « envoyer »');
-
-envoyes.length = 0;
-btnRetenirVite.onclick();
-dire(envoyes.length === 1 && envoyes[0].cmd === 'retenir_tour',
-     'le clic envoie la retenue de CE tour');
-dire(/retenu dans/.test(zoneReste.textContent),
-     'apres rattrapage : "' + zoneReste.textContent + '"');
-dire(zoneCompte.className.split(' ').includes('rattrape'),
-     'la pastille montre le rattrapage (' + zoneCompte.className + ')');
-dire(btnEnvoiVite.textContent === 'terminer', 'le bouton ne dit plus « envoyer »');
-
-// le rattrapage ne doit pas fuir sur le tour suivant
-arreterCompte();
-lancerCompte(60, 150);
-dire(/envoi dans/.test(zoneReste.textContent),
-     'tour suivant : le rattrapage ne persiste pas');
-dire(!zoneCompte.className.split(' ').includes('rattrape'), 'et la pastille est revenue');
-
-// le mode retenu permanent, lui, reste
-retenir = true; arreterCompte(); lancerCompte(60, 150);
-dire(/retenu dans/.test(zoneReste.textContent),
-     'le mode retenu permanent tient bien : "' + zoneReste.textContent + '"');
-retenir = false; arreterCompte();
+// ---- les etats de l ancien envoi automatique ne tombent plus dans le flux --------------
+titre('delai et retenue : avales, pas affiches');
+// Une session ouverte avant cette version continue de les publier. Non traites, ils
+// creaient une ligne vide, sans libelle ni badge — un trou dans la conversation.
+{
+  const avant = flux.children.length;
+  emettre({ genre: 'delais', paliers: [{ s: 3 }, { s: 5 }], actuel: 5, plafond: 12 });
+  emettre({ genre: 'delai', secondes: 10, plafond: 12 });
+  emettre({ genre: 'retenir', actif: true });
+  dire(flux.children.length === avant,
+       'trois etats d une version precedente n ajoutent aucune ligne');
+}
 
 // ---- aucun clic perdu quand la socket est morte -----------------------------------------
 titre('un clic ne doit jamais disparaitre');
@@ -777,54 +760,50 @@ fermer(); fermer();
 dire(pastille.textContent === 'deconnecte',
      'apres trois echecs : "' + pastille.textContent + '"');
 
-// ---- le decompte lit l'echeance, il ne la recalcule pas ----------------------------------
-titre('le decompte affiche est celui qui decide');
-// C'etait le vrai defaut : la page comptait de son cote, LiveKit decidait du sien. Quand les
-// deux divergeaient on lisait « encore 4 s » et le message etait deja parti — donc « retenir »
-// arrivait apres coup. L'agent publie maintenant l'echeance exacte en horloge murale.
+// ---- la fenetre d ecoute n arme plus rien -----------------------------------------------
+titre('la fin d une fenetre d ecoute n envoie pas');
+// Avant : la page tenait un decompte, l agent tenait le sien, et au bout du compte le
+// message partait. Le defaut classique etait la divergence des deux horloges — on lisait
+// « encore 4 s » alors que c'etait deja parti. Il n y a plus d horloge du tout, donc plus
+// de divergence possible : c est l appui qui envoie, et rien d autre.
+envoyes.length = 0; enAttente = []; champ.value = '';
 emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5, fin: Date.now() + 5000 });
-dire(finMin === finMax,
-     'avec une echeance exacte, aucune extension possible : finMin === finMax');
-const restant = (finMin - Date.now()) / 1000;
-dire(restant > 4.5 && restant <= 5.05,
-     'et le reste affiche vient de l echeance publiee (' + restant.toFixed(2) + ' s)');
-// Sans `fin` (ancien mode automatique) la page estime, et l extension redevient possible :
-// la ou LiveKit decide, la page ne PEUT que deviner, et le dire est plus honnete.
-emettre({ genre: 'ecoute', actif: true, min: 5, max: 12.5 });
-dire(finMax > finMin, 'sans echeance publiee, la page retombe sur une estimation avec plafond');
+dire(!document.getElementById('compte'), 'aucun decompte ne s affiche, meme avec une echeance');
+emettre({ genre: 'dictee', texte: 'je parle pendant la fenetre' });
 emettre({ genre: 'ecoute', actif: false });
-dire(finMin === null, 'la fin de la fenetre efface le decompte');
+dire(envoyes.filter(o => o.cmd === 'texte').length === 0 && enAttente.length === 0,
+     'la fenetre se ferme sans rien envoyer');
+dire(champ.value === 'je parle pendant la fenetre', 'et la phrase reste a relire dans la barre');
 
-// ---- retenu : la raison s affiche, et elle s efface --------------------------------------
-titre('un texte retenu dit POURQUOI il l est');
+// ---- ce qui se depose dans la barre le DIT --------------------------------------------
+titre('un texte depose sous la barre dit ou il est alle');
 const note = document.getElementById('note-barre');
-for (const [raison, attendu] of [['occupe', /Claude travaille/],
-                                 ['mode', /retenir/],
-                                 ['tour', /rattrap/]]) {
-  emettre({ genre: 'dictee', texte: 'une phrase a relire', raison: raison });
-  dire(!note.hidden && attendu.test(note.textContent),
-       'raison « ' + raison + '  » : "' + note.textContent + '"');
-  dire(champ.value === 'une phrase a relire',
-       'et le texte est bien depose dans la barre, en entier');
-}
-// Le corps de la ligne du flux porte aussi la raison : en relisant l historique on doit
-// pouvoir distinguer « je l ai retenu » de « il a ete retenu pour moi ».
-dire(/rattrap/.test(corps({ genre: 'dictee', texte: 'x', raison: 'tour' })),
-     'la ligne du flux distingue les trois raisons');
-dire(/travaillait/.test(corps({ genre: 'dictee', texte: 'x', raison: 'occupe' })),
-     'y compris la retenue d office');
+champ.value = '';
+emettre({ genre: 'dictee', texte: 'une phrase a relire' });
+dire(!note.hidden && /relis|envoie/.test(note.textContent),
+     'la note dit quoi faire : "' + note.textContent + '"');
+dire(champ.value === 'une phrase a relire',
+     'et le texte est bien depose dans la barre, en entier');
+// Le cas qui compte encore : un ajout a un brouillon existant. C'est le seul ou l on peut
+// croire qu on a perdu ce qu on avait ecrit — donc le seul qui merite sa propre phrase.
+emettre({ genre: 'dictee', texte: 'une phrase a relire et une suite', raison: 'attente' });
+dire(/attendait deja|attendait déjà/.test(note.textContent),
+     'un ajout a du texte en attente le dit : "' + note.textContent + '"');
+dire(/attendait deja|attendait déjà/.test(
+       corps({ genre: 'dictee', texte: 'x', raison: 'attente' })),
+     'et la ligne du flux le dit aussi, pour qui relit l historique');
+dire(/barre/.test(corps({ genre: 'dictee', texte: 'x' })),
+     'sans raison particuliere, la ligne dit simplement ou le texte est alle');
 
 // Une explication qui survit a son objet devient fausse : parler ou envoyer l efface.
 emettre({ genre: 'ecoute', actif: false, parle: true });
 dire(note.hidden, 'reparler efface la note : la situation a change');
-emettre({ genre: 'dictee', texte: 'encore', raison: 'mode' });
+emettre({ genre: 'dictee', texte: 'encore' });
 dire(!note.hidden, 'elle revient au depot suivant');
 emettre({ genre: 'toi', texte: 'encore' });
 dire(note.hidden, 'et un message reellement parti l efface aussi');
 // Le brouillon TAPE survit deliberement a l envoi d une dictee : on peut avoir ecrit une
 // phrase, parle ensuite, et le tour vocal parti ne doit pas emporter ce qu on avait ecrit.
-// La protection contre le texte retenu qui survit a un envoi est ailleurs, cote agent : la
-// retenue est collante, donc aucun tour vocal ne part tant qu un texte attend une relecture.
 champ.value = 'un brouillon tape'; champ.oninput();
 ouvrirDictee();
 poserDictee('et une dictee', false);
@@ -1261,7 +1240,9 @@ titre('rejeu de l etat : les listes se remplissent quel que soit l ordre des num
        'les modeles rejoues apres un quota plus recent remplissent bien la liste');
   dire(selEffort.innerHTML.includes('tres eleve'), 'les efforts aussi');
   const apresEtat = flux.children.length;
-  dire(apresEtat === avant + 1, 'la carte de configuration est posee, une fois');
+  dire(apresEtat === avant, 'la configuration ne pose plus de carte dans le flux');
+  dire(/claude-talk/.test(document.title) && /x/.test(document.title),
+       'mais elle nomme toujours la fenetre : "' + document.title + '"');
 
   // Puis l'historique, qui contient les MEMES evenements : rien en double, le reste s'affiche.
   recevoir({ genre: '_histoire', evenements: [
@@ -2322,15 +2303,16 @@ async function testerRelaisVocal() {
   dire(btnDicter.getAttribute('aria-pressed') === 'false', 'le bouton redevient normal');
 
   // Le TEXTE n arrive pas par la reponse HTTP mais par le flux, comme une dictee du PC :
-  // c est ce chemin qui remplit la barre et arme le decompte — donc la retenue marche.
+  // c est ce chemin qui remplit la barre — et rien d autre : il n y a plus d envoi a armer.
   dire(champ.value === '', 'la reponse HTTP n ecrit rien dans la barre');
   emettre({ genre: 'ecoute', actif: false, parle: true, source: 'téléphone' });
   emettre({ genre: 'partiel', texte: 'corrige la barre du bas', final: true, source: 'téléphone' });
   dire(champ.value === 'corrige la barre du bas',
        'le texte transcrit arrive par le flux, dans la barre : ' + JSON.stringify(champ.value));
   emettre({ genre: 'ecoute', actif: true, delai: 5, fin: Date.now() + 5000, min: 5, max: 12 });
-  dire(!document.getElementById('compte').hidden, 'et le decompte avant envoi s arme, comme au PC');
-  arreterCompte(); fermerDictee(null); champ.value = '';
+  dire(champ.value === 'corrige la barre du bas',
+       'et rien ne part : le texte reste dans la barre, comme au PC');
+  fermerDictee(null); champ.value = '';
 
   // Le PC a REPONDU qu il n a rien compris. Ce n est pas une panne de liaison : le renvoyer
   // donnerait exactement le meme verdict. On ne le garde donc pas — et surtout le micro reste
@@ -3242,7 +3224,10 @@ emettre({ genre: 'tour', actions: 12, duree: 930.5, jetons: 240000, tours: 42,
           fin: 'error_max_turns', erreurs: ['Reached maximum number of turns (42)'],
           pourquoi: "je me suis arrêté avantVis d'avoir fini : la limite de tours est atteinte (42 tours)" });
 const ligneCoupee = document.getElementById('flux').children.slice(-1)[0].innerHTML;
-dire(/42 tours modèle/.test(ligneCoupee), 'le nombre de tours modele est affiche');
+// Le nombre de tours modele a ete retire : il repondait a une question que personne ne se
+// pose. Ce qu on veut d un tour fini, c est ce qu il a fait et ce qu il a coute.
+dire(!/tours? modèle/.test(ligneCoupee), 'le nombre de tours modele ne parasite plus le bilan');
+dire(/12 actions/.test(ligneCoupee), 'ce qui reste est ce qu on lit : les actions');
 dire(/limite de tours/.test(ligneCoupee), 'et la raison de l arret aussi');
 dire(/error_max_turns/.test(ligneCoupee), 'le detail technique reste en infobulle');
 

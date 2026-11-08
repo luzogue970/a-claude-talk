@@ -231,11 +231,12 @@ async def main():
          f"les ordres locaux sont detectes et annonces ({compte.get('ordre', 0)} fois)")
     dire(dit, "la voix a bien quelque chose a dire a chaque tour")
     # Le mode manuel change QUI decide de l'envoi : si la constante est a False sans qu'on
-    # l'ait voulu, tout le decompte visible retombe silencieusement sur une estimation.
+    # l'ait voulu, LiveKit se remet a commettre les tours de son cote — et la parole repart
+    # toute seule, ce qui est precisement ce qu'on a retire.
     dire(config.TOUR_MANUEL,
-         "le tour est en mode manuel : c'est l'agent qui commet, donc le decompte affiche decide")
-    dire(agent.pourquoi_retenir() is None,
-         "au repos, aucune raison de retenir — sinon plus rien ne partirait jamais")
+         "le tour est en mode manuel : c'est l'agent qui commet, et lui seul")
+    dire(agent.pourquoi_retenir() == "toujours",
+         "au repos, une phrase dictee se depose quand meme : rien ne part sans l'appui")
     print(f"  ·     {len(compte)} genres publiés : {', '.join(sorted(compte))}")
     print(f"\n=== tableau : {len(tableau.histoire)} evenements ===")
     for genre, n in compte.most_common():

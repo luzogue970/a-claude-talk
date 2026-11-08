@@ -1121,13 +1121,13 @@ PAGE = r"""<!doctype html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>claude-talk</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Cpath%20d%3D%27M15.13%2011.89Q15.38%207.50%2016.00%202.20Q16.62%207.50%2016.87%2011.89Z%20M17.30%2012.01Q19.12%209.54%2021.40%206.65Q20.03%2010.07%2018.81%2012.88Z%20M19.12%2013.19Q23.05%2011.21%2027.95%209.10Q23.67%2012.29%2019.99%2014.70Z%20M20.11%2015.13Q23.15%2015.47%2026.80%2016.00Q23.15%2016.53%2020.11%2016.87Z%20M19.99%2017.30Q23.67%2019.71%2027.95%2022.90Q23.05%2020.79%2019.12%2018.81Z%20M18.81%2019.12Q20.03%2021.93%2021.40%2025.35Q19.12%2022.46%2017.30%2019.99Z%20M16.87%2020.11Q16.62%2024.50%2016.00%2029.80Q15.38%2024.50%2015.13%2020.11Z%20M14.70%2019.99Q12.88%2022.46%2010.60%2025.35Q11.97%2021.93%2013.19%2019.12Z%20M12.88%2018.81Q8.95%2020.79%204.05%2022.90Q8.33%2019.71%2012.01%2017.30Z%20M11.89%2016.87Q8.85%2016.53%205.20%2016.00Q8.85%2015.47%2011.89%2015.13Z%20M12.01%2014.70Q8.33%2012.29%204.05%209.10Q8.95%2011.21%2012.88%2013.19Z%20M13.19%2012.88Q11.97%2010.07%2010.60%206.65Q12.88%209.54%2014.70%2012.01Z%27%20fill%3D%27%2358a6ff%27%2F%3E%3C%2Fsvg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Cpath%20d%3D%27M15.13%2011.89Q15.38%207.50%2016.00%202.20Q16.62%207.50%2016.87%2011.89Z%20M17.30%2012.01Q19.12%209.54%2021.40%206.65Q20.03%2010.07%2018.81%2012.88Z%20M19.12%2013.19Q23.05%2011.21%2027.95%209.10Q23.67%2012.29%2019.99%2014.70Z%20M20.11%2015.13Q23.15%2015.47%2026.80%2016.00Q23.15%2016.53%2020.11%2016.87Z%20M19.99%2017.30Q23.67%2019.71%2027.95%2022.90Q23.05%2020.79%2019.12%2018.81Z%20M18.81%2019.12Q20.03%2021.93%2021.40%2025.35Q19.12%2022.46%2017.30%2019.99Z%20M16.87%2020.11Q16.62%2024.50%2016.00%2029.80Q15.38%2024.50%2015.13%2020.11Z%20M14.70%2019.99Q12.88%2022.46%2010.60%2025.35Q11.97%2021.93%2013.19%2019.12Z%20M12.88%2018.81Q8.95%2020.79%204.05%2022.90Q8.33%2019.71%2012.01%2017.30Z%20M11.89%2016.87Q8.85%2016.53%205.20%2016.00Q8.85%2015.47%2011.89%2015.13Z%20M12.01%2014.70Q8.33%2012.29%204.05%209.10Q8.95%2011.21%2012.88%2013.19Z%20M13.19%2012.88Q11.97%2010.07%2010.60%206.65Q12.88%209.54%2014.70%2012.01Z%27%20fill%3D%27%233aa8b8%27%2F%3E%3C%2Fsvg%3E">
 <style>
 :root{
   color-scheme:dark;
   --fond:#0e1116; --carte:#161b22; --bord:#272e37; --texte:#d7dde5; --faible:#8b949e;
-  --toi:#58a6ff; --voix:#3fb950; --pensee:#a371f7; --outil:#d29922; --erreur:#f85149;
-  --permission:#ff7b72; --tour:#39c5cf;
+  --toi:#3aa8b8; --voix:#3fb950; --pensee:#a371f7; --outil:#d29922; --erreur:#f85149;
+  --permission:#ff7b72; --tour:#7f8da3;
   /* « ce qui est vif en ce moment » : le micro qui entend, la conversation courante, une
      jauge qui se remplit. Distinct de --toi (ce que TU dis) et de --voix (ce qu'il répond) :
      ici c'est l'état de l'application, pas un locuteur.
@@ -1135,7 +1135,7 @@ PAGE = r"""<!doctype html>
      les barres du micro devenaient TRANSPARENTES dès qu'on parlait — le rond paraissait vide
      au moment précis où il devait montrer quelque chose. Une variable CSS absente ne lève
      rien : elle rend la valeur initiale, et pour une couleur de fond c'est « invisible ». */
-  --accent:#4f9dde;
+  --accent:#4fc3d4;
   /* La hauteur de la barre de saisie, declaree UNE fois. Trois elements reservent de la
      place au-dessus d'elle — le bas du flux, le bouton « suivre », la pile de notes — et
      chacun portait sa propre constante. Quand la barre est passee a deux lignes, les trois
@@ -1172,7 +1172,7 @@ PAGE = r"""<!doctype html>
 
 /* Une interface qui bouge doit bouger doucement. Un seul reglage plutot qu'une transition
    recopiee sur chaque element — et 120 ms, assez pour etre percu, trop court pour attendre. */
-button,select,summary,input,textarea,.q,.act,.pip,#etat,#travail,#compte{
+button,select,summary,input,textarea,.q,.act,.pip,#etat,#travail{
   transition:background-color .12s ease,border-color .12s ease,color .12s ease,opacity .12s ease}
 :focus-visible{outline:2px solid var(--toi);outline-offset:1px}
 body{margin:0;background:var(--fond);color:var(--texte);
@@ -1224,8 +1224,8 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
   background:#3a424d}
 #pupitre .parle::after{content:"◗";color:var(--voix);font-size:9px}
 #pupitre button{background:transparent;border:1px solid var(--toi);border-radius:999px;
-  color:#9ecbff;padding:2px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
-#pupitre button:hover{background:#132133}
+  color:#8fd6de;padding:2px 9px;font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+#pupitre button:hover{background:#0f2930}
 
 /* Qui transcrit, en ce moment. C'est la premiere question qu'on se pose quand une
    transcription est mauvaise, et la reponse n'etait nulle part. */
@@ -1345,7 +1345,7 @@ header{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur
 #choix-conv .etat{display:inline-block;width:9px;height:9px;border-radius:50%;
   margin-right:7px;flex:none;vertical-align:baseline;border:1.5px solid var(--faible)}
 #choix-conv .etat.vit{background:var(--accent);border-color:var(--accent);
-  box-shadow:0 0 0 3px #4f9dde26}
+  box-shadow:0 0 0 3px #4fc3d426}
 #choix-conv .etat.close{background:transparent;border-color:#4a525e}
 #choix-conv .etat.coupee{background:transparent;border-color:#d8a657;
   border-style:dashed}
@@ -1534,8 +1534,22 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 .q.vide{border-style:dashed;color:#5a636e}
 .q.tiede{border-color:#8a6d1f} .q.tiede b{color:#e3b341}
 .q.chaud{border-color:var(--erreur)} .q.chaud b{color:#ffb3ad}
-#micro,#arreter{background:transparent;color:var(--faible);border:1px solid var(--bord);
-  border-radius:999px;padding:3px 12px;font-size:12px;cursor:pointer;font-family:inherit;
+/* Icone + libelle, alignes, et c'est l'icone qui porte l'etat : la rature apparait sur le
+   micro coupe, de sorte que la FORME dit l'etat autant que la couleur. Un bouton qui ne se
+   distingue que par sa teinte est illisible en plein soleil, et c'est la que le telephone
+   sert le plus. */
+/* 15 px, pas 17 : mesure par test_rendu, l'en-tete passait de 110 a 124 px — donc d'un rang
+   a l'autre. Deux pixels d'icone en valent quatorze en hauteur de page, et cette hauteur-la
+   est prise sur le flux a chaque defilement. */
+#micro .ico,#arreter .ico,#couper-lecture svg{width:15px;height:15px;fill:none;
+  stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#couper-lecture svg{width:17px;height:17px}
+#arreter .ico rect{fill:currentColor;stroke:none}
+#micro .rature{display:none}
+#micro.coupe .rature{display:block}
+#micro,#arreter{display:inline-flex;align-items:center;gap:6px;
+  background:transparent;color:var(--faible);border:1px solid var(--bord);
+  border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:inherit;
   white-space:nowrap}
 #micro:hover,#arreter:not(:disabled):hover{border-color:#4b5563;color:var(--texte)}
 #micro.coupe{background:#3d1518;border-color:var(--erreur);color:#ffb3ad;font-weight:650}
@@ -1551,26 +1565,6 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #effort:disabled{opacity:.4;cursor:not-allowed}
 #travail{border:1px solid var(--pensee);color:#c3a6f5;border-radius:999px;padding:2px 10px;
   font-size:12px;font-variant-numeric:tabular-nums;display:none;white-space:nowrap}
-/* Le compte à rebours avant envoi. Il existe parce que « quand est-ce que ça part ? » était
-   invisible : on parlait, ça partait, et on découvrait la coupure après coup. */
-#compte{display:none;align-items:center;gap:0;border:1px solid var(--toi);border-radius:999px;
-  overflow:hidden;font-size:12px;white-space:nowrap}
-#compte.montre{display:inline-flex}
-#compte.prolonge{border-color:var(--pensee)}
-#reste{padding:2px 10px;color:#9ecbff;font-variant-numeric:tabular-nums}
-#compte.prolonge #reste{color:#c3a6f5}
-#envoi-vite{background:transparent;border:0;border-left:1px solid var(--toi);
-  color:#9ecbff;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer;
-  font-weight:650}
-#compte.prolonge #envoi-vite{border-left-color:var(--pensee);color:#c3a6f5}
-#envoi-vite:hover{background:#1f2d3f;color:#cde3ff}
-/* Rattraper le message pendant son décompte, sans avoir armé « retenir » à l'avance. */
-#retenir-vite{background:transparent;border:0;border-left:1px solid var(--toi);
-  color:#9ecbff;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer}
-#compte.prolonge #retenir-vite{border-left-color:var(--pensee);color:#c3a6f5}
-#retenir-vite:hover{background:#1f2d3f;color:#cde3ff}
-#compte.rattrape #reste{color:#c3a6f5}
-#compte.rattrape #retenir-vite{display:none}
 /* Les filtres, par famille. Dix-huit boutons alignes ne disaient ni ce qu'ils montraient ni
    pourquoi on voudrait les couper. Une liste deroulante par famille, avec une phrase par
    ligne, se lit sans documentation. */
@@ -1590,7 +1584,7 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 /* L'etat de la famille se lit sans l'ouvrir : tout affiche, rien affiche, ou partiel. */
 .famille summary.pleine{color:var(--texte);border-color:#4b5563;background:#1f242c}
 .famille summary.vide{color:#5a636e;border-style:dashed}
-.famille[open] summary{border-color:var(--toi);color:#9ecbff}
+.famille[open] summary{border-color:var(--toi);color:#8fd6de}
 
 .famille .panneau{position:absolute;top:calc(100% + 6px);left:0;z-index:20;min-width:340px;
   background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:10px 12px;
@@ -1637,7 +1631,7 @@ body{overflow-x:hidden}
 /* Plus étroit : c'est un réglage, pas une commande de lecture. Mais pas moins haut — il se
    touche du pouce comme les autres. */
 #lec-vitesse{flex:.6;font-variant-numeric:tabular-nums;color:#9aa5b3}
-#lec-vitesse.vite{border-color:var(--toi);color:#9fcdf2}
+#lec-vitesse.vite{border-color:var(--toi);color:#92d2dc}
 #lec-couper{color:#d98f8f}
 #lecture-cmds button[hidden]{display:none}
 @media (max-width: 520px) {
@@ -1664,14 +1658,14 @@ body{overflow-x:hidden}
 /* Coché : la bordure ET une pastille. La couleur seule ne suffit pas au soleil, sur un
    téléphone tenu de biais. */
 #q-options button.coche{border-color:var(--toi);background:#18242f;
-  box-shadow:0 0 0 2px #4f9dde22}
+  box-shadow:0 0 0 2px #4fc3d422}
 #q-options .q-titre{font-size:14.5px;font-weight:600}
 #q-options .q-detail{font-size:12.5px;line-height:1.35;color:#9aa5b3}
 #q-pied{display:flex;gap:8px;max-width:620px;margin:10px auto 0}
 #q-pied button{flex:1;min-height:46px;border-radius:12px;border:1px solid var(--bord);
   background:#161e28;color:#9aa5b3;font:inherit;font-size:14px;cursor:pointer}
 #q-pied button[hidden]{display:none}
-#q-valider{border-color:var(--toi);color:#9fcdf2;background:#17222e;font-weight:600}
+#q-valider{border-color:var(--toi);color:#92d2dc;background:#17222e;font-weight:600}
 /* Replié : le questionnaire ne garde qu'une ligne, pour laisser voir le flux et la barre
    pendant qu'on écrit une réponse libre — sans perdre le chemin du retour aux propositions. */
 #q-rouvrir{width:100%;min-height:40px;border-radius:10px;border:1px dashed var(--bord);
@@ -1709,7 +1703,7 @@ body{overflow-x:hidden}
 #saisie.une-ligne{border-radius:999px}
 /* Au focus, la zone s'affirme franchement : un halo, pas un simple filet de 1 px qui se
    confond avec le reste dans une interface sombre. */
-#saisie:focus{border-color:var(--toi);box-shadow:0 0 0 3px #4f9dde22;background:#1a212b}
+#saisie:focus{border-color:var(--toi);box-shadow:0 0 0 3px #4fc3d422;background:#1a212b}
 #saisie::placeholder{color:#5a636e}
 
 /* Une gouttiere discrete plutot que celle du systeme, qui arrivait comme une barre grise
@@ -1729,7 +1723,7 @@ body{overflow-x:hidden}
   transition:background .15s,border-color .15s,box-shadow .15s}
 .micro-rond:hover{background:#1f242c}
 .micro-rond.ouvert{border-color:var(--toi)}
-.micro-rond.parle{border-color:var(--accent);box-shadow:0 0 0 3px #4f9dde1f}
+.micro-rond.parle{border-color:var(--accent);box-shadow:0 0 0 3px #4fc3d41f}
 .micro-rond.coupe{border-color:#5a3a3a;background:#22181a}
 /* Cinq barres, et elles doivent SE VOIR. La première version faisait 2,5 x 5 px dans un rond
    de 48 : mesuré, et à cette taille le bouton paraît vide. Un indicateur qu'on ne remarque pas
@@ -1784,8 +1778,8 @@ body{overflow-x:hidden}
    un incident mais l'etat qu'on vient de demander. Deux boutons faisant la meme chose ne
    peuvent pas se peindre differemment.
    Le halo et la pulsation disent la presence, qui est la vraie information a donner. */
-#dicter-ici[aria-pressed="true"]{color:var(--toi);border-color:var(--toi);background:#121c28;
-  box-shadow:0 0 0 3px #58a6ff26;animation:lit 1.2s ease-in-out infinite}
+#dicter-ici[aria-pressed="true"]{color:var(--toi);border-color:var(--toi);background:#0d2429;
+  box-shadow:0 0 0 3px #3aa8b826;animation:lit 1.2s ease-in-out infinite}
 #dicter-ici.envoi{color:var(--outil);border-color:var(--outil);background:#1c1710;animation:none}
 #dicter-ici.envoi svg{animation:pulse 1s ease-in-out infinite}
 /* Le micro s'ouvre : entre l'appui et l'enregistrement il y a l'autorisation, le flux et
@@ -1827,32 +1821,15 @@ body{overflow-x:hidden}
 /* Au bout de combien de silence le message part. Sous la barre, parce que c'est un
    réglage de la dictée, pas de la session. */
 /* La marge auto coupe la seconde ligne en deux : à gauche ce qui touche à la parole (micro,
-   couper la lecture, joindre), à droite ce qui décide du départ du message. Sans elle, les
-   six boutons formaient un bloc compact où « envoyer » se confondait avec « retenir ». */
+   couper la lecture, joindre), à droite le seul geste qui fait partir le message. */
 #depart{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
-#delai{background:var(--carte);color:var(--texte);border:1px solid var(--bord);
-  border-radius:999px;padding:8px 10px;font:inherit;font-size:12.5px;cursor:pointer}
-#delai:hover{border-color:#4b5563}
-
-/* Le bascule dictée : envoyer tout seul, ou garder dans la barre pour corriger. */
-#retenir{background:transparent;border:1px solid var(--bord);border-radius:999px;
-  padding:8px 14px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--faible);
-  white-space:nowrap;display:inline-flex;gap:7px;align-items:center}
-#retenir:hover{border-color:#4b5563;color:var(--texte)}
-#retenir.on{border-color:var(--toi);color:#9ecbff;background:#132133}
-/* Retenue subie, pas choisie : en pointillés, pour la distinguer d'un réglage volontaire. */
-#retenir.auto{border-color:var(--outil);border-style:dashed;color:#e3b341}
-#retenir.auto::before{background:currentColor;opacity:.8}
-#retenir::before{content:"";width:8px;height:8px;border-radius:50%;
-  background:currentColor;opacity:.35}
-#retenir.on::before{opacity:1}
 /* Pendant qu'on dicte, la barre montre que ce texte n'est pas encore le tien. */
-#saisie.dictee{border-color:var(--toi);color:#9ecbff;font-style:italic}
+#saisie.dictee{border-color:var(--toi);color:#8fd6de;font-style:italic}
 #envoyer{background:transparent;color:var(--faible);border:1px solid var(--bord);
   min-height:38px;
   border-radius:999px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer;
   white-space:nowrap}
-#envoyer:not(:disabled):hover{border-color:var(--toi);color:#9ecbff}
+#envoyer:not(:disabled):hover{border-color:var(--toi);color:#8fd6de}
 #envoyer:disabled{opacity:.3;cursor:default}
 .g-toi .tape{color:var(--faible);font-size:11px;margin-right:5px}
 .ev{display:grid;grid-template-columns:62px 92px 14px 1fr;gap:12px;padding:7px 0;
@@ -1872,7 +1849,7 @@ body{overflow-x:hidden}
    regard sans repere est fatigant. */
 .ev{border-radius:6px;padding-left:6px;margin-left:-6px}
 .ev:hover{background:#141a22}
-.g-toi .badge{color:var(--toi)} .g-toi .corps{color:#cde3ff}
+.g-toi .badge{color:var(--toi)} .g-toi .corps{color:#d0f0f4}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
 .g-voix .badge{color:var(--voix)} .g-voix .corps{color:#c6f0cf}
 /* Une reponse qui ATTEND une reponse. Le defaut : « c'est fait » et « il me faut ton avis
@@ -1930,7 +1907,7 @@ body{overflow-x:hidden}
 .g-outil .args[open] summary{color:var(--texte)}
 .g-outil .args pre{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .g-resultat .badge{color:#7d8590} .g-resultat .corps{color:var(--faible);font-size:13px}
-.g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#9fe6ec;font-size:13px}
+.g-ordre .badge{color:var(--tour)} .g-ordre .corps{color:#aab6c6;font-size:13px}
 /* La bascule d'effort. Discrete par construction : elle n'arrive que quand elle change
    quelque chose, et le reste du temps cette ligne n'existe pas. */
 .g-effort .corps{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
@@ -1945,7 +1922,7 @@ body{overflow-x:hidden}
 .opts{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:6px;vertical-align:middle}
 .opt{border:1px solid var(--bord);border-radius:999px;padding:1px 9px;font-size:12px;
   color:var(--faible);white-space:nowrap}
-.g-tour .badge{color:var(--tour)} .g-tour .corps{color:#9fe6ec}
+.g-tour .badge{color:var(--tour)} .g-tour .corps{color:#aab6c6}
 /* Un tour interrompu porte la couleur de l'alerte, pas celle du tour : il faut pouvoir le
    repérer en faisant défiler, sans lire. */
 .apres.coupe{color:var(--outil);display:block;margin-top:2px}
@@ -1982,7 +1959,7 @@ body{overflow-x:hidden}
   border-bottom:1px solid var(--tour);border-top:1px solid var(--tour);
   background:#101a1c;margin:10px -6px}
 .g-reprise .badge,.g-reprise .pip{display:none}
-.g-reprise .corps{color:#9fe6ec;font-size:12px;letter-spacing:.04em;
+.g-reprise .corps{color:#aab6c6;font-size:12px;letter-spacing:.04em;
   text-transform:uppercase;font-weight:650}
 .apres{color:#5a636e;margin-left:9px;font-size:11px}
 .g-log .badge{color:#4d5560} .g-log .corps{color:#6e7681;font-size:12px;
@@ -1992,13 +1969,6 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#1b212a;
 details summary{cursor:pointer;color:var(--faible);font-size:12px;outline:none}
 details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);border-radius:6px;
   padding:8px 10px;overflow-x:auto;font-size:12px;color:#b6bec8}
-.conf{border:1px solid var(--bord);background:var(--carte);border-radius:10px;
-  padding:12px 16px;margin:0 0 16px}
-.conf-titre{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--faible);margin-bottom:8px;display:flex;gap:10px;align-items:center}
-.conf dl{display:grid;grid-template-columns:auto 1fr;gap:3px 16px;margin:0;font-size:13px}
-.conf dt{color:var(--faible)}
-.conf dd{margin:0;color:var(--texte);overflow-wrap:anywhere}
 .alerte{background:#3d1518;border:1px solid var(--erreur);color:#ffb3ad;border-radius:999px;
   padding:1px 9px;font-size:10.5px;letter-spacing:.03em}
 /* Une action en cours doit bouger, une action finie doit rendre un verdict. Avant ca les
@@ -2021,7 +1991,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   border-radius:999px;padding:2px 10px;font-size:12px;color:var(--texte);white-space:nowrap}
 .act::before{content:"";width:9px;height:9px;border:1.5px solid #ffffff26;
   border-top-color:currentColor;border-radius:50%;animation:tourne .7s linear infinite}
-.act.stt{border-color:var(--toi);color:#9ecbff}
+.act.stt{border-color:var(--toi);color:#8fd6de}
 .act.pensee{border-color:var(--pensee);color:#c3a6f5}
 .act.outil{border-color:var(--outil);color:#e3b341}
 .act.voix{border-color:var(--voix);color:#7ee08d}
@@ -2154,7 +2124,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   #filtres button { flex: 0 0 auto; min-height: 34px; padding: 5px 11px; font-size: 12px; }
   #compteurs { font-size: 11px; gap: 6px; }
   #compteurs > * { flex: 0 0 auto; white-space: nowrap; }
-  #compte, #travail { white-space: nowrap; }
+  #travail { white-space: nowrap; }
   #pupitre, .zone-direct, .rang-bas, #alerte-entete { max-height: 240px;
     transition: max-height .2s ease-out, opacity .15s ease-out, margin .2s ease-out; }
   header.compact #pupitre, header.compact .zone-direct, header.compact .rang-bas,
@@ -2218,7 +2188,6 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
        dictant depuis le téléphone, c'est le doigt qui décide : ce réglage ne s'applique à
        rien. Il reste sur grand écran, où il a tout son sens. */
   #composer.dictee-locale #couper-lecture,
-  #composer.dictee-locale #delai { display: none; }
   #saisie-barre form { gap: 8px; }
   #depart { gap: 5px; }
   #saisie {
@@ -2226,9 +2195,6 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     padding: 12px 14px; height: 48px; max-height: 36vh; border-radius: 22px;
   }
   #envoyer { min-height: 40px; padding: 0 12px; font-size: 13.5px; }
-  #delai { min-height: 40px; font-size: 12px; padding: 4px 19px 4px 7px;
-    background-position: right 5px center; }
-  #retenir { min-height: 40px; padding: 5px 9px; font-size: 12.5px; }
   #composer { gap: 8px 7px; }
 
   #pile-barre { left: 12px; right: 12px; }
@@ -2268,22 +2234,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   #micro-bas, #couper-lecture, #joindre, #lire-ici, #dicter-ici { width: 40px; height: 40px; }
   #composer { gap: 8px 6px; }
   #depart { gap: 4px; }
-  #delai { padding: 4px 17px 4px 6px; font-size: 11.5px; background-position: right 4px center; }
-  #retenir { padding: 5px 8px; font-size: 12px; }
   #envoyer { padding: 0 11px; font-size: 13px; }
   header { padding-left: 10px; padding-right: 10px; }
   header h1 { font-size: 14px; }
   #flux { padding-left: 8px; padding-right: 8px; }
   .zone-controles button { padding: 6px 9px; font-size: 12.5px; }
-}
-
-/* Les tres petits ecrans (iPhone SE de premiere generation, 320 px). Meme resserres, six
-   controles n'y tiennent pas : il faut en retirer un. C'est le delai qui part — il regle au
-   bout de combien de silence la dictee du PC s'envoie toute seule, ce qui ne veut plus dire
-   grand-chose sur un telephone qui dicte lui-meme et dont on commande l'envoi au doigt.
-   « retenir » et « envoyer », eux, sont des gestes, pas des reglages : ils restent. */
-@media (max-width: 340px) {
-  #delai { display: none; }
 }
 
 @media (max-width: 900px) and (orientation: landscape) {
@@ -2333,8 +2288,13 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
        selon la largeur de la fenêtre, et on ne savait plus quoi lire où. -->
   <span id="pupitre" class="zone"></span>
   <span class="zone zone-controles">
-    <button id="micro" title="couper le micro (touche m)">🎤 micro</button>
-    <button id="arreter" title="arrêter le travail en cours (touche s)" disabled>⏹ arrêter</button>
+    <button id="micro" title="couper le micro (touche m)"><svg class="ico" viewBox="0 0 24 24"
+        aria-hidden="true"><rect x="9.2" y="3" width="5.6" height="10.4" rx="2.8"/>
+        <path d="M5.8 11.4a6.2 6.2 0 0 0 12.4 0"/><path d="M12 17.6V21"/>
+        <path class="rature" d="M4.6 20.4 19.4 3.6"/></svg><span class="lib">micro</span></button>
+    <button id="arreter" title="arrêter le travail en cours (touche s)" disabled><svg class="ico"
+        viewBox="0 0 24 24" aria-hidden="true"><rect x="6.4" y="6.4" width="11.2" height="11.2"
+        rx="2.6"/></svg><span class="lib">arrêter</span></button>
     <select id="modele" title="modèle utilisé pour le travail"></select>
     <select id="effort" title="niveau d'effort de réflexion"></select>
   </span>
@@ -2353,12 +2313,6 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <div id="choix-deploie" hidden></div>
   </span>
   <button type="button" id="maj-vite" hidden></button>
-  <span id="compte" title="temps avant envoi automatique">
-    <span id="reste"></span>
-    <button id="retenir-vite" type="button"
-            title="garder CE message dans la barre au lieu de l'envoyer">retenir</button>
-    <button id="envoi-vite" type="button" title="envoyer tout de suite (Entrée)">envoyer</button>
-  </span>
   <div id="activite"></div>
   </span>
 
@@ -2468,7 +2422,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          ligne de la barre. Le placer apres les boutons et le remonter en CSS aurait donne
          une tabulation qui traverse trois ronds avant d'atteindre la zone qu'on regarde. -->
     <textarea id="saisie" rows="1" class="une-ligne"
-              placeholder="écrire au lieu de parler — touche /"
+              placeholder="écrire au lieu de parler"
               aria-label="message à envoyer"></textarea>
     <!-- Le micro est aussi ICI, pas seulement dans l'en-tete. C'est au bas de la page que le
          regard est quand on dicte : le texte s'y ecrit, et la relecture s'y fait. Devoir
@@ -2484,7 +2438,9 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
          moment-là on est en bas. Il n'apparaît que pendant une lecture : un bouton grisé en
          permanence occuperait la place sans jamais servir. -->
     <button id="couper-lecture" type="button" class="micro-rond coupe-son" hidden
-            title="couper la lecture en cours (ou dis « chut »)">⏹</button>
+            title="couper la lecture en cours (ou dis « chut »)">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="6.4" y="6.4" width="11.2" height="11.2" rx="2.6"/></svg></button>
     <!-- Lire les reponses SUR CET APPAREIL. Rien a voir avec le bouton precedent : celui-la
          coupe la voix qui sort du PC, celui-ci fait parler le telephone qu'on tient.
          Eteint au chargement, toujours, et ce n'est pas un reglage prudent — c'est une
@@ -2517,14 +2473,10 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
            0 1-1-1v-8.5a1 1 0 0 1 1-1Z"/><circle cx="12" cy="14" r="3.4"/></svg>
       <input type="file" accept="image/*" multiple hidden>
     </label>
-    <!-- Les trois controles du DEPART tiennent ensemble : quand partir (le delai), si ca
-         part tout seul (retenir), et le faire partir maintenant (envoyer). Groupes, ils
-         restent cote a cote et cales a droite meme sur un ecran etroit — separes, « envoyer »
-         se retrouvait seul sur une troisieme ligne, a gauche, loin de ce qu'il declenche. -->
+    <!-- Un seul geste de depart, parce qu'il n'y en a plus qu'un : rien ne part sans cet
+         appui. « quand partir » et « retenir » reglaient un envoi automatique qui n'existe
+         plus. -->
     <div id="depart">
-      <select id="delai" title="au bout de combien de silence le message part"></select>
-      <button id="retenir" type="button"
-              title="retenir la dictée dans la barre au lieu de l'envoyer (touche r)">retenir</button>
       <button id="envoyer" type="submit" disabled>envoyer</button>
     </div>
   </form>
@@ -2859,9 +2811,6 @@ function md(src) {
   return sortie.join("");
 }
 
-// La configuration n'est pas une ligne du flux : c'est l'en-tete de la session. Elle reste
-// en haut, non filtrable, parce qu'en bypassPermissions c'est le seul endroit qui dit
-// noir sur blanc que plus rien ne sera demande.
 // Le titre de la fenêtre porte le projet. Avec trois conversations ouvertes, trois onglets
 // nommés « claude-talk » sont indiscernables — et c'est le titre qu'on lit dans la barre des
 // tâches, pas le contenu de la page.
@@ -2871,18 +2820,16 @@ function nommerFenetre(valeurs) {
   if (nom) document.title = `claude-talk — ${nom}`;
 }
 
+// La configuration n'est PLUS affichee. C'etait une carte de vingt lignes en tete de chaque
+// conversation, lue une fois le premier jour et jamais ensuite — et elle repoussait hors de
+// l'ecran, sur un telephone, les premieres lignes de ce qu'on venait lire.
+//
+// Deux choses qu'elle portait restent, parce qu'elles servent vraiment : le titre de la
+// fenetre, qui distingue trois onglets ouverts, et le bandeau rouge — en bypassPermissions
+// c'est le seul endroit qui dit que plus rien ne sera demande, et ça, ça ne se decouvre pas
+// en cours de route. Le reste est dans le panneau des reglages, a la demande.
 function carteConfig(e) {
-  const champs = Object.entries(e.valeurs || {}).filter(([k]) => !k.startsWith("_"));
-  const alerte = e.valeurs?._alerte
-    ? `<span class="alerte">⚠ ${ech(e.valeurs._alerte)}</span>` : "";
   nommerFenetre(e.valeurs);
-  const carte = document.createElement("section");
-  carte.className = "conf";
-  carte.innerHTML = `<div class="conf-titre">configuration ${alerte}</div><dl>`
-    + champs.map(([k, v]) => `<dt>${ech(k)}</dt><dd>${ech(v)}</dd>`).join("")
-    + `</dl>`;
-  flux.appendChild(carte);
-  dernier = null;
   if (e.valeurs?._alerte) {
     const en = document.getElementById("alerte-entete");
     en.textContent = "⚠ " + e.valeurs._alerte;
@@ -2965,7 +2912,6 @@ function corps(e) {
       const bouts = [];
       if (e.actions != null) bouts.push(`${e.actions} action${e.actions > 1 ? "s" : ""}`);
       if (e.duree != null) bouts.push(`${e.duree}s`);
-      if (e.tours != null) bouts.push(`${e.tours} tour${e.tours > 1 ? "s" : ""} modèle`);
       if (e.jetons != null) bouts.push(`${fmtJetons(e.jetons)} jetons`);
       if (e.texte) bouts.push(e.texte);
       const ligne = bouts.join(" · ") || "terminé";
@@ -2979,17 +2925,13 @@ function corps(e) {
     case "log":
       return `<span style="opacity:.7">${ech(e.source)}</span> ${ech(e.texte)}`;
     case "dictee":
-      // Dire POURQUOI, pas seulement « retenu ». Les trois raisons ne se corrigent pas de la
-      // même façon : le mode se désarme, la retenue d'office s'explique par le travail en
-      // cours, le rattrapage est un geste qu'on vient de faire. « retenu » tout court laissait
-      // chercher lequel des trois s'appliquait.
+      // Plus rien ne part tout seul, donc la seule chose qui reste a dire est OU est alle
+      // le texte — et, quand il s'ajoute a un brouillon, qu'il ne l'a pas ecrase. Les
+      // raisons d'autrefois (mode, retenue d'office, rattrapage) expliquaient pourquoi
+      // l'envoi automatique n'avait PAS eu lieu : la question ne se pose plus.
       return ech(e.texte) + `<span class="apres">` + ({
-        attente: "retenu — un texte attend déjà dans la barre, relis et envoie",
-        occupe: "retenu — Claude travaillait, à relire avant d'envoyer",
-        mode: "retenu — le mode « retenir » est armé",
-        tour: "retenu — tu l'as rattrapé pendant le décompte",
-      }[e.raison] || (e.auto ? "retenu — Claude travaillait"
-                             : "retenu à ta demande")) + `</span>`;
+        attente: "ajouté à ce qui attendait déjà dans la barre",
+      }[e.raison] || "déposé dans la barre — à relire, puis envoyer") + `</span>`;
     case "session":
       // Sans ce cas la ligne s'affichait VIDE : l'événement porte `id`, pas `texte`. Or
       // c'est précisément l'identifiant qu'on vient chercher pour reprendre.
@@ -3725,7 +3667,7 @@ let paroleDetectee = false;
 // mises à jour séparées finissent toujours par se contredire — le symptôme serait le pire
 // possible, croire qu'on est écouté alors qu'on ne l'est pas.
 function majMicro() {
-  btnMicro.textContent = microActif ? "🎤 micro" : "🔇 micro coupé";
+  btnMicro.querySelector(".lib").textContent = microActif ? "micro" : "micro coupé";
   btnMicro.className = microActif ? "" : "coupe";
   btnMicro.title = (microActif ? "couper" : "rouvrir") + " le micro (touche m)";
   if (!microBas) return;
@@ -3805,7 +3747,6 @@ function majTravail() {
     if (minuteur) { clearInterval(minuteur); minuteur = null; }
     selEffort.disabled = false;
     selEffort.title = "niveau d'effort de réflexion";
-    majRetenir();
     majCogitation();
     return;
   }
@@ -3830,7 +3771,6 @@ function majTravail() {
   btnStop.disabled = false;
   selEffort.disabled = true;
   selEffort.title = "tâche en cours — l'effort ne peut changer qu'entre deux tâches";
-  majRetenir();
   majCogitation();
 }
 // --- le bandeau de cogitation -----------------------------------------------------------
@@ -3950,46 +3890,6 @@ function majCogitation() {
   }
 }
 
-// --- le compte a rebours avant envoi ----------------------------------------------------
-// La fenêtre est déterminée : à partir de la fin de la parole le tour part soit à `min`,
-// soit à `max` si le détecteur juge la phrase inachevée. Donc si le compteur atteint zéro
-// sans que le message soit parti, c'est nécessairement que le détecteur a prolongé — et on
-// peut le dire, au lieu d'afficher un zéro bloqué qui ressemble à une panne.
-const zoneCompte = document.getElementById("compte");
-const zoneReste = document.getElementById("reste");
-const btnEnvoiVite = document.getElementById("envoi-vite");
-let finMin = null, finMax = null, tic = null;
-
-function majCompte() {
-  if (finMin == null) {
-    zoneCompte.className = "";
-    if (tic) { clearInterval(tic); tic = null; }
-    return;
-  }
-  const maintenant = Date.now();
-  const prolonge = maintenant >= finMin;
-  const cible = prolonge ? finMax : finMin;
-  const reste = Math.max(0, (cible - maintenant) / 1000);
-  // Le libellé doit dire ce qui va RÉELLEMENT se passer. En mode retenu, ou après un
-  // rattrapage, rien ne s'envoie au bout du compte : annoncer « envoi » serait faux, et
-  // c'est le genre de faux qui fait douter de tout l'affichage.
-  const garde = retenir || rattrape;
-  zoneCompte.className = "montre" + (prolonge ? " prolonge" : "")
-                       + (rattrape ? " rattrape" : "");
-  const quoi = garde ? "retenu dans" : "envoi dans";
-  zoneReste.textContent = prolonge && !garde
-    ? `phrase inachevée — ${reste.toFixed(1)} s`
-    : `${quoi} ${reste.toFixed(1)} s`;
-  btnEnvoiVite.textContent = garde ? "terminer" : "envoyer";
-  // Passé le plafond, il n'y a plus rien à annoncer : le tour part, ou la parole a reprise.
-  if (maintenant >= finMax) arreterCompte();
-}
-
-// `fin` est l'échéance RÉELLE, en horloge murale, publiée par l'agent qui commettra le tour.
-// L'utiliser plutôt que de recompter localement supprime la seule vraie cause du « je vois
-// encore 4 s et le message est déjà parti » : il n'y a plus qu'une horloge, et c'est celle
-// qui décide. Le repli sur `min` couvre l'ancien mode automatique, où LiveKit décide et où
-// la page ne peut effectivement qu'estimer.
 // Un mot contre la barre, effacé au premier signe que la situation a changé : on écrit, on
 // envoie, ou une nouvelle dictée s'ouvre. Une explication qui survit à son objet devient
 // fausse, et l'ancienne version restait affichée jusqu'au tour suivant.
@@ -4148,33 +4048,6 @@ setInterval(() => { if (enVol.length) majEnVol(); }, 1000);
 // l'historique accusera ce qui est arrive ; la fin de reprise renverra le reste, une fois.
 restaurerEnVol();
 
-function lancerCompte(min, max, fin) {
-  if (fin) {
-    // Échéance exacte, sans extension possible : en manuel il n'y a pas de détecteur pour
-    // juger la phrase inachevée, donc afficher « phrase inachevée — 3 s » serait inventé.
-    finMin = finMax = fin;
-  } else {
-    finMin = Date.now() + min * 1000;
-    finMax = Date.now() + max * 1000;
-  }
-  if (!tic) tic = setInterval(majCompte, 100);
-  majCompte();
-}
-
-function arreterCompte() {
-  finMin = finMax = null;
-  rattrape = false;   // le rattrapage ne vaut que pour le tour qui vient de finir
-  majCompte();
-}
-
-// Envoyer sans attendre. La fenêtre reste longue pour pouvoir réfléchir à voix haute ; ce
-// bouton dit simplement « j'ai fini », sans raccourcir la fenêtre pour tous les tours.
-function envoyerVite() {
-  envoyerCmd({ cmd: "envoyer" });
-  arreterCompte();
-}
-btnEnvoiVite.onclick = envoyerVite;
-
 function arreter() {
   if (btnStop.disabled) return;
   envoyerCmd({ cmd: "arreter" });
@@ -4186,10 +4059,12 @@ addEventListener("keydown", ev => {
   if (ev.key === "m") basculerMicro();
   if (ev.key === "s") arreter();
   if (ev.key === "/") { ev.preventDefault(); champ.focus(); }
-  if (ev.key === "r") basculerRetenir();
-  // Entrée hors du champ : « j'ai fini de parler ». Le geste le plus naturel pour couper
-  // l'attente, et il ne peut pas entrer en conflit avec la saisie, qui est exclue plus haut.
-  if (ev.key === "Enter") envoyerVite();
+  // Entrée hors du champ : envoyer ce qui attend dans la barre. Le meme geste qu'a
+  // l'interieur du champ, pour n'avoir pas a y revenir apres avoir dicte.
+  if (ev.key === "Enter" && !btnEnvoyer.disabled) {
+    ev.preventDefault();
+    document.getElementById("composer").requestSubmit();
+  }
 });
 majMicro();
 
@@ -4234,7 +4109,6 @@ function majEnvoyer() {
 //   arrivant APRÈS l'envoi du tour — LiveKit le fait, il le journalise même — remettait dans
 //   la barre un texte déjà envoyé, qui repartait au message suivant.
 let brouillon = null, segments = "", dicteeOuverte = false;
-let retenir = false;
 
 // Une dictée s'ouvre quand tu commences à parler, et pas avant : c'est ce qui délimite un
 // énoncé, et donc ce qui permet d'ignorer les transcriptions en retard.
@@ -4290,60 +4164,6 @@ function viderDictee() {
   if (dicteeOuverte) fermerDictee(null);
   barreVide = !champ.value.trim();
 }
-
-// --- au bout de combien de silence le message part -------------------------------------
-// 3, 5 et 10 s sont les repères ; les autres paliers existent pour pouvoir descendre plus
-// court ou monter plus long sans toucher à la configuration. Le plafond « phrase inachevée »
-// suit le plancher : le régler à 15 s ne doit pas le placer au-dessus d'un plafond figé.
-const selDelai = document.getElementById("delai");
-function remplirDelais(paliers, actuel, plafond) {
-  const vus = paliers.map(p => p.s);
-  // Une valeur venue de la configuration et absente des paliers doit rester proposée,
-  // sinon le sélecteur afficherait autre chose que ce qui est réellement en vigueur.
-  if (actuel != null && !vus.includes(actuel)) vus.push(actuel);
-  vus.sort((a, b) => a - b);
-  selDelai.innerHTML = vus.map(s =>
-    `<option value="${s}">${s} s</option>`).join("");
-  if (actuel != null) selDelai.value = String(actuel);
-  majTitreDelai(actuel, plafond);
-}
-function majTitreDelai(actuel, plafond) {
-  selDelai.title = `envoi après ${actuel} s de silence`
-    + (plafond ? ` — jusqu'à ${plafond} s si la phrase semble inachevée` : "");
-}
-selDelai.onchange = () => {
-  envoyerCmd({ cmd: "delai", secondes: parseFloat(selDelai.value) });
-};
-
-// Rattraper le message pendant son décompte, sans avoir armé « retenir » à l'avance.
-const btnRetenirVite = document.getElementById("retenir-vite");
-let rattrape = false;
-btnRetenirVite.onclick = () => {
-  if (!envoyerCmd({ cmd: "retenir_tour" })) return;
-  rattrape = true;
-  majCompte();
-};
-
-const btnRetenir = document.getElementById("retenir");
-function majRetenir() {
-  // Pendant une tâche, la retenue s'applique d'office. Le bouton le dit AVANT qu'on parle :
-  // découvrir après coup que son message n'est pas parti est la pire façon de l'apprendre.
-  const auto = !retenir && debutTravail != null;
-  btnRetenir.className = retenir ? "on" : (auto ? "auto" : "");
-  btnRetenir.textContent = retenir ? "retenu" : (auto ? "retenu ·" : "retenir");
-  btnRetenir.title = (retenir
-    ? "la dictée reste dans la barre — tu relis, tu corriges, tu envoies"
-    : auto
-      ? "Claude travaille : ce que tu dis est retenu dans la barre, pas envoyé"
-      : "la dictée part dès que tu as fini de parler") + " (touche r)";
-}
-function basculerRetenir() {
-  retenir = !retenir;
-  majRetenir();
-  envoyerCmd({ cmd: "retenir", actif: retenir });
-}
-btnRetenir.onclick = basculerRetenir;
-majRetenir();
 
 // Taper reprend la main. L'événement input ne se déclenche que pour une vraie frappe — une
 // valeur posée par le script ne le déclenche pas — donc ceci ne peut venir que de toi, et ce
@@ -4919,14 +4739,10 @@ function recevoir(e, etat = false) {
     }
     if (e.genre === "modeles") { remplirModeles(e.liste || [], e.actuel); return; }
     if (e.genre === "efforts") { remplirEfforts(e.liste || [], e.actuel); return; }
-    if (e.genre === "delais") {
-      remplirDelais(e.paliers || [], e.actuel, e.plafond); return;
-    }
-    if (e.genre === "delai") {
-      selDelai.value = String(e.secondes);
-      majTitreDelai(e.secondes, e.plafond);
-      return;
-    }
+    // Plus rien ne part tout seul : le delai d'envoi et le mode « retenir » ne pilotent
+    // plus rien ici. Ils arrivent encore — une session ouverte avant cette version les
+    // publie — et on les avale sans bruit plutot que de les laisser tomber dans le flux.
+    if (e.genre === "delais" || e.genre === "delai") return;
     // La mesure de fenêtre arrive une seconde après le bilan du tour : elle complète la
     // ligne existante au lieu d'en créer une seconde, sinon un tour laisserait deux traces
     // pour un seul événement.
@@ -5117,11 +4933,8 @@ function recevoir(e, etat = false) {
       // Un mot sous la barre, au moment exact où le texte s'y dépose : c'est là que le regard
       // est. Le trouver dans le flux quinze lignes plus haut ne sert à rien.
       noteBarre({
-        attente: "ajouté à ce qui attend déjà — relis, puis Entrée",
-        occupe: "retenu pendant que Claude travaille — relis, puis Entrée",
-        mode: "mode « retenir » armé — relis, puis Entrée",
-        tour: "rattrapé — relis, puis Entrée",
-      }[e.raison] || "retenu — relis, puis Entrée");
+        attente: "ajouté à ce qui attendait déjà — relis, puis envoie",
+      }[e.raison] || "relis, puis envoie");
       ajouter(e);            // et une ligne, sinon rien ne dit qu'on a parlé pour rien
       return;
     }
@@ -5156,7 +4969,7 @@ function recevoir(e, etat = false) {
       majMesureCogitation();
       return;
     }
-    if (e.genre === "retenir") { retenir = !!e.actif; majRetenir(); return; }
+    if (e.genre === "retenir") return;
     if (e.genre === "ecoute") {
       // `parle` marque le DÉBUT de la parole : c'est là qu'une nouvelle dictée s'ouvre, et
       // nulle part ailleurs. Ce repère est ce qui permet d'ignorer une transcription en
@@ -5166,7 +4979,6 @@ function recevoir(e, etat = false) {
       // du même énoncé. L'animation suit donc exactement ce que le VAD entend.
       if (e.parle) { paroleDetectee = true; majMicro(); }
       else if (e.actif) { paroleDetectee = false; majMicro(); }
-      if (e.actif) lancerCompte(e.min, e.max, e.fin); else arreterCompte();
       return;
     }
     if (e.genre === "quota") { quota = e.fenetres || []; majCompteurs(); return; }
@@ -5206,8 +5018,8 @@ function majMoteur(actif, replie) {
   pastilleMoteur.title = (replie
     ? actif + " — repli : le moteur de tête ne répond plus"
     : actif + " — moteur de reconnaissance")
-    + (sttDirect ? "" : " · ne transcrit qu'à la fin de la phrase, donc rien ne s'écrit "
-                        + "pendant que tu parles et « retenir » n'a rien à relire")
+    + (sttDirect ? "" : " · ne transcrit qu'à la fin de la phrase : rien ne s'écrit "
+                        + "pendant que tu parles, le texte arrive d'un coup dans la barre")
     + " (clic pour choisir)";
 }
 
@@ -7092,8 +6904,8 @@ async function envoyerVocal(blob, type) {
       throw refus;
     }
     // Le texte n'est PAS pris ici : il arrive par le flux d'evenements, comme une dictee du
-    // PC, et c'est ce chemin-la qui remplit la barre et arme le decompte. Deux sources pour
-    // un meme texte finiraient par l'ecrire deux fois. Mais on DIT que ça a marche, et par
+    // PC, et c'est ce chemin-la qui remplit la barre. Deux sources pour un meme texte
+    // finiraient par l'ecrire deux fois. Mais on DIT que ça a marche, et par
     // qui : un vocal qui reussit sans un mot ressemble a un vocal perdu.
     vocalEnAttente = null;
     // La raison d'une coupure SUBIE se dit AVEC le succes, pas a sa place. Sans ça elle
@@ -7457,7 +7269,7 @@ let DELAI_BONJOUR = 20000;
 
 // Ce que dit le champ de saisie au repos. Nomme parce qu'il se repose a deux endroits :
 // a l'ouverture de la liaison, et quand l'agent se branche enfin.
-const ECRIRE_ICI = "écrire au lieu de parler — touche /";
+const ECRIRE_ICI = "écrire au lieu de parler";
 
 // Combien de temps on laisse une socket neuve aboutir avant de la declarer morte-nee.
 // Huit secondes : un handshake WebSocket local se compte en millisecondes, et meme un reseau
@@ -7495,7 +7307,7 @@ function direLiaison() {
   if (!navigator.onLine) {
     el.textContent = "hors ligne";
     el.className = "e-perdu";
-    champ.placeholder = "hors ligne — le message partira au retour du réseau";
+    champ.placeholder = "hors ligne — ça partira au retour";
     el.title = "l'appareil n'a pas de réseau. " + motDuServeur();
     return;
   }
@@ -7531,8 +7343,8 @@ function direLiaison() {
   // boutons pour le porter. Ici, on garde la seule chose qui concerne CE champ : ce qui
   // arrive au texte qu'on est en train d'y ecrire.
   champ.placeholder = arrete
-    ? `plus de liaison depuis ${depuis} s — voir le bandeau`
-    : `${perdu ? "déconnecté" : "reconnexion"} — ce que tu écris partira dès le retour`;
+    ? `sans liaison depuis ${depuis} s`
+    : `${perdu ? "déconnecté" : "reconnexion"} — ça partira`;
   el.title = (causeCoupure ? causeCoupure + ". " : "")
     + (serveurRepond === false ? "la machine ne répond plus en HTTP non plus. "
        : serveurRepond === true ? "la machine répond en HTTP : l'agent est là. " : "")
@@ -7829,7 +7641,7 @@ function brancher() {
     // champ qui invite a ecrire sans rien dire de plus laisse croire que le message part
     // dans le vide. Il est mis de cote et rejoue — c'est ce que cette phrase promet.
     champ.placeholder = etatRecu ? ECRIRE_ICI
-      : "l'agent démarre — ce que tu écris partira dès qu'il est prêt";
+      : "l'agent démarre — ça partira";
     const etatEl = document.getElementById("etat");
     if (etatEl) etatEl.onclick = null;
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
@@ -7906,7 +7718,6 @@ function brancher() {
     clearTimeout(minuterieBonjour);
     minuterieBonjour = null;
     majEnvoyer();
-    arreterCompte();
     toutClore("connexion perdue");
     // Le compteur du tour s'arrete ici : il mesurait depuis l'horloge locale, donc il
     // continuait de monter meme sur un agent mort. Le minuteur aussi — une page au repos

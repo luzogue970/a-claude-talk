@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""La fenetre avant envoi : qui decide, quand, et ce qui la remet a zero.
+"""Ce qu'on dit au micro ne part pas tout seul : qui decide d'envoyer, et quand.
 
-Pourquoi ces tests existent. Avant, LiveKit decidait de l'envoi et la page affichait un
-compte a rebours *estime* a partir des memes reglages : deux horloges pour une seule
-decision. Quand elles divergeaient on lisait « encore 4 s » et le message etait deja parti,
-donc le bouton « retenir » arrivait apres coup — « la phase de retenir, des fois je ne peux
-pas la faire ». Maintenant l'agent tient la fenetre et publie son echeance exacte.
+Pourquoi ces tests existent. Il y a eu trois generations ici. LiveKit decidait seul, puis
+l'agent a tenu un decompte et publie son echeance, et on a empile par-dessus trois moyens de
+le rattraper : le mode « retenir », le rattrapage d'un tour, la retenue d'office pendant que
+Claude travaille. Empiler des garde-fous autour d'un comportement est la facon longue de dire
+qu'on n'en veut pas — « je veux rarement que le message s'envoie tout seul ». Le decompte a
+donc ete retire, et les trois rattrapages avec.
 
 Ce qui doit rester vrai, et que ces tests verifient :
 
-- rien ne part sans qu'un envoi soit reellement demande, a l'echeance ou au bouton ;
-- reparler REMET la fenetre a zero sans rien envoyer et SANS perdre ce qui a deja ete dit
-  (c'est ce qui rend une pause de trois a cinq secondes possible) ;
-- un ordre local part IMMEDIATEMENT : faire attendre « arrete » cinq secondes est absurde ;
-- une raison de retenir empeche l'envoi, et le tour en attente est JETE — sinon il repart au
-  prochain envoi, ce qui faisait reapparaitre du texte deja parti ;
-- « retenir » clique PENDANT le decompte fonctionne, y compris a la derniere seconde.
+- une phrase dictee se DEPOSE dans la barre ; rien ne l'envoie qu'un appui sur « envoyer » ;
+- reparler accumule sans rien envoyer et SANS perdre ce qui a deja ete dit ;
+- un ordre local part IMMEDIATEMENT : faire attendre « arrete » est absurde. Avec la reponse
+  a une permission et la reponse a une question, ce sont les SEULS envois sans appui ;
+- le tour LiveKit en attente est JETE a chaque depot — sinon il repart au prochain envoi,
+  ce qui faisait reapparaitre du texte deja parti ;
+- une finale qui arrive apres le depart d'un tour appartient au tour precedent, pas au suivant.
 """
 
 import asyncio
@@ -110,35 +111,37 @@ async def principal():
          "et aucun decompte affiche — un decompte sur un tour vide n'annonce rien")
 
     # --- le cas courant -----------------------------------------------------------------
-    print("\n=== le cas courant : on attend, puis on envoie ===")
+    print("\n=== le cas courant : ça se depose, ça ne part pas ===")
     v = neuve()
     v._dit = "ajoute un test sur la fenetre"
     v.ouvrir_fenetre()
-    ecoute = v.tableau.dernier("ecoute")
-    dire(ecoute and ecoute.get("actif") is True, "le decompte est annonce")
-    dire(ecoute.get("fin") and ecoute["fin"] > time.time() * 1000,
-         "avec une echeance en horloge murale, dans le futur")
-    dire(abs(ecoute["fin"] / 1000 - time.time() - 0.15) < 0.1,
-         "et cette echeance correspond au delai reglé, pas a une constante")
-    dire(v.sess.commis == 0, "rien n'est parti pendant l'attente")
+    d = v.tableau.dernier("dictee")
+    dire(d and d.get("texte") == "ajoute un test sur la fenetre",
+         "la phrase va dans la barre, entiere")
+    dire(v.sess.commis == 0, "et rien n'est envoye")
+    dire(v.tableau.dernier("ecoute") is None,
+         "aucun decompte n'est annonce : il n'y en a plus a annoncer")
+    dire(v._fenetre is None, "aucune tache d'envoi differe ne reste en vol")
+    dire(v.sess.oublies == 1,
+         "le tour LiveKit est JETE — sinon il repart au prochain envoi, deja vu")
+    dire(v._dit == "", "et le texte n'est pas garde en double cote agent")
+    # Le point qui coute le plus cher s'il casse : attendre, et verifier que RIEN n'arrive.
+    # L'ancien defaut etait exactement ça — on se relisait, et pendant ce temps c'etait parti.
     await asyncio.sleep(0.3)
-    dire(v.sess.commis == 1, "a l'echeance, le tour part une fois et une seule")
-    dire(v._dit == "", "et ce qui a ete dit est consomme, pas laisse pour le tour suivant")
+    dire(v.sess.commis == 0, "et apres trois dixiemes de seconde, toujours rien")
 
-    # --- reparler remet a zero sans perdre le debut --------------------------------------
-    print("\n=== reparler prolonge, sans rien perdre ===")
+    # --- reparler accumule sans rien perdre ----------------------------------------------
+    print("\n=== reparler accumule, sans rien perdre ===")
     v = neuve()
     v._dit = "premiere partie"
     v.ouvrir_fenetre()
-    await asyncio.sleep(0.05)
-    v.fermer_fenetre(publier=False)          # ce que fait « speaking »
-    v._dit = (v._dit + " et la suite").strip()
+    v._retenu_en_attente = False             # ce que fait l'envoi depuis la barre
+    v._dit = "premiere partie et la suite"
     v.ouvrir_fenetre()
-    await asyncio.sleep(0.08)
-    dire(v.sess.commis == 0,
-         "l'ancienne echeance ne se declenche pas apres avoir reparle")
-    await asyncio.sleep(0.15)
-    dire(v.sess.commis == 1, "seule la nouvelle echeance envoie")
+    await asyncio.sleep(0.1)
+    dire(v.sess.commis == 0, "reparler n'envoie rien, pas plus que se taire")
+    dire(v.tableau.dernier("dictee")["texte"] == "premiere partie et la suite",
+         "et la barre porte le texte complet, pas seulement la suite")
 
     # --- un ordre local ne patiente pas -------------------------------------------------
     print("\n=== un ordre local part tout de suite ===")
@@ -163,17 +166,15 @@ async def principal():
          "la detection prend bien cette question pour un ordre (faux positif connu)")
     v._dit = longue
     v.ouvrir_fenetre()
-    dire(v.sess.commis == 0 and v._fenetre is not None,
-         "mais elle est trop longue pour le raccourci : elle attend, donc reste rattrapable")
-    v.fermer_fenetre()
+    dire(v.sess.commis == 0 and v.tableau.dernier("dictee"),
+         "mais elle est trop longue pour le raccourci : elle se depose, donc reste relisible")
 
     # Et la limite se verifie dans les deux sens : un ordre court garde son raccourci.
     v = neuve()
     v._dit = "arrête tout maintenant s'il te plaît"       # 6 mots : au-dela de la limite
     v.ouvrir_fenetre()
     dire(v.sess.commis == 0,
-         "au-dela de cinq mots, meme un vrai ordre passe par la fenetre — bornage assume")
-    v.fermer_fenetre()
+         "au-dela de cinq mots, meme un vrai ordre se depose — bornage assume")
 
     # --- une reponse a une permission non plus ------------------------------------------
     print("\n=== une reponse a une permission part tout de suite ===")
@@ -184,53 +185,37 @@ async def principal():
     dire(v.sess.commis == 1, "on attend une permission : la reponse ne patiente pas")
     v.permission_en_cours.cancel()
 
-    # --- les trois raisons de retenir ---------------------------------------------------
-    print("\n=== retenir : les trois raisons, et ce qu'elles font ===")
-    cas = [("mode", lambda v: setattr(v, "retenir", True)),
-           ("tour", lambda v: setattr(v, "_retenir_ce_tour", True)),
-           ("occupe", lambda v: setattr(v.worker, "occupe", True))]
-    for attendue, armer in cas:
+    # --- la retenue n'a plus de condition ------------------------------------------------
+    # Ce bloc remplace celui des « trois raisons ». Il n'y a plus de condition a tester, et
+    # c'est precisement le gain : aucun etat de l'agent, aucun reglage, aucun moment ne peut
+    # rendre l'envoi automatique. L'absence de condition se teste en prenant les trois etats
+    # qui, chacun, declenchaient AUTREFOIS un comportement different.
+    print("\n=== aucun etat ne rend l'envoi automatique ===")
+    etats = [("au repos", lambda v: None),
+             ("Claude au travail", lambda v: setattr(v.worker, "occupe", True)),
+             ("micro coupe puis rouvert", lambda v: setattr(v, "_dictee_ouverte", True))]
+    for nom, armer in etats:
         v = neuve()
         armer(v)
-        dire(v.pourquoi_retenir() == attendue,
-             f"la raison est nommee « {attendue} » — le tableau peut l'expliquer")
         v._dit = "une phrase a relire"
         v.ouvrir_fenetre()
-        dire(v.sess.commis == 0, f"[{attendue}] rien n'est envoye")
+        dire(v.sess.commis == 0, f"[{nom}] rien n'est envoye")
         dire(v.sess.oublies == 1,
-             f"[{attendue}] le tour en attente est JETE, il ne repartira pas plus tard")
+             f"[{nom}] le tour en attente est JETE, il ne repartira pas plus tard")
         d = v.tableau.dernier("dictee")
-        dire(d and d.get("raison") == attendue and d.get("texte") == "une phrase a relire",
-             f"[{attendue}] le texte va dans la barre, avec sa raison")
-        dire(v._dit == "", f"[{attendue}] et il n'est pas garde en double cote agent")
+        dire(d and d.get("texte") == "une phrase a relire",
+             f"[{nom}] le texte va dans la barre, entier")
+        dire(v._dit == "", f"[{nom}] et il n'est pas garde en double cote agent")
 
-    # « tour » gagne sur « mode » : c'est un geste volontaire et immediat.
+    # --- envoyer : le seul geste qui commet -----------------------------------------------
+    print("\n=== envoyer, et c'est le seul chemin ===")
     v = neuve()
-    v.retenir, v._retenir_ce_tour = True, True
-    dire(v.pourquoi_retenir() == "tour", "le rattrapage d'un tour gagne sur le mode global")
-
-    # --- retenir PENDANT le decompte, jusqu'a la derniere seconde ------------------------
-    print("\n=== retenir clique pendant le decompte ===")
-    v = neuve(delai=0.25)
-    v._dit = "phrase a rattraper"
-    v.ouvrir_fenetre()
-    await asyncio.sleep(0.2)                  # presque a l'echeance
-    v._retenir_ce_tour = True                 # ce que fait le bouton
-    await asyncio.sleep(0.2)
-    dire(v.sess.commis == 0,
-         "arme a la derniere seconde : la raison est relue A L'ECHEANCE, donc ça marche")
-    dire(v.sess.oublies == 1, "et le tour est jete la aussi")
-
-    # --- le bouton envoyer --------------------------------------------------------------
-    print("\n=== envoyer sans attendre ===")
-    v = neuve(delai=5.0)
     v._dit = "j'ai fini"
-    v.ouvrir_fenetre()
     v._envoyer_maintenant("bouton")
     dire(v.sess.commis == 1 and v._fenetre is None,
-         "le bouton coupe l'attente et envoie, par le meme chemin que l'echeance")
+         "le bouton envoie, et c'est le seul endroit du code qui commet un tour")
     await asyncio.sleep(0.05)
-    dire(v.sess.commis == 1, "et la fenetre annulee n'envoie pas une seconde fois")
+    dire(v.sess.commis == 1, "et rien derriere n'envoie une seconde fois")
 
     # --- une session qui refuse ne casse rien -------------------------------------------
     print("\n=== robustesse ===")
@@ -254,30 +239,28 @@ async def principal():
     # phrase), on reparle, ce second tour PART, et la page vide la barre. La premiere phrase
     # disparait sans avoir jamais ete envoyee ni signalee. C'est la version exacte du
     # « texte deja envoye qui reapparait, et parfois seulement une partie ».
-    print("\n=== la retenue est collante ===")
+    print("\n=== un depot par-dessus un autre le DIT ===")
     v = neuve()
-    v.worker.occupe = True
     v._dit = "la premiere phrase"
     v.ouvrir_fenetre()
-    dire(v._retenu_en_attente, "une retenue arme le drapeau d'attente")
+    dire(v._retenu_en_attente, "un depot arme le drapeau d'attente")
+    dire(v.tableau.dernier("dictee")["raison"] == "toujours",
+         "le premier depot n'a pas de raison particuliere a donner")
 
-    v.worker.occupe = False            # Claude a fini : plus de retenue d'office
-    dire(v.pourquoi_retenir() == "attente",
-         "mais un texte attend dans la barre, donc on retient encore — et on le dit")
     v._dit = "la seconde phrase"
     v.ouvrir_fenetre()
     dire(v.sess.commis == 0,
          "le tour suivant ne part PAS par-dessus : la premiere phrase n'est pas perdue")
-    d = v.tableau.dernier("dictee")
-    dire(d and d["raison"] == "attente",
-         "et la raison affichee est « attente », pas « Claude travaille » qui serait faux")
+    dire(v.tableau.dernier("dictee")["raison"] == "attente",
+         "et la page peut dire « ajoute a ce qui attendait deja » — le seul cas ou l'on "
+         "peut croire avoir perdu ce qu'on venait de dire")
 
     # Ce qui libere : la barre part, ou la barre est videe.
     v._retenu_en_attente = False       # ce que fait la commande « texte »
     v._dit = "la troisieme"
     v.ouvrir_fenetre()
-    dire(v._fenetre is not None, "la barre partie, le tour suivant repart normalement")
-    v.fermer_fenetre()
+    dire(v.tableau.dernier("dictee")["raison"] == "toujours",
+         "la barre partie, le depot suivant redevient un depot ordinaire")
 
     # --- couper le micro vaut « j'ai fini » ----------------------------------------------
     print("\n=== couper le micro tranche le tour en cours ===")
@@ -288,9 +271,10 @@ async def principal():
     v.sess.input = type("I", (), {"set_audio_enabled": lambda s, x: applique.append(x)})()
     v._dit = "une phrase interrompue par la coupure"
     v.appliquer_micro(publier=False)
-    dire(v._fenetre is not None or v.sess.commis == 1,
-         "le texte deja transcrit n'est pas abandonne : la fenetre s'ouvre ou le tour part")
-    v.fermer_fenetre()
+    d = v.tableau.dernier("dictee")
+    dire(d and d["texte"] == "une phrase interrompue par la coupure",
+         "le texte deja transcrit n'est pas abandonne : il se depose dans la barre")
+    dire(v.sess.commis == 0, "mais couper le micro ne vaut pas « envoie » : on relira")
 
     # Et sans rien de transcrit, couper le micro ne declenche rien du tout.
     v = neuve()
@@ -298,7 +282,7 @@ async def principal():
     v.inscription = None
     v.sess.input = type("I", (), {"set_audio_enabled": lambda s, x: None})()
     v.appliquer_micro(publier=False)
-    dire(v._fenetre is None and v.sess.commis == 0,
+    dire(v.tableau.dernier("dictee") is None and v.sess.commis == 0,
          "micro coupe sans rien avoir dit : aucun tour vide n'est fabrique")
 
     # --- le talon ne peut pas deriver de la vraie construction ---------------------------
@@ -400,14 +384,13 @@ async def principal():
     dire(v._dit == "ajoute un test dessus",
          f"et le nouveau tour part d'un texte PROPRE : {v._dit!r}")
 
-    # Meme chose apres une RETENUE : le tour est consomme, l'enonce doit se fermer.
+    # Meme chose apres un DEPOT : le tour est consomme, l'enonce doit se fermer.
     v2 = neuve()
-    v2.retenir = True
     v2._dictee_ouverte = True
     v2._dit = "une phrase a relire"
     v2.ouvrir_fenetre()
     dire(not v2._dictee_ouverte,
-         "apres une retenue aussi, l'enonce se ferme — le tour est consomme")
+         "apres un depot aussi, l'enonce se ferme — le tour est consomme")
     dire(transcrire(v2, "queue de phrase") is False,
          "donc une finale tardive ne s'ajoute pas au texte deja depose dans la barre")
 
