@@ -876,6 +876,12 @@ class Worker:
             return None
         try:
             import journal
+            # La MEME lecture que celle qui a lance le rejeu de l'historique avant meme
+            # que « claude » demarre (journal.session_a_reprendre). Deux chemins qui
+            # decident separement finissent par decider differemment, et ce jour-la la
+            # page montrerait l'historique d'une conversation pendant qu'on parle a une
+            # autre. On garde le dictionnaire complet : le resume annonce ci-dessous en a
+            # besoin, pas seulement l'identifiant.
             c = journal.derniere_conversation(config.WORKDIR)
         except Exception:
             log.debug("reprise automatique impossible", exc_info=True)

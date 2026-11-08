@@ -1296,6 +1296,73 @@ async def entrypoint(ctx: JobContext):
     log.info("tableau de bord : %s", url)
     print(f"  tableau {url}")
 
+    # ─── L'historique, avant tout le reste ──────────────────────────────────────────
+    #
+    # Reprendre une conversation rend le contexte complet à Claude, mais la page, elle,
+    # vit en mémoire du processus : un nouveau processus part de rien. On relit donc ce
+    # que Claude Code a écrit sur disque et on le republie.
+    #
+    # Ce rejeu se faisait APRÈS le lancement de « claude », et c'était la seconde moitié
+    # du défaut qu'on corrige. Mesure du 8 novembre 2026 : la page de l'agent répond à
+    # 7 s — c'est à cet instant que le tableau rend la main et que le téléphone y arrive
+    # — et le worker n'est debout qu'à 13 s. Six secondes devant une conversation vide,
+    # à se demander si on vient d'en ouvrir une neuve. C'est d'ailleurs exactement ce
+    # qu'on croyait : « je reviens dessus et ça rouvre une nouvelle conversation ».
+    #
+    # Rien là-dedans n'a besoin du worker : la session à reprendre se lit dans l'index
+    # local, l'historique dans un fichier. On part donc tout de suite, en parallèle du
+    # démarrage — et quand la page se branche, l'historique est DÉJÀ dans le flux, donc
+    # rejoué d'un bloc à la connexion au lieu d'arriver en gouttes, après coup, avec
+    # l'animation du direct sur des lignes vieilles de trois jours.
+    rejoue: dict[str, str] = {"sid": ""}
+
+    async def _rejouer_historique(sid: str):
+        # Deux fois la même conversation empilerait deux copies dans le flux : le rejeu
+        # d'avant le lancement et celui d'après se croisent, et c'est normal.
+        if rejoue["sid"] == sid:
+            return
+        if rejoue["sid"]:
+            # On avait parié sur une conversation avant le lancement, « claude » en a
+            # repris une autre. Garder les deux à l'écran est le pire des trois états :
+            # on ne sait plus laquelle on lit.
+            tableau.vider()
+        rejoue["sid"] = sid
+        try:
+            dossier = journal.dossier_de_session(sid) or config.WORKDIR
+            evenements, ecartes = await asyncio.to_thread(
+                journal.rejouer_session, sid, dossier)
+        except Exception:
+            log.warning("historique de %s illisible", sid, exc_info=True)
+            rejoue["sid"] = ""
+            return
+        if not evenements:
+            tableau.publier("reprise",
+                            texte=f"aucun historique lisible pour la session {sid}")
+            return
+        tableau.publier("reprise", texte=(
+            f"↑ historique rechargé — {len(evenements)} lignes"
+            + (f", {ecartes} plus anciennes écartées" if ecartes else "")))
+        # Par lots, avec une pause : un rejeu complet fait plus de mille lignes, et tout
+        # pousser d'un trait remplit la file du client jusqu'à ce qu'elle jette ses plus
+        # anciens messages — on perdrait le début de la conversation qu'on vient de recharger.
+        for i, e in enumerate(evenements):
+            tableau.publier(e.pop("genre"), passe=True, **e)
+            if i % 100 == 99:
+                await asyncio.sleep(0.05)
+        tableau.publier("reprise", texte="↓ ici commence le direct")
+        log.info("historique rejoué : %d lignes", len(evenements))
+
+    try:
+        pressentie = journal.session_a_reprendre(
+            config.WORKDIR, config.REPRENDRE, config.REPRISE_AUTO)
+    except Exception:
+        # Un index illisible ne doit pas empêcher la conversation de s'ouvrir : on perd
+        # l'avance, pas la session. Le rejeu d'après le worker reste en filet.
+        log.debug("session à reprendre indevinable", exc_info=True)
+        pressentie = None
+    if pressentie:
+        asyncio.create_task(_rejouer_historique(pressentie))
+
     quota = Quota(tableau)
     await quota.rafraichir()
 
@@ -1373,42 +1440,16 @@ async def entrypoint(ctx: JobContext):
     valeurs["_alerte"] = alerte
     tableau.publier("config", valeurs=valeurs)
     tableau.publier("modeles", **config.etat_modeles(config.WORKER_MODEL))
-    # Reprendre une conversation rendait le contexte complet à Claude, mais la page restait
-    # VIDE : le tableau vit en mémoire du processus, et un nouveau processus part de rien. On
-    # relit donc ce que Claude Code a écrit sur disque et on le republie, pour retrouver les
-    # soixante tours d'avant en ouvrant la page.
-    async def _rejouer_historique(sid: str):
-        try:
-            dossier = journal.dossier_de_session(sid) or config.WORKDIR
-            evenements, ecartes = await asyncio.to_thread(
-                journal.rejouer_session, sid, dossier)
-        except Exception:
-            log.warning("historique de %s illisible", sid, exc_info=True)
-            return
-        if not evenements:
-            tableau.publier("reprise",
-                            texte=f"aucun historique lisible pour la session {sid}")
-            return
-        tableau.publier("reprise", texte=(
-            f"↑ historique rechargé — {len(evenements)} lignes"
-            + (f", {ecartes} plus anciennes écartées" if ecartes else "")))
-        # Par lots, avec une pause : un rejeu complet fait plus de mille lignes, et tout
-        # pousser d'un trait remplit la file du client jusqu'à ce qu'elle jette ses plus
-        # anciens messages — on perdrait le début de la conversation qu'on vient de recharger.
-        for i, e in enumerate(evenements):
-            tableau.publier(e.pop("genre"), passe=True, **e)
-            if i % 100 == 99:
-                await asyncio.sleep(0.05)
-        tableau.publier("reprise", texte="↓ ici commence le direct")
-        log.info("historique rejoué : %d lignes", len(evenements))
-
     # La session qu'on a reellement reprise — demandee a la main OU choisie toute seule.
     # Ne tester que config.REPRENDRE laissait la page VIDE sur une reprise automatique : le
     # contexte de Claude etait complet, mais le flux ne montrait rien, ce qui donnait
     # exactement l'impression d'une conversation neuve qu'on cherchait a corriger.
     reprise_initiale = config.REPRENDRE or (worker.reprise or {}).get("session_id")
     if reprise_initiale:
-        # En tâche de fond : lire huit cents messages ne doit pas retarder le premier mot.
+        # Le filet, et il garde sa raison d'être : le rejeu parti avant le lancement a
+        # parié sur l'index local, et « claude » peut avoir repris autre chose — ou rien,
+        # si la reprise a échoué. Dans le cas normal les deux identifiants sont le même et
+        # cet appel ne fait rien ; dans l'autre, il corrige et le dit.
         asyncio.create_task(_rejouer_historique(reprise_initiale))
 
     # Et la question laissee en plan, s'il y en a une. C'est le cas qui motive tout : fermer
@@ -1837,6 +1878,11 @@ async def entrypoint(ctx: JobContext):
                     # le meme flux et on ne sait plus laquelle on lit — ni a laquelle
                     # appartient un message qu'on relit trois jours plus tard.
                     tableau.vider()
+                    # Et on oublie ce qu'on a deja rejoue : le flux vient d'etre vide, donc
+                    # plus rien n'y est. Sans cette ligne, revenir sur une conversation qu'on
+                    # vient de quitter laisse la page VIDE — le garde-fou anti-doublon croit
+                    # l'avoir deja affichee, et il a raison, mais plus personne ne la voit.
+                    rejoue["sid"] = ""
                     tableau.publier("vider")
                     tableau.publier("ordre", texte=dit)
                     # Le contexte de Claude est complet des la bascule ; c'est la PAGE qui

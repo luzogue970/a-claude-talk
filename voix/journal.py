@@ -465,6 +465,33 @@ def dernier_echange(fichier: str, taille: int = 160) -> str:
     return dernier[:taille] + ("…" if len(dernier) > taille else "")
 
 
+def session_a_reprendre(ici: str | None = None, demandee: str | None = None,
+                        auto: bool = True) -> str | None:
+    """Quelle conversation ce lancement va reprendre — SANS avoir rien lance.
+
+    La decision ne depend que de choses locales : ce qu'on a demande, le reglage
+    « nouvelle conversation », et l'index que Claude Code tient sur le disque. Ni le SDK,
+    ni le processus « claude », ni le reseau. Elle est donc connaissable des la premiere
+    seconde, alors qu'elle n'etait lue qu'une fois le worker debout.
+
+    Pourquoi elle existe a part : l'historique de la page etait republie APRES le
+    lancement de « claude ». Mesure du 8 novembre 2026 — la page de l'agent repond a 7 s,
+    c'est a cet instant que le tableau rend la main et que le telephone y arrive ; le
+    worker, lui, n'etait pret qu'a 13 s. On regardait donc une conversation VIDE pendant
+    six secondes, en se demandant si on venait d'en ouvrir une neuve. Avec cette
+    fonction, le rejeu part en meme temps que le reste.
+
+    Elle sert aux DEUX endroits qui tranchent — ici et dans le worker — pour qu'ils ne
+    puissent pas diverger : deviner une conversation et en reprendre une autre
+    afficherait l'historique du voisin, ce qui est pire que de ne rien afficher.
+    """
+    if demandee:
+        return demandee
+    if not auto:
+        return None
+    return (derniere_conversation(ici) or {}).get("session_id") or None
+
+
 def derniere_conversation(ici: str | None = None) -> dict | None:
     """La conversation a reprendre par defaut dans ce dossier, s'il y en a une.
 

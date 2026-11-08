@@ -33,6 +33,8 @@ SUITES = [
     ("journal", "test_journal.py", "py", "historique : portée par dossier, états, reprise", False),
     ("rejeu", "test_rejeu.py", "py",
      "relecture d'une conversation : une ligne signée « toi » vient vraiment de toi", False),
+    ("historique-tot", "test_historique_tot.py", "py",
+     "l'historique est là quand la page arrive, pas après le démarrage de « claude »", False),
     ("reglages", "test_reglages.py", "py",
      "réglages généraux : un seul endroit, les sessions neuves et celles qui tournent", False),
     ("reprise", "test_reprise_effort.py", "py",
