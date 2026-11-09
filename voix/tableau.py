@@ -3081,6 +3081,10 @@ function corps(e) {
 // résolution, soit la fin de tour, soit un garde-fou temporel.
 // ---------------------------------------------------------------------------------------
 const encours = new Map();          // clé de suivi -> élément .pip qui tourne
+// Déclaré ICI, loin de tout le reste de la dictée : le bandeau de cogitation le lit, et une
+// `let` posée plus bas dans le fichier serait en zone morte si le bandeau se peint pendant le
+// chargement de la page.
+let vocalEnvoi = false;
 
 // L'état d'un indicateur à sa création. Les événements terminaux naissent déjà résolus :
 // une transcription finale ou un tour fini n'a rien à attendre.
@@ -3947,6 +3951,20 @@ function motDesJetons(n) {
   return `${(n / 1000).toFixed(n < 100000 ? 1 : 0).replace(".", ",")} k jetons`;
 }
 
+// Ce qui tourne alors qu'aucun tour n'est en cours. L'audio d'abord : c'est le seul envoi
+// qui a VRAIMENT lieu ici, il part en HTTP vers le PC et peut prendre plusieurs secondes sur
+// un reseau mobile — il merite d'etre nomme, pas confondu avec l'envoi d'un message.
+function libelleHorsTour() {
+  if (vocalEnvoi) return "vocal en route vers le PC…";
+  for (const nom of ["voix", "pensee", "stt"]) {
+    if (encours.has(nom)) return LIB_ACT[nom] + "…";
+  }
+  const outils = [...encours.keys()].filter(c => c.startsWith("outil:")).length;
+  if (outils) return outils + " outil" + (outils > 1 ? "s" : "") + " en cours";
+  if ([...encours.keys()].some(c => c.startsWith("question:"))) return "en attente de ta réponse";
+  return "";
+}
+
 // La ligne qui remplace les mots tires au sort. Trois etats, et chacun repond a une question
 // qu'on se pose vraiment en regardant l'ecran.
 function majMesureCogitation() {
@@ -3954,10 +3972,20 @@ function majMesureCogitation() {
   if (!el) return;
   const s = debutTravail != null ? Math.round((Date.now() - debutTravail) / 1000) : 0;
   const duree = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  // Hors tour, ce bandeau ne parle PAS d'un envoi. Il s'allume aussi pour la parole du
+  // debrief, une transcription, les outils d'un tour deja clos — et il ecrivait « envoyé… »
+  // dans tous ces cas. On lisait donc « envoyé… », trois points clignotants compris, en
+  // PERMANENCE pendant qu'on tapait un message que personne n'avait encore envoyé : le
+  // bandeau annonçait un envoi qui n'avait pas lieu. Il dit maintenant ce qui tourne.
+  if (debutTravail == null) {
+    el.textContent = libelleHorsTour() || "en cours…";
+    el.className = "attente";
+    return;
+  }
   // Avant toute reponse de l'API : le message est parti, on attend. C'est le trou que rien
   // ne comblait, et pendant lequel on se demandait si quelque chose etait parti du tout.
   if (!recuParClaude) {
-    el.textContent = debutTravail != null ? `envoyé · ${duree}` : "envoyé…";
+    el.textContent = `envoyé · ${duree}`;
     el.className = "attente";
     return;
   }
@@ -3978,7 +4006,7 @@ function majMesureCogitation() {
 function majCogitation() {
   // Liaison coupee : on ne peut rien affirmer, donc on n'affirme rien. Le bandeau ne dit que
   // « la machine est vivante » — c'est precisement l'information qu'on a perdue.
-  const occupe = !liaisonPerdue && (debutTravail != null || encours.size > 0);
+  const occupe = !liaisonPerdue && (debutTravail != null || encours.size > 0 || vocalEnvoi);
   if (occupe && rouleau == null) {
     zoneMot.textContent = motSuivant();
     majMesureCogitation();
@@ -6275,7 +6303,7 @@ const peutEnregistrerIci = !!(navigator.mediaDevices && navigator.mediaDevices.g
                         && typeof MediaRecorder !== "undefined";
 const VOCAL_MAX_MS = 90000;
 let enregistreur = null, fluxMicro = null, morceauxAudio = [], minuterieVocal = null;
-let vocalEnCours = false, vocalEnvoi = false, veilleLiaisonVocal = null;
+let vocalEnCours = false, veilleLiaisonVocal = null;
 let debutVocal = 0;   // quand l'enregistrement en cours a commence
 let DELAI_SESSION_AUDIO = 60;   // le repit laisse a iOS pour rendre sa session audio
 // Le temps laisse a `onstop` avant de considerer l'enregistreur perdu. `let` : un test
@@ -6475,6 +6503,10 @@ function majBoutonDictee() {
   // Un enregistrement garde n'est pas une erreur de l'utilisateur, mais il attend quelque
   // chose de lui : le bouton le porte, pour qu'on ne l'oublie pas dans une note qui s'efface.
   b.classList.toggle("garde", !!vocalEnAttente && !vocalEnCours && !vocalEnvoi);
+  // Le bandeau au-dessus de la barre suit l'envoi du vocal : l'infobulle d'un bouton ne se
+  // lit pas sur un telephone, et c'est pourtant la seule chose qui disait que l'audio partait.
+  majCogitation();
+  majMesureCogitation();
   b.title = vocalEnCours ? "arrêter et envoyer l'enregistrement"
           : ouvertureVocal ? "le micro s'ouvre…"
           : vocalEnvoi ? "transcription en cours sur le PC…"

@@ -1968,6 +1968,39 @@ dire(/envoyé/.test(mesure.textContent) && mesure.className === 'attente',
 emettre({ genre: 'travail', actif: false });
 toutClore('fin du cas');
 
+// 6. HORS tour, ce bandeau ne parle PAS d un envoi. Il s allume aussi pour la parole du
+//    debrief, une transcription, les outils d un tour deja clos — et il ecrivait « envoyé… »
+//    dans tous ces cas. On lisait donc « envoyé… », trois points clignotants compris, en
+//    PERMANENCE pendant qu on tapait un message que personne n avait encore envoye.
+marquer('voix', document.createElement('span'));
+majCogitation(); majMesureCogitation();
+dire(!document.getElementById('cogitation').hidden,
+     'la parole du debrief allume le bandeau, tour fini ou pas');
+dire(!/envoyé/.test(mesure.textContent),
+     'mais elle n annonce AUCUN envoi : rien ne part a cet instant-la');
+dire(/parole/.test(mesure.textContent), 'elle dit ce qui tourne vraiment : ' + mesure.textContent);
+resoudre('voix', 'ok');
+marquer('outil:z1', document.createElement('span'));
+majMesureCogitation();
+dire(/1 outil/.test(mesure.textContent) && !/envoyé/.test(mesure.textContent),
+     'un outil qui traine se nomme aussi, au lieu de se dire « envoyé » : ' + mesure.textContent);
+toutClore('fin du cas');
+
+// 7. L audio du telephone, lui, part VRAIMENT — en HTTP vers le PC, et ça peut durer
+//    plusieurs secondes sur un reseau mobile. C est le seul envoi reel de ce cote, donc le
+//    seul qui doive etre annonce ; il l etait dans l infobulle d un bouton, qu on ne lit pas
+//    sur un telephone.
+vocalEnvoi = true;
+majBoutonDictee();
+dire(!document.getElementById('cogitation').hidden,
+     'un vocal qui part vers le PC se voit au-dessus de la barre, pas seulement au survol');
+dire(/vocal/.test(mesure.textContent) && /PC/.test(mesure.textContent),
+     'et il dit OU il va : ' + mesure.textContent);
+vocalEnvoi = false;
+majBoutonDictee();
+dire(document.getElementById('cogitation').hidden,
+     'et il se range des que l envoi est revenu : plus rien ne tourne, plus rien ne clignote');
+
 // ---- « suivre » : on peut s eloigner du bas sans bouger le petit doigt ---------------------
 titre('bouton « suivre » : la distance au bas, pas le geste');
 const btnSuivre = document.getElementById('bas');
