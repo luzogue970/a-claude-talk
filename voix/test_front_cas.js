@@ -3527,23 +3527,38 @@ async function testerBandeauLecture() {
   ecouter.onclick();
   await microtaches();
   dire(!barre.hidden, 'des qu une lecture part, le bandeau se pose par-dessus le flux');
-  dire(!bPause.hidden && /pause/.test(bPause.textContent),
-       'avec un bouton pause en evidence : ' + bPause.textContent);
-  dire(/debut/.test(bDebut.textContent.normalize('NFD').replace(/[̀-ͯ]/g, '')),
-       'un bouton pour revenir au debut : ' + bDebut.textContent);
-  dire(/couper/.test(bCouper.textContent), 'et un bouton pour couper : ' + bCouper.textContent);
+  // Les boutons ne portent plus de mot : a cinq cibles sur une rangee de telephone, un
+  // libelle par bouton les rend tous illisibles. C est donc l infobulle qui doit dire le
+  // geste — et sans elle, un bouton a icone seule n existe pas pour un lecteur d ecran.
+  dire(!bPause.hidden && /pause/.test(bPause.title),
+       'avec un bouton pause en evidence : ' + bPause.title);
+  dire(bPause.getAttribute('aria-label') === bPause.title,
+       'et il se nomme pour qui ne voit pas l icone');
+  dire(bDebut.hidden,
+       'pas de « au debut » ici : le rail y va d un geste, et il vise mieux que zero');
+  dire(!bCouper.hidden, 'et un bouton pour couper, toujours la');
+  dire(/id="lec-couper"[^>]*title="[^"]*arr/.test(__html.replace(/\s+/g, ' ')),
+       'qui se nomme pour le doigt qui hesite et pour le lecteur d ecran');
   dire(lecteur.paused === false, 'et le son joue pour de bon');
 
   lecteur.currentTime = 5;
   if (lecteur.ontimeupdate) lecteur.ontimeupdate();
   const trait = jauge.querySelector('i');
+  const poignee = jauge.querySelector('b');
+  const temps = document.getElementById('lecture-temps');
   dire(!jauge.hidden && parseFloat(trait.style.width) > 40 && parseFloat(trait.style.width) < 45,
        'la jauge dit ou on en est : ' + trait.style.width);
+  dire(parseFloat(poignee.style.left) === parseFloat(trait.style.width),
+       'et la poignee est posee dessus, la ou le doigt doit la trouver');
+  // Un pourcentage ne dit rien : « il reste combien » est la question qu on se pose quand on
+  // ecoute, et c est aussi elle qui dit ce que les fleches vont faire.
+  dire(/0:05/.test(temps.innerHTML) && /0:12/.test(temps.innerHTML),
+       'et le temps est ecrit en clair : ' + temps.innerHTML);
 
   bPause.onclick();
   dire(lecteur.paused === true, 'appuyer sur pause suspend VRAIMENT le son');
-  dire(/reprendre/.test(bPause.textContent),
-       'et le meme bouton propose de reprendre : ' + bPause.textContent);
+  dire(bPause.classList.contains('reprendre') && /reprendre/.test(bPause.title),
+       'et le meme bouton propose de reprendre : ' + bPause.title);
   await tick(); await tick();
   dire(!barre.hidden && lectureLocale,
        'une lecture en pause ne se termine pas toute seule : le bandeau reste la');
@@ -3551,17 +3566,65 @@ async function testerBandeauLecture() {
   bPause.onclick();
   dire(lecteur.paused === false, 'rappuyer relance le son');
   dire(lecteur.currentTime === 5, 'la ou on s etait arrete, et pas au debut');
-  dire(/pause/.test(bPause.textContent) && !/reprendre/.test(bPause.textContent),
+  dire(!bPause.classList.contains('reprendre') && /mettre la lecture en pause/.test(bPause.title),
        'le bouton redevient « pause »');
 
-  joues.length = 0; requetes.length = 0;
-  lecteur.currentTime = 7;
-  bDebut.onclick();
-  dire(lecteur.currentTime === 0, '« au debut » rembobine');
-  dire(joues.length === 1 && lecteur.paused === false, 'et la lecture repart');
-  dire(requetes.filter(r => /preparer$/.test(r.url)).length === 0,
-       'sans redemander la synthese : le son est deja la, et il est deja paye');
+  // --- se deplacer DANS la reponse --------------------------------------------------------
+  // Le geste qui manquait, et c est celui qu on fait le plus en ecoutant : un chiffre passe
+  // trop vite, on veut le reentendre. Sans lui, la seule issue etait de tout reprendre au
+  // debut — donc de ne pas reecouter du tout.
+  const bRecul = document.getElementById('lec-recul');
+  const bAvance = document.getElementById('lec-avance');
+  dire(!bRecul.hidden && !bAvance.hidden, 'deux fleches encadrent la pause');
+  dire(/10 secondes/.test(bRecul.title) && /10 secondes/.test(bAvance.title),
+       'et elles annoncent leur cran : ' + bRecul.title + ' / ' + bAvance.title);
+  lecteur.currentTime = 5;
+  bAvance.onclick();
+  dire(lecteur.currentTime > 11 && lecteur.currentTime < 12,
+       'avancer saute dix secondes, sans depasser la fin : ' + lecteur.currentTime);
+  // Se poser EXACTEMENT sur la fin declenche `ended` : « avancer » couperait la lecture au
+  // lieu de la faire avancer, ce qui est le contraire du geste demande.
+  dire(!barre.hidden && lectureLocale, 'et la lecture continue : avancer n est pas couper');
+  bRecul.onclick();
+  dire(lecteur.currentTime > 1 && lecteur.currentTime < 2,
+       'reculer saute dix secondes en arriere : ' + lecteur.currentTime);
+  lecteur.currentTime = 2;
+  bRecul.onclick();
+  dire(lecteur.currentTime === 0, 'et il ne passe jamais avant le debut');
 
+  // Le rail se touche. Il faisait trois pixels de haut et n ecoutait rien : une decoration.
+  jauge.getBoundingClientRect = () => ({ left: 0, right: 200, width: 200,
+                                         top: 0, bottom: 24, height: 24, x: 0, y: 0 });
+  jauge._declenche('pointerdown', { clientX: 100, pointerId: 1, preventDefault() {} });
+  dire(lecteur.currentTime === 6,
+       'taper au milieu du rail va au milieu de la reponse : ' + lecteur.currentTime);
+  dire(jauge.classList.contains('tire'), 'et la poignee grossit sous le doigt');
+  jauge._declenche('pointermove', { clientX: 150, pointerId: 1 });
+  dire(lecteur.currentTime === 9, 'glisser suit le doigt : ' + lecteur.currentTime);
+  // Hors du rail, et c est ce qui arrive a tous les coups sur un telephone : le doigt sort
+  // par le haut. Sans bornes, la position partirait hors du son.
+  jauge._declenche('pointermove', { clientX: 900, pointerId: 1 });
+  dire(lecteur.currentTime === 12, 'glisser au-dela du bord s arrete a la fin');
+  jauge._declenche('pointerup', { clientX: 900, pointerId: 1 });
+  dire(!jauge.classList.contains('tire'), 'lacher rend la poignee a sa taille');
+  // Un doigt pose gagne contre la lecture : sans ça chaque `timeupdate` ramenait la poignee
+  // a la position reelle, sous le doigt, et viser devenait impossible.
+  jauge._declenche('pointerdown', { clientX: 20, pointerId: 1, preventDefault() {} });
+  lecteur.currentTime = 11;
+  if (lecteur.ontimeupdate) lecteur.ontimeupdate();
+  dire(parseFloat(trait.style.width) < 20,
+       'pendant la glissade, la lecture ne repeint pas le rail : ' + trait.style.width);
+  jauge._declenche('pointerup', { clientX: 20, pointerId: 1 });
+
+  // Au clavier aussi : sans `role=slider` ni fleches, ce rail n existe pas pour qui ne
+  // touche pas l ecran.
+  lecteur.currentTime = 5;
+  jauge._declenche('keydown', { key: 'ArrowRight', preventDefault() {} });
+  dire(lecteur.currentTime > 11, 'la fleche droite avance comme le bouton');
+  jauge._declenche('keydown', { key: 'Home', preventDefault() {} });
+  dire(lecteur.currentTime === 0, 'et « Home » revient au debut');
+
+  joues.length = 0; requetes.length = 0;
   bCouper.onclick();
   dire(barre.hidden && !lectureLocale, '« couper » arrete tout et rend la place a la page');
   dire(!lecteur.src,
@@ -3594,7 +3657,41 @@ async function testerBandeauLecture() {
   ecouter.onclick();
   await microtaches();
   dire(!barre.hidden, 'sans Azure, la voix du navigateur donne le meme bandeau');
-  dire(jauge.hidden, 'mais pas de jauge : cette voix-la ne dit pas combien de temps elle parle');
+  // Cette voix-la ne donne ni duree ni position : un rail en secondes mentirait. Mais le
+  // texte est deja decoupe en phrases avant d etre dit, et une phrase est une position
+  // honnete. Le rail s y gradue donc en phrases plutot que de disparaitre.
+  const phrases = phrasesEnLecture.slice();
+  const prononcees = () => dit.filter(t => t !== '[coupe]');
+  dire(!jauge.hidden && temps.innerHTML === '<b>phrase 1</b> / ' + phrases.length,
+       'le rail se gradue en PHRASES, puisqu il n y a pas de secondes : ' + temps.innerHTML);
+  dire(phrases.length > 2, 'et il y a bien de quoi naviguer : ' + phrases.length + ' phrases');
+
+  dit.length = 0;
+  document.getElementById('lec-avance').onclick();
+  await microtaches();
+  dire(prononcees().join('|') === phrases.slice(1).join('|'),
+       'la fleche saute a la phrase suivante, puis enchaine sans redire la precedente : '
+       + prononcees().length + ' phrase(s) sur ' + phrases.length);
+  dire(temps.innerHTML === '<b>phrase 2</b> / ' + phrases.length,
+       'le compteur suit : ' + temps.innerHTML);
+  dire(/phrase suivante/.test(document.getElementById('lec-avance').title),
+       'l infobulle dit des PHRASES ici, pas des secondes : '
+       + document.getElementById('lec-avance').title);
+
+  dit.length = 0;
+  document.getElementById('lec-recul').onclick();
+  await microtaches();
+  dire(prononcees().join('|') === phrases.join('|'),
+       'et reculer reprend a la precedente, puis enchaine : '
+       + prononcees().length + ' phrase(s) sur ' + phrases.length);
+  // Ce qui a ete annule ne doit PAS annoncer la fin de la lecture : sans le garde de
+  // generation, chaque saut rangeait le bandeau au milieu de la reponse.
+  dire(!barre.hidden && lectureLocale, 'et le bandeau tient pendant qu on saute de phrase');
+  dit.length = 0;
+  document.getElementById('lec-recul').onclick();
+  await microtaches();
+  dire(temps.innerHTML === '<b>phrase 1</b> / ' + phrases.length,
+       'reculer depuis la premiere y reste, au lieu de sortir du texte : ' + temps.innerHTML);
   bPause.onclick();
   dire(synthEtat[synthEtat.length - 1] === 'pause', 'pause suspend la synthese du navigateur');
   bPause.onclick();
@@ -3646,6 +3743,10 @@ async function testerBandeauLecture() {
   dire(!barre.hidden, 'une lecture sur les haut-parleurs du PC montre le bandeau elle aussi');
   dire(bPause.hidden,
        'mais sans bouton pause : un flux deja parti ne se suspend pas, et un faux bouton mentirait');
+  dire(jauge.hidden || document.getElementById('lecture-piste').hidden,
+       'ni rail : on ne sait ni la duree ni la position d un son qui joue dans une autre piece');
+  dire(!bDebut.hidden,
+       'mais « au debut » revient, puisque c est tout ce qu on peut demander a cette lecture-la');
   envoyes.length = 0;
   bDebut.onclick();
   const rel = envoyes.find(o => o.cmd === 'relire');

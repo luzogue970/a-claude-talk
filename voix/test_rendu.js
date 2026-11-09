@@ -311,12 +311,23 @@ setTimeout(async () => {
     if (el) el.hidden = false;
   }
   releve.entete = document.querySelector("header").offsetHeight;
+  // Le bandeau de lecture ne se montre QUE pendant une lecture, donc jamais dans une page
+  // au repos — c'est ainsi qu'il a pu rester six boutons serrés sur une rangée sans que
+  // personne le mesure. On le met dans l'état où un téléphone le voit : une lecture d'ici,
+  // par Azure, celle qui ouvre tout (rail, flèches, vitesse).
+  lectureLocale = true; lectureParAzure = true;
+  majBarreLecture();
   releve.boites = { barre: b("#saisie-barre"), cogit: b("#cogitation"),
                     modele: b("#modele"), effort: b("#effort"), direct: b(".zone-direct"),
                     microBas: b("#micro-bas"), champBoite: b("#saisie"),
                     depart: b("#depart"), envoi: b("#envoyer"), forme: b("#composer"),
                     travail: b("#travail"), dicter: b("#dicter-ici"), lire: b("#lire-ici"),
                     joindre: b("#joindre"),
+                    lecBarre: b("#lecture-barre"), lecRail: b("#lecture-jauge"),
+                    lecTemps: b("#lecture-temps"), lecCmds: b("#lecture-cmds"),
+                    lecRecul: b("#lec-recul"), lecPause: b("#lec-pause"),
+                    lecAvance: b("#lec-avance"), lecVitesse: b("#lec-vitesse"),
+                    lecCouper: b("#lec-couper"),
                     convs: b("#convs") };
   releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
@@ -490,6 +501,40 @@ if (bo.dicter && bo.lire && bo.joindre && bo.envoi) {
        && bo.dicter.t >= bo.champBoite.b - 1,
        `et la rangee tient toujours sur UNE ligne sous le champ `
        + `(${bo.envoi.l + bo.envoi.w} <= ${bo.forme.l + bo.forme.w})`);
+}
+
+// --- le bandeau de lecture : six cibles sur une rangee, et un rail qu'on doit pouvoir viser -
+// Le rail faisait 3 px de haut. Sur un ecran tactile, 3 px n'est pas une cible : c'est un
+// trait. Et les commandes etaient des boutons a texte serres, qu'on manquait une fois sur
+// trois en marchant — exactement le moment ou l'on ecoute une reponse.
+if (bo.lecRail && bo.lecPause && bo.lecCouper) {
+  const cmds = [bo.lecRecul, bo.lecPause, bo.lecAvance, bo.lecVitesse, bo.lecCouper];
+  dire(bo.lecRail.h >= 24,
+       `le rail offre une vraie zone au doigt, pas un trait (${bo.lecRail.h} px de haut)`);
+  dire(cmds.every(c => c && c.h >= 44),
+       `et chaque commande tient le plancher tactile de 44 px `
+       + `(${cmds.map(c => c && c.h).join(", ")})`);
+  // Une rangee qui passe a deux lignes mange la conversation, et le bandeau flotte par-dessus
+  // le flux : ce qu'il prend, personne ne le lit.
+  dire(cmds.every(c => c && c.t === bo.lecPause.t),
+       `la rangee des commandes tient sur UNE ligne (${cmds.map(c => c && c.t).join(", ")})`);
+  dire(bo.lecCouper.l + bo.lecCouper.w <= bo.lecCmds.l + bo.lecCmds.w + 1,
+       `et rien n'en deborde a droite `
+       + `(${bo.lecCouper.l + bo.lecCouper.w} <= ${bo.lecCmds.l + bo.lecCmds.w})`);
+  // La pause est le geste qu'on fait en urgence — le telephone sonne, quelqu'un parle. Elle
+  // doit etre la plus grosse cible de la rangee, sans avoir a viser.
+  dire(bo.lecPause.w > bo.lecCouper.w,
+       `la pause est la plus grosse cible de la rangee (${bo.lecPause.w} > ${bo.lecCouper.w} px)`);
+  // Le rail au-DESSUS des commandes : un doigt qui vise le rail ne doit pas tomber sur
+  // « couper » s'il descend d'un cheveu.
+  dire(bo.lecRail.b <= bo.lecPause.t,
+       `le rail est au-dessus des commandes, pas melange a elles `
+       + `(${bo.lecRail.b} <= ${bo.lecPause.t})`);
+  dire(bo.lecTemps && bo.lecTemps.w > 0 && bo.lecTemps.l > bo.lecRail.l,
+       `et le temps restant se lit au bout du rail (${bo.lecTemps && bo.lecTemps.w} px)`);
+  dire(bo.lecBarre.b <= bo.forme.t + 1,
+       `le bandeau se pose au-dessus de la barre de saisie, sans la recouvrir `
+       + `(${bo.lecBarre.b} <= ${bo.forme.t})`);
 }
 
 // Le champ prend TOUTE la largeur de la barre : c'est la mesure qui dit que rien ne partage

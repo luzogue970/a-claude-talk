@@ -1605,30 +1605,74 @@ main{padding:14px 16px calc(var(--barre) + 30px);max-width:1100px;margin:0 auto}
    celle qu'on atteint le moins bien. */
 body{overflow-x:hidden}
 /* Le bandeau de lecture. Pose juste au-dessus de la barre de saisie, assez haut pour se
-   toucher sans viser : trois boutons de 48 px, c'est la taille d'un pouce, et c'est la
-   mesure qui compte ici — on appuie en marchant, en reunion, une main occupee. */
+   toucher sans viser : des cibles de 48 px, c'est la taille d'un pouce, et c'est la mesure
+   qui compte ici — on appuie en marchant, en reunion, une main occupee.
+   Bleu canard, et pas le vert de la voix : --accent est documente plus haut comme « ce qui
+   est VIF en ce moment, une jauge qui se remplit ». C'est exactement cet objet. Le vert
+   disait « une reponse » la ou il fallait dire « ça joue, et tu peux t'y deplacer ». */
 #pile-bas{position:fixed;bottom:var(--barre);left:0;right:0;z-index:7;
   display:flex;flex-direction:column}
 #lecture-barre{
-  background:#10171fef;backdrop-filter:blur(10px);border-top:1px solid #2f4a37;
-  border-bottom:1px solid var(--bord);padding:8px 12px 10px}
+  background:#10171fef;backdrop-filter:blur(10px);border-top:1px solid #2a4751;
+  border-bottom:1px solid var(--bord);padding:7px 12px 10px}
 #lecture-barre[hidden]{display:none}
-#lecture-jauge{height:3px;border-radius:2px;background:#ffffff14;overflow:hidden;margin-bottom:8px}
-#lecture-jauge i{display:block;height:100%;width:0;background:var(--voix);border-radius:2px}
-#lecture-jauge[hidden]{display:none}
-#lecture-cmds{display:flex;gap:8px;justify-content:center;max-width:520px;margin:0 auto}
-#lecture-cmds button{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--bord);
-  background:#161e18;color:var(--texte);font-size:15px;font-weight:600;letter-spacing:.2px}
-/* Le bouton qui compte : celui qu'on cherche du pouce sans regarder. */
-#lec-pause{border-color:var(--voix);color:#7ee08d;background:#16271c;flex:1.5}
-/* Plus étroit : c'est un réglage, pas une commande de lecture. Mais pas moins haut — il se
+
+/* Le rail, et il se TOUCHE : la piste visible fait 5 px, la zone sensible 24. On ne vise
+   pas un trait de trois pixels avec un pouce — c'est ce qui rendait cette jauge purement
+   decorative, et c'est pour ça que rater une phrase obligeait a tout reecouter. */
+#lecture-piste{display:flex;align-items:center;gap:11px;max-width:520px;margin:0 auto 7px}
+#lecture-piste[hidden]{display:none}
+#lecture-jauge{flex:1;min-width:0;height:24px;position:relative;cursor:pointer;
+  touch-action:none;display:flex;align-items:center}
+#lecture-jauge::before{content:"";position:absolute;left:0;right:0;height:5px;
+  border-radius:3px;background:#ffffff1c}
+#lecture-jauge i{position:absolute;left:0;height:5px;width:0;border-radius:3px;
+  background:var(--accent)}
+#lecture-jauge b{position:absolute;left:0;width:13px;height:13px;border-radius:50%;
+  background:var(--accent);margin-left:-6.5px;box-shadow:0 0 0 3px #4fc3d42e;
+  transition:transform .12s ease-out}
+#lecture-jauge.tire b{transform:scale(1.4)}
+#lecture-jauge:focus-visible{outline:2px solid var(--toi);outline-offset:4px;border-radius:5px}
+/* Ou l'on en est, en clair. C'est ce qui dit ce que les fleches font : des secondes quand
+   la duree est connue, des phrases quand elle ne l'est pas. */
+#lecture-temps{flex:none;font-size:11.5px;color:var(--faible);letter-spacing:.2px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+#lecture-temps b{color:var(--accent);font-weight:600}
+
+#lecture-cmds{display:flex;gap:7px;justify-content:center;max-width:520px;margin:0 auto}
+#lecture-cmds button{flex:1;min-height:48px;border-radius:14px;border:1px solid var(--bord);
+  background:#141b23;color:#a7b2bf;display:inline-flex;align-items:center;
+  justify-content:center;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;
+  letter-spacing:.2px;transition:border-color .15s,color .15s,background .15s}
+#lecture-cmds button:hover{border-color:#3d4854;color:var(--texte);background:#1a222b}
+#lecture-cmds button:active{transform:scale(.97)}
+#lecture-cmds svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.75;
+  stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+/* Les formes pleines — triangle de lecture, barres de pause, carre d'arret — portent un
+   trait de leur propre couleur : c'est lui qui arrondit les angles. Un triangle a angles
+   vifs a 21 px jure a cote de six icones au trait rond. */
+#lecture-cmds svg .plein{fill:currentColor;stroke:currentColor;stroke-width:2.6}
+/* Le bouton qu'on cherche du pouce sans regarder : plus large, et le seul colore.
+   `#lecture-cmds` devant chaque regle, et ce n'est pas une coquetterie : `#lecture-cmds
+   button` pese un id ET un type, donc il bat `#lec-pause` tout seul. Ecrites sans le
+   prefixe, ces trois largeurs ne s'appliquaient PAS — les six boutons sortaient tous a la
+   meme taille, et c'est test_rendu qui l'a vu, pas l'oeil. */
+#lecture-cmds #lec-pause{border-color:var(--toi);color:#9fdde6;background:#0e2329;flex:1.6}
+#lecture-cmds #lec-pause:hover{border-color:var(--accent);color:#cfeff4;background:#133038}
+#lec-pause .si-jouer{display:none}
+#lec-pause.reprendre .si-pause{display:none}
+#lec-pause.reprendre .si-jouer{display:block}
+/* Plus etroit : c'est un reglage, pas une commande de lecture. Mais pas moins haut — il se
    touche du pouce comme les autres. */
-#lec-vitesse{flex:.6;font-variant-numeric:tabular-nums;color:#9aa5b3}
-#lec-vitesse.vite{border-color:var(--toi);color:#92d2dc}
-#lec-couper{color:#d98f8f}
+#lecture-cmds #lec-vitesse{flex:.8;font-variant-numeric:tabular-nums}
+#lecture-cmds #lec-vitesse.vite{border-color:var(--toi);color:#92d2dc}
+#lecture-cmds #lec-couper{flex:.85;color:#c58787}
+#lecture-cmds #lec-couper:hover{border-color:#8a4a4a;color:#f0b4b4;background:#241619}
 #lecture-cmds button[hidden]{display:none}
 @media (max-width: 520px) {
-  #lecture-cmds button{font-size:14px;min-height:46px}
+  #lecture-cmds{gap:6px}
+  #lecture-cmds button{min-height:46px;border-radius:12px;font-size:13px}
+  #lecture-cmds svg{width:20px;height:20px}
 }
 
 /* Le questionnaire. Mêmes mesures que le bandeau de lecture — 52 px par cible, pleine
@@ -2392,16 +2436,51 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <button id="q-rouvrir" type="button" hidden>▸ revoir les propositions</button>
   </div>
   <div id="lecture-barre" hidden>
-    <div id="lecture-jauge"><i></i></div>
+    <!-- Le rail. On s'y DEPLACE : on tape dessus, ou on glisse. Il existait déjà, haut de
+         trois pixels et sans le moindre écouteur — une décoration. Le prix se payait à
+         chaque écoute : rater une phrase, ou vouloir réentendre le chiffre qui vient de
+         passer, obligeait à tout reprendre depuis le début. C'est la chose qui manquait
+         le plus ici, et c'est pour ça qu'on l'écoutait mal.
+         `role=slider` et `tabindex` ne sont pas décoratifs non plus : sans eux, au clavier
+         comme au lecteur d'écran, ce rail n'existe pas. Les flèches s'y déplacent. -->
+    <div id="lecture-piste">
+      <div id="lecture-jauge" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="100"
+           aria-valuenow="0" aria-label="position dans la lecture"><i></i><b></b></div>
+      <span id="lecture-temps"></span>
+    </div>
     <div id="lecture-cmds">
-      <button id="lec-debut" type="button" title="reprendre cette lecture depuis le début"></button>
-      <button id="lec-pause" type="button" title="mettre la lecture en pause"></button>
+      <!-- « au début » ne sert plus que pour la lecture du PC : ici, le rail le fait mieux,
+           et d'un seul geste. Là-bas il n'y a pas de rail — le son joue dans une autre
+           pièce, on ne connaît ni sa durée ni où il en est. -->
+      <button id="lec-debut" type="button" hidden
+              title="reprendre cette lecture depuis le début" aria-label="revenir au début">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.8 5.6v12.8"/>
+          <path class="plein" d="M18.4 6.6v10.8L10 12Z"/></svg></button>
+      <!-- Reculer et avancer. Le libellé est dans l'infobulle, pas sur le bouton : à cinq
+           cibles sur une rangée de téléphone, un mot par bouton les rend tous illisibles.
+           Le double chevron se lit « un cran en arrière » partout, et c'est le compteur
+           juste au-dessus qui dit de combien — des secondes, ou des phrases. -->
+      <button id="lec-recul" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.4 7.4 6.8 12l4.6 4.6"/>
+          <path d="M17.6 7.4 13 12l4.6 4.6"/></svg></button>
+      <button id="lec-pause" type="button" title="mettre la lecture en pause">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <g class="si-pause"><rect class="plein" x="8.9" y="6.2" width="2.3" height="11.6"
+             rx="1.1"/><rect class="plein" x="12.8" y="6.2" width="2.3" height="11.6" rx="1.1"/></g>
+          <g class="si-jouer"><path class="plein" d="M9.2 6.3 18.2 12l-9 5.7Z"/></g>
+        </svg></button>
+      <button id="lec-avance" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.6 7.4 17.2 12l-4.6 4.6"/>
+          <path d="M6.4 7.4 11 12l-4.6 4.6"/></svg></button>
       <!-- Écouter plus vite. Une réponse de deux minutes tient en une à deux fois la
            vitesse, et c'est le geste qu'on fait sur tous les podcasts : on comprend très
            bien, on perd juste l'attente. Le réglage est gardé d'une lecture à l'autre —
            personne ne veut le reposer à chaque réponse. -->
       <button id="lec-vitesse" type="button" title="lire plus vite (le réglage est gardé)"></button>
-      <button id="lec-couper" type="button" title="arrêter cette lecture"></button>
+      <button id="lec-couper" type="button" title="arrêter cette lecture"
+              aria-label="arrêter cette lecture">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect class="plein" x="6.9" y="6.9" width="10.2" height="10.2" rx="2.4"/></svg></button>
     </div>
   </div>
 </div>
@@ -5702,7 +5781,7 @@ async function lireParAzure(texte) {
   }
 }
 
-function direIci(texte, derniere) {
+function direIci(texte, derniere, rang) {
   if (!peutLireIci || !texte) return;
   const u = new SpeechSynthesisUtterance(texte);
   if (voixChoisie) u.voice = voixChoisie;
@@ -5718,6 +5797,14 @@ function direIci(texte, derniere) {
   // Sans ce garde-fou, reprendre au debut s'annonçait comme une fin de lecture — le bandeau
   // disparaissait a l'instant meme ou la lecture repartait.
   const gen = genLecture;
+  // Quelle phrase se dit MAINTENANT. C'est tout ce qu'on peut savoir de « ou on en est »
+  // quand c'est le navigateur qui parle : sa synthese ne donne ni duree ni position. Un rang
+  // de phrase est une position honnete ; une barre qui avancerait au jugé ne le serait pas.
+  if (rang != null) u.onstart = () => {
+    if (gen !== genLecture) return;
+    phraseCourante = rang;
+    majJaugeLecture();
+  };
   if (derniere) u.onend = () => {
     if (gen !== genLecture) return;
     lectureLocale = false; lectureEnPause = false; majBoutonLecture();
@@ -5751,11 +5838,30 @@ async function lireTexte(texte) {
   if (azure) { lectureLocale = false; lectureEnPause = false;
                majBoutonLecture(); return true; }
   lectureParAzure = false;
-  const phrases = decouperPhrases(texte);
-  if (!phrases.length) return false;
-  phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
-  majBarreLecture();
+  phrasesEnLecture = decouperPhrases(texte);
+  if (!phrasesEnLecture.length) return false;
+  jouerPhrasesDepuis(0);
   return true;
+}
+
+// Reprendre la lecture du navigateur a partir d'une phrase donnee. C'est tout ce que sa
+// synthese permet : une utterance ne se rembobine pas, on la refait dire. Le decoupage en
+// phrases existait deja pour une autre raison — les longs textes sont tronques sans prevenir
+// — et il donne gratuitement la seule navigation honnete de ce cote-la.
+function jouerPhrasesDepuis(rang) {
+  if (!phrasesEnLecture.length) return;
+  // La generation D'ABORD : `cancel()` declenche le `onend` de ce qui etait en file. Sans
+  // elle, repartir a la phrase 3 s'annoncerait comme une fin de lecture, et le bandeau
+  // disparaitrait a l'instant meme ou la lecture repart.
+  genLecture++;
+  try { speechSynthesis.cancel(); } catch (_) {}
+  phraseCourante = Math.max(0, Math.min(rang, phrasesEnLecture.length - 1));
+  lectureLocale = true;
+  lectureEnPause = false;
+  const fin = phrasesEnLecture.length - 1;
+  for (let i = phraseCourante; i <= fin; i++) direIci(phrasesEnLecture[i], i === fin, i);
+  majBarreLecture();
+  majJaugeLecture();
 }
 
 // Le texte de la derniere reponse, tenu au fil de l'eau plutot que relu dans la page. Le
@@ -5801,6 +5907,13 @@ let lectureEnPause = false;    // suspendue ici, et reprenable où elle en est
 let lectureParAzure = true;    // le son joue dans l'élément audio — donc pause et rembobinage
 let texteEnLecture = "";       // ce qui se lit, pour le reprendre au début sans le rechercher
 let genLecture = 0;            // la lecture courante : ce qui vient d'avant ne la commande pas
+let phrasesEnLecture = [];     // le texte découpé, quand c'est la voix du navigateur qui parle
+let phraseCourante = 0;        // laquelle se dit — la seule « position » que cette voix donne
+let railTire = false;          // un doigt est posé sur le rail : la lecture ne repeint plus
+// Le cran des flèches sur un son dont on connaît la durée. Dix secondes est la valeur de
+// tous les lecteurs de podcast, et c'est à peu près une phrase parlée : on retrouve ce qu'on
+// vient de manquer sans dépasser.
+const SAUT_SECONDES = 10;
 
 // Le bandeau vaut pour la lecture D'ICI, et pour celle du PC quand on est devant le PC. Sur
 // un appareil distant, la lecture du PC a ses propres boutons sur sa ligne : y ajouter un
@@ -5850,42 +5963,146 @@ function majBarreLecture() {
   const ou = lectureAMontrer();
   barre.hidden = !ou;
   if (!ou) return;
-  const bp = document.getElementById("lec-pause");
-  const bd = document.getElementById("lec-debut");
-  const bc = document.getElementById("lec-couper");
+  const ici = ou === "ici";
+  const mettre = (id, cache) => {
+    const b = document.getElementById(id);
+    if (b) b.hidden = cache;
+    return b;
+  };
   // Le PC ne sait pas suspendre : sa voix est un flux déjà parti, qu'on ne peut
-  // qu'interrompre. Un bouton pause qui couperait pour de bon serait un mensonge.
+  // qu'interrompre. Un bouton pause qui couperait pour de bon serait un mensonge. Même
+  // raison pour les flèches et pour la vitesse : rien à déplacer dans un son qui joue dans
+  // une autre pièce, et dont on ne connaît ni la durée ni la position.
+  const bp = mettre("lec-pause", !ici);
   if (bp) {
-    bp.hidden = ou !== "ici";
-    bp.textContent = lectureEnPause ? "▶  reprendre" : "⏸  pause";
+    bp.classList.toggle("reprendre", lectureEnPause);
     bp.title = lectureEnPause ? "reprendre là où on s'est arrêté"
                               : "mettre la lecture en pause";
+    bp.setAttribute("aria-label", bp.title);
   }
-  if (bd) bd.textContent = "⏮  au début";
-  if (bc) bc.textContent = "⏹  couper";
-  const bv = document.getElementById("lec-vitesse");
+  // « au début » ne sert plus QUE pour la lecture du PC. Ici, le rail le fait mieux : on y
+  // va d'un geste, et au passage on peut viser autre chose que zéro.
+  mettre("lec-debut", ici);
+  mettre("lec-couper", false);
+  const parPhrase = ici && !lectureParAzure;
+  const br = mettre("lec-recul", !ici);
+  const ba = mettre("lec-avance", !ici);
+  if (br && ba) {
+    // Le libellé dit la VRAIE unité. Un bouton « −10 s » sur la voix du navigateur
+    // promettrait des secondes qu'on ne sait pas compter : de ce côté on recule d'une
+    // phrase, et c'est ce qu'il faut annoncer.
+    br.title = parPhrase ? "la phrase précédente" : "reculer de " + SAUT_SECONDES + " secondes";
+    ba.title = parPhrase ? "la phrase suivante" : "avancer de " + SAUT_SECONDES + " secondes";
+    br.setAttribute("aria-label", br.title);
+    ba.setAttribute("aria-label", ba.title);
+  }
+  const bv = mettre("lec-vitesse", !ici);
   if (bv) {
-    // Rien à accélérer sur la voix du PC : le son est déjà synthétisé là-bas et arrive par
-    // un flux. Même raison que la pause, et même conséquence — pas de bouton qui mentirait.
-    bv.hidden = ou !== "ici";
     bv.textContent = libelleVitesse(vitesseLecture);
     bv.className = vitesseLecture > 1 ? "vite" : "";
     bv.title = "lire plus vite — actuellement " + libelleVitesse(vitesseLecture);
   }
+  // Le rail vaut pour les DEUX voix d'ici, et pas seulement pour celle d'Azure. Il était
+  // réservé au son dont on connaît la durée, au motif qu'une barre immobile ferait croire à
+  // une lecture bloquée — c'est vrai, et la parade n'était pas de le cacher : du côté du
+  // navigateur il se gradue en PHRASES, qu'on sait compter.
+  mettre("lecture-piste", !ici);
+  majJaugeLecture();
+}
+
+function mmss(secondes) {
+  if (!isFinite(secondes) || secondes < 0) secondes = 0;
+  const m = Math.floor(secondes / 60), r = Math.floor(secondes % 60);
+  return m + ":" + (r < 10 ? "0" : "") + r;
+}
+
+// Peindre le rail, sans rien commander. Separe du reste pour une raison precise : pendant
+// qu'un doigt glisse, on veut voir la cible AVANT d'y aller — c'est ce qui fait la
+// difference entre viser et tatonner.
+function peindreRail(part, dit) {
   const jauge = document.getElementById("lecture-jauge");
-  // La jauge n'a de sens que pour un son dont on connaît la durée. La synthèse du navigateur
-  // n'en donne aucune : une barre immobile ferait croire à une lecture bloquée.
-  if (jauge) jauge.hidden = ou !== "ici" || !lectureParAzure;
+  if (!jauge) return;
+  const cent = Math.min(100, Math.max(0, part * 100));
+  const trait = jauge.querySelector && jauge.querySelector("i");
+  if (trait && trait.style) trait.style.width = cent.toFixed(1) + "%";
+  const poignee = jauge.querySelector && jauge.querySelector("b");
+  if (poignee && poignee.style) poignee.style.left = cent.toFixed(1) + "%";
+  if (jauge.setAttribute) jauge.setAttribute("aria-valuenow", String(Math.round(cent)));
+  const temps = document.getElementById("lecture-temps");
+  if (temps) temps.innerHTML = dit;
+  if (jauge.setAttribute && dit) {
+    jauge.setAttribute("aria-valuetext", String(dit).replace(/<[^>]*>/g, ""));
+  }
+}
+
+// Ou en est la lecture, dans l'unite que cette voix-la sait donner.
+function ouEnEstLaLecture() {
+  if (lectureParAzure && lecteur) {
+    const duree = Number(lecteur.duration), ou = Number(lecteur.currentTime);
+    const connue = isFinite(duree) && duree > 0;
+    return { part: connue && isFinite(ou) ? Math.min(1, Math.max(0, ou / duree)) : 0,
+             // Trois petits points tant qu'Azure synthetise : annoncer « 0:00 / 0:00 »
+             // ressemble a un son vide, alors qu'il n'est simplement pas encore arrive.
+             dit: connue ? "<b>" + mmss(ou) + "</b> / " + mmss(duree) : "…" };
+  }
+  if (phrasesEnLecture.length) {
+    return { part: (phraseCourante + 1) / phrasesEnLecture.length,
+             dit: "<b>phrase " + (phraseCourante + 1) + "</b> / " + phrasesEnLecture.length };
+  }
+  return { part: 0, dit: "" };
 }
 
 function majJaugeLecture() {
+  const piste = document.getElementById("lecture-piste");
+  if (!piste || piste.hidden) return;
+  // Un doigt pose sur le rail gagne contre la lecture : sans ça, chaque `timeupdate`
+  // ramenait la poignee sous le doigt a la position REELLE, et viser devenait impossible.
+  if (railTire) return;
+  const { part, dit } = ouEnEstLaLecture();
+  peindreRail(part, dit);
+}
+
+// --- se deplacer dans la reponse ---------------------------------------------------------
+
+function allerA(part) {
+  part = Math.min(1, Math.max(0, part));
+  if (lectureParAzure && lecteur) {
+    const duree = Number(lecteur.duration);
+    if (isFinite(duree) && duree > 0) {
+      try { lecteur.currentTime = part * duree; } catch (_) {}
+    }
+  } else if (phrasesEnLecture.length) {
+    // La derniere phrase doit etre atteignable : `part === 1` tomberait hors du tableau.
+    jouerPhrasesDepuis(Math.min(phrasesEnLecture.length - 1,
+                                Math.floor(part * phrasesEnLecture.length)));
+  }
+  majJaugeLecture();
+}
+
+function decalerLecture(sens) {
+  if (lectureParAzure && lecteur) {
+    const duree = Number(lecteur.duration), ou = Number(lecteur.currentTime);
+    if (!isFinite(ou)) return;
+    let cible = Math.max(0, ou + sens * SAUT_SECONDES);
+    // Rester un cheveu avant la fin : se poser exactement dessus declenche `ended`, donc
+    // « avancer » couperait la lecture au lieu de la faire avancer.
+    if (isFinite(duree) && duree > 0) cible = Math.min(duree - 0.05, cible);
+    try { lecteur.currentTime = cible; } catch (_) {}
+    majJaugeLecture();
+  } else if (phrasesEnLecture.length) {
+    jouerPhrasesDepuis(phraseCourante + sens);
+  }
+}
+
+// Ou le doigt est tombe sur le rail, en fraction de sa largeur.
+function partDuRail(ev) {
   const jauge = document.getElementById("lecture-jauge");
-  if (!jauge || jauge.hidden || !lecteur) return;
-  const duree = Number(lecteur.duration);
-  const ou = Number(lecteur.currentTime);
-  const part = (isFinite(duree) && duree > 0 && isFinite(ou)) ? Math.min(100, ou / duree * 100) : 0;
-  const trait = jauge.querySelector && jauge.querySelector("i");
-  if (trait && trait.style) trait.style.width = part.toFixed(1) + "%";
+  if (!jauge || !jauge.getBoundingClientRect) return 0;
+  const r = jauge.getBoundingClientRect();
+  if (!r.width) return 0;
+  const x = ev && ev.clientX != null ? ev.clientX
+          : (ev && ev.touches && ev.touches[0] ? ev.touches[0].clientX : r.left);
+  return Math.min(1, Math.max(0, (x - r.left) / r.width));
 }
 
 function basculerPauseLecture() {
@@ -5913,10 +6130,11 @@ function relancerLectureDebut() {
     try { lecteur.currentTime = 0; } catch (_) {}
     try { const p = lecteur.play(); if (p && p.catch) p.catch(() => {}); } catch (_) {}
   } else if (texteEnLecture) {
-    genLecture++;
-    try { speechSynthesis.cancel(); } catch (_) {}
-    const phrases = decouperPhrases(texteEnLecture);
-    phrases.forEach((ph, i) => direIci(ph, i === phrases.length - 1));
+    // Le decoupage est refait s'il manque : « au debut » peut arriver apres un rejeu de la
+    // page, ou apres une lecture d'Azure — dans les deux cas on n'a que le texte.
+    if (!phrasesEnLecture.length) phrasesEnLecture = decouperPhrases(texteEnLecture);
+    jouerPhrasesDepuis(0);
+    return;
   }
   majJaugeLecture();
   majBarreLecture();
@@ -5943,12 +6161,69 @@ function reprendreDepuisBandeau() {
   if (bc) bc.onclick = couperDepuisBandeau;
   const bv = document.getElementById("lec-vitesse");
   if (bv) bv.onclick = changerVitesse;
-  if (lecteur) lecteur.ontimeupdate = majJaugeLecture;
+  const br = document.getElementById("lec-recul");
+  const ba = document.getElementById("lec-avance");
+  if (br) br.onclick = () => decalerLecture(-1);
+  if (ba) ba.onclick = () => decalerLecture(1);
+  if (lecteur) {
+    lecteur.ontimeupdate = majJaugeLecture;
+    // La duree n'est connue qu'une fois les en-tetes du MP3 lus. Sans ces deux-la, le rail
+    // restait a « … » pendant toute la premiere lecture : `timeupdate` ne part qu'avec le
+    // son, et Safari ne le repete pas si rien ne change.
+    lecteur.onloadedmetadata = majJaugeLecture;
+    lecteur.ondurationchange = majJaugeLecture;
+  }
+
+  // Le rail : on y tape, on y glisse, et les fleches du clavier l'actionnent aussi.
+  const jauge = document.getElementById("lecture-jauge");
+  if (!jauge || !jauge.addEventListener) return;
+  jauge.addEventListener("pointerdown", (ev) => {
+    railTire = true;
+    if (jauge.classList) jauge.classList.add("tire");
+    // La capture : sans elle, glisser hors du rail — ce qui arrive a tous les coups sur un
+    // telephone — rend la poignee au document et le son se fige la ou le doigt est sorti.
+    try { jauge.setPointerCapture(ev.pointerId); } catch (_) {}
+    const part = partDuRail(ev);
+    allerA(part);
+    peindreRail(part, ouEnEstLaLecture().dit);
+    if (ev.preventDefault) ev.preventDefault();
+  });
+  jauge.addEventListener("pointermove", (ev) => {
+    if (!railTire) return;
+    const part = partDuRail(ev);
+    // Azure se deplace EN CONTINU : c'est un fichier, chercher coute presque rien et on
+    // s'entend arriver. La voix du navigateur, elle, devrait relancer une phrase a chaque
+    // pixel — on se contente donc de montrer la cible, et on n'y va qu'au lacher.
+    if (lectureParAzure) allerA(part);
+    peindreRail(part, lectureParAzure ? ouEnEstLaLecture().dit
+      : "<b>phrase " + (Math.min(phrasesEnLecture.length,
+                                 Math.floor(part * phrasesEnLecture.length) + 1) || 1)
+        + "</b> / " + phrasesEnLecture.length);
+  });
+  const lacher = (ev) => {
+    if (!railTire) return;
+    railTire = false;
+    if (jauge.classList) jauge.classList.remove("tire");
+    if (!lectureParAzure) allerA(partDuRail(ev));
+    majJaugeLecture();
+  };
+  jauge.addEventListener("pointerup", lacher);
+  jauge.addEventListener("pointercancel", lacher);
+  jauge.addEventListener("keydown", (ev) => {
+    const k = ev && ev.key;
+    if (k === "ArrowRight" || k === "ArrowUp") decalerLecture(1);
+    else if (k === "ArrowLeft" || k === "ArrowDown") decalerLecture(-1);
+    else if (k === "Home") allerA(0);
+    else if (k === "End") allerA(1);
+    else return;
+    if (ev.preventDefault) ev.preventDefault();
+  });
 })();
 
 function couperLectureLocale() {
   lectureLocale = false;
   lectureEnPause = false;
+  phraseCourante = 0;
   genLecture++;
   arreterAudio();
   try { speechSynthesis.cancel(); } catch (_) {}
