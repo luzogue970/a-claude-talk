@@ -1659,6 +1659,12 @@ body{overflow-x:hidden}
    meme taille, et c'est test_rendu qui l'a vu, pas l'oeil. */
 #lecture-cmds #lec-pause{border-color:var(--toi);color:#9fdde6;background:#0e2329;flex:1.6}
 #lecture-cmds #lec-pause:hover{border-color:var(--accent);color:#cfeff4;background:#133038}
+/* Les deux barres de la pause portaient le trait commun des formes pleines — 2,6 px, donc
+   1,3 de chaque cote. Dessinees a 1,6 px d'ecart, elles se TOUCHAIENT une fois peintes : la
+   pause se lisait comme un bloc sombre, pas comme une pause, et c'est le bouton qu'on vise
+   du pouce sans regarder. Ici le trait ne sert a rien — `rx` arrondit deja les angles d'un
+   rectangle — donc on le retire, et l'ecart dessine devient l'ecart vu. */
+#lecture-cmds #lec-pause .si-pause rect{stroke:none}
 #lec-pause .si-jouer{display:none}
 #lec-pause.reprendre .si-pause{display:none}
 #lec-pause.reprendre .si-jouer{display:block}
@@ -1922,6 +1928,14 @@ body{overflow-x:hidden}
    d'une reponse de modele, pas la grisaille d'une ligne technique. `white-space:normal`
    parce que le markdown est desormais rendu en HTML : garder `pre-wrap` doublerait chaque
    saut de ligne du source avec la marge des paragraphes. */
+/* Ce que Claude a ecrit puis DEPASSE : il a ecrit, relance un outil, et repris. Ce n'est
+   pas la reponse du tour, c'est une etape de son travail. Elle reste lisible pour qui veut
+   suivre, mais elle ne se presente plus comme la reponse — ni le meme blanc, ni un bouton
+   pour l'ecouter. Un tour n'a qu'une reponse : la derniere chose qu'il ecrit. */
+.g-texte.etape .badge{color:#6b7580}
+.g-texte.etape .corps{color:#98a3b0;font-size:13px}
+.g-texte.etape .corps strong{color:#b9c3cf}
+.g-texte.etape .corps h4{color:#aab4c0;font-size:13.5px}
 .g-texte .corps{color:var(--texte);white-space:normal;line-height:1.5}
 .g-texte .corps p{margin:0 0 .55em}
 .g-texte .corps p:last-child{margin-bottom:0}
@@ -2465,8 +2479,8 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
           <path d="M17.6 7.4 13 12l4.6 4.6"/></svg></button>
       <button id="lec-pause" type="button" title="mettre la lecture en pause">
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <g class="si-pause"><rect class="plein" x="8.9" y="6.2" width="2.3" height="11.6"
-             rx="1.1"/><rect class="plein" x="12.8" y="6.2" width="2.3" height="11.6" rx="1.1"/></g>
+          <g class="si-pause"><rect class="plein" x="7.5" y="5.6" width="3.1" height="12.8"
+             rx="1.1"/><rect class="plein" x="13.4" y="5.6" width="3.1" height="12.8" rx="1.1"/></g>
           <g class="si-jouer"><path class="plein" d="M9.2 6.3 18.2 12l-9 5.7Z"/></g>
         </svg></button>
       <button id="lec-avance" type="button">
@@ -3309,6 +3323,16 @@ if (zoneFond && zoneFond.addEventListener) {
 // s'ajouter — sinon on lit « bon bonj bonjou bonjour ».
 const AGREGE = new Set(["pensee", "texte", "voix"]);
 let dernier = null;
+// Ce qu'un tour laisse derriere lui, et qui ne doit JAMAIS franchir sa frontiere :
+//
+// - `ligneEcrit` : la ligne ecrite encore ouverte. Claude pense, ecrit, repense, reprend —
+//   et chaque aller-retour ouvrait une ligne de plus. Une reponse arrivait donc a l'ecran
+//   coupee en trois blocs separes, qu'il fallait recoller de l'oeil.
+// - `ligneEcoute` : la seule ligne du tour qui porte « écouter ». Il y en avait jusqu'a
+//   trois — l'interjection de depart, chaque bloc ecrit, puis le debrief parle — donc
+//   reecouter une reponse voulait dire les retrouver un par un dans un flux qui defile.
+let ligneEcrit = null, ligneEcoute = null;
+function nouveauTour() { ligneEcrit = null; ligneEcoute = null; }
 // Vrai pendant le rejeu de l'historique : les lignes du passé ne s'animent pas, sinon une
 // reconnexion déclencherait cinq cents animations simultanées.
 let enRejeu = false;
@@ -3341,7 +3365,7 @@ function ajouter(e) {
   if (e.genre === "config") { carteConfig(e); return; }
   // Une question neuve ouvre un tour neuf : ce qui a été écrit avant ne s'écoute plus avec
   // ce qui va l'être.
-  if (e.genre === "toi") ecrituresDuTour = [];
+  if (e.genre === "toi") nouveauTour();
   // Un résultat vide sert à clore l'indicateur de son outil, pas à remplir le flux d'une
   // ligne sans contenu.
   if (e.genre === "resultat" && !e.texte && e.id) {
@@ -3373,16 +3397,30 @@ function ajouter(e) {
   // c'est-a-dire tous les debriefs — perdait son bouton des le deuxieme. D'ou des messages
   // verts sans aucun moyen de les ecouter, sans regle apparente.
   const propos = dernier && dernier.querySelector(".propos");
+  // Un outil qui demarre CLOT ce qui etait ecrit : Claude a repris son travail, donc ce
+  // qu'il venait d'ecrire n'etait pas sa reponse mais une etape.
+  if (e.genre === "outil" && !e.passe) cloreEcrit();
+  // La ligne que CET evenement alimente. Pas forcement la derniere du flux : un bloc ecrit
+  // continue de s'allonger alors qu'une ligne de reflexion s'est posee sous lui.
+  let cible = null;
   if (e.genre === "partiel" && meme && propos) {
     propos.textContent = e.texte;
-  } else if (e.genre === "texte" && meme && e.suite && propos) {
+    cible = dernier;
+  } else if (e.genre === "texte" && ligneEcrit) {
     // L'ecrit se rend en markdown, donc il ne s'ajoute pas morceau par morceau : une liste
     // a moitie arrivee n'est pas du markdown valide. On garde le texte BRUT et on re-rend
     // l'ensemble — groupe par image, sinon un long run paierait un rendu par jeton.
-    dernier.brutMd = (dernier.brutMd || "") + (e.texte || "");
-    planifierMd(dernier);
+    //
+    // Et il rejoint `ligneEcrit`, pas « la derniere ligne » : la reflexion s'intercale entre
+    // deux phrases de la meme reponse, et exiger que l'ecrit soit la derniere ligne du flux
+    // coupait cette reponse en autant de blocs que de pensees. Tant qu'aucun outil n'a
+    // tourne, ce qui s'ecrit prolonge le meme message.
+    ligneEcrit.brutMd = (ligneEcrit.brutMd || "") + (e.texte || "");
+    planifierMd(ligneEcrit);
+    cible = ligneEcrit;
   } else if (AGREGE.has(e.genre) && meme && e.suite && propos) {
     propos.textContent += e.texte;
+    cible = dernier;
   } else {
     const ligne = document.createElement("div");
     ligne.className = `ev g-${e.genre}` + (e.passe ? " passe" : "")
@@ -3407,6 +3445,8 @@ function ajouter(e) {
     if (e.genre === "texte") ligne.brutMd = e.texte || "";
     flux.appendChild(ligne);
     dernier = ligne;
+    cible = ligne;
+    if (e.genre === "texte") ligneEcrit = ligne;
     nouvelle = true;
   }
 
@@ -3415,11 +3455,11 @@ function ajouter(e) {
   // delta qui prolonge une ligne existante doit RALLUMER l'indicateur si un garde-fou
   // l'avait éteint — sinon l'en-tête affiche « rien ne tourne » pendant que ça tourne.
   const cle = cleDeSuivi(e);
-  if (cle && dernier) {
+  if (cle && cible) {
     if (nouvelle) {
-      marquer(cle, dernier.querySelector(".pip"));
+      marquer(cle, cible.querySelector(".pip"));
     } else if (!encours.has(cle)) {
-      const el = dernier.querySelector(".pip");
+      const el = cible.querySelector(".pip");
       el.className = "pip encours";
       marquer(cle, el);
     }
@@ -3460,21 +3500,23 @@ function ajouter(e) {
   if (e.genre === "arret") toutClore("interrompu");
 
   // Les tours rejoues ne captent pas la mesure de fenetre : elle appartient a un tour vif.
-  if (e.genre === "voix" && e.id && dernier) lignesVoix.set(e.id, dernier);
+  if (e.genre === "voix" && e.id && cible) lignesVoix.set(e.id, cible);
   // Ce que Claude a produit, et qu'on doit pouvoir reecouter : ce qu'il a DIT (« voix ») et,
   // pour une conversation reprise, ce qu'il a ECRIT (« texte ») — c'est tout ce que Claude
   // Code garde d'un tour passe.
-  if ((e.genre === "voix" || e.genre === "texte") && dernier) {
-    dernier.texteBrut = (dernier.texteBrut || "") + (e.texte || "");
+  if ((e.genre === "voix" || e.genre === "texte") && cible) {
+    cible.texteBrut = (cible.texteBrut || "") + (e.texte || "");
     // TOUTE reponse de Claude doit pouvoir etre ecoutee. La version precedente ne posait le
     // bouton que sur les lignes rejouees, en comptant sur « relire » — qui arrive avec
     // parole_fin — pour les lignes en direct. Or parole_fin ne suit que les DEBRIEFS, ceux
     // qui portent un identifiant : les phrases courtes que l'agent dit lui-meme (« d'accord,
     // j'y vais ») n'en ont pas, donc n'avaient aucun bouton. D'ou « il apparait sur le
     // premier message et pas sur le second », selon lequel des deux etait une interjection.
-    if (lireDeCeCote()) outillerEcoute(dernier, e);
+    if (lireDeCeCote()) outillerEcoute(cible, e);
   }
-  if (e.genre === "tour" && !e.passe) ligneTour = dernier;
+  // Le tour est fini : ce qu'il a ecrit en dernier EST sa reponse, et le reste s'arrete la.
+  if (e.genre === "tour" || e.genre === "arret") { ligneEcrit = null; }
+  if (e.genre === "tour" && !e.passe) ligneTour = cible;
   if (e.genre === "effort" && e.cle) {
     selEffort.value = e.cle;
     effortTour = e.vers || e.libelle || e.cle;
@@ -4905,7 +4947,7 @@ function recevoir(e, etat = false) {
       // Le rejeu de la nouvelle arrive juste après.
       flux.textContent = "";
       actions = 0; jetons = 0;
-      ecrituresDuTour = [];
+      nouveauTour();
       // Et tout ce qui se lisait. Le haut-parleur de la barre lit `texteReponse`, qui n'est
       // reecrit que par un debrief parle NEUF : une conversation reprise n'en produit aucun
       // avant le tour suivant, et le bouton lisait donc la derniere reponse de celle qu'on
@@ -5036,7 +5078,7 @@ function recevoir(e, etat = false) {
         // au modele — ne passe par aucun « toi ». Sans cette remise a zero, sa premiere
         // ligne ecrite masquait le bouton « écouter » du tour precedent et lisait les deux
         // reponses collees. L'ouverture du travail, elle, est emise dans tous les cas.
-        ecrituresDuTour = [];
+        nouveauTour();
       }
       if (!e.actif) toutClore("travail terminé");
       debutTravail = e.actif ? Date.now() : null;
@@ -5486,42 +5528,59 @@ function texteDeLigne(ligne) {
     .replace(/\s*(couper|relire|écouter)\s*/g, " ").trim();
 }
 
-// Écouter CETTE réponse, sur cet appareil. Le bouton vit sur chaque ligne que Claude a
-// produite, y compris celles rejouees en reprenant une conversation : c'est justement la
-// qu'on veut pouvoir reecouter, puisqu'on revient sur quelque chose qu'on n'a pas fini de
-// lire. Les lignes du rejeu n'ont pas de « parole_fin » derriere elles — le debrief parle
-// n'est pas garde par Claude Code, seul son texte l'est — donc rien ne les outillait.
-// Les lignes ECRITES du tour en cours. Claude écrit un paragraphe, lance un outil, reprend :
-// la page ouvre une ligne à chaque reprise, et il y en a eu jusqu'à onze pour un seul tour
-// — mesuré sur une vraie session. Chacune portait son bouton « écouter », donc une réponse
-// se réécoutait en plusieurs fois, en retrouvant chaque bouton à la main. C'est la même
-// réponse : elle s'écoute d'un seul tenant.
-let ecrituresDuTour = [];
+// Un tour, une chose à écouter.
+//
+// Signalé le 12 novembre 2026 : « au lieu de pouvoir tout écouter d'un coup, je dois
+// cliquer sur trois boutons écouter, alors qu'à la fin je devrais avoir qu'une chose à
+// écouter ». Les trois sont réels, et ce sont trois lignes différentes du même tour :
+// l'interjection dite au départ (« d'accord, j'y vais »), ce que Claude écrit entre deux
+// outils, et le débrief parlé qui conclut. Chacune portait son bouton.
+//
+// La règle tient en une phrase : le bouton MIGRE vers la dernière chose que Claude a
+// produite dans ce tour. L'interjection le perd quand la réponse arrive, la réponse écrite
+// le perd quand le débrief arrive — et à la fin du tour il n'en reste qu'un, en bas, là où
+// le regard est déjà. Il lit la ligne sur laquelle il se trouve : c'est la réponse.
+//
+// Ce qui a été écrit puis dépassé par un outil n'est plus une réponse mais une étape, et
+// une étape ne s'écoute pas — « tant que c'est pas fini, on n'a pas besoin d'écouter ça ».
+function retirerEcoute(ligne) {
+  const z = ligne && ligne.zoneEcoute;
+  if (!z) return;
+  z.hidden = true;
+  if (z.style) z.style.display = "none";
+}
+
+function rendreEcoute(ligne) {
+  const z = ligne && ligne.zoneEcoute;
+  if (!z) return;
+  z.hidden = false;
+  if (z.style) z.style.display = "";
+}
+
+// Fermer la ligne écrite du tour et la déclasser en étape. Appelée quand un outil démarre :
+// Claude a écrit, puis il est reparti travailler, donc ce qu'il venait d'écrire racontait
+// son travail — ce n'était pas sa réponse.
+function cloreEcrit() {
+  const l = ligneEcrit;
+  ligneEcrit = null;
+  if (!l || l.estEtape) return;
+  l.estEtape = true;
+  if (l.classList) l.classList.add("etape");
+  const badge = l.querySelector?.(".badge");
+  if (badge) badge.textContent = "étape";
+  if (ligneEcoute === l) { retirerEcoute(l); ligneEcoute = null; }
+}
 
 function outillerEcoute(ligne, e) {
-  if (!ligne || ligne.dejaEcoute || !lireDeCeCote()) return;
+  if (!ligne || !lireDeCeCote()) return;
+  // Une interjection isolée garde le sien tant que rien d'autre n'arrive : un tour qui ne
+  // produit QUE « le micro est bien coupé » doit rester réécoutable. C'est la migration,
+  // pas une liste de genres, qui règle le cas — et c'est pour ça qu'elle vaut mieux.
+  if (ligneEcoute && ligneEcoute !== ligne) retirerEcoute(ligneEcoute);
+  ligneEcoute = ligne;
+  if (ligne.zoneEcoute) { rendreEcoute(ligne); return; }
   const corps = ligne.querySelector?.(".corps");
   if (!corps) return;
-  ligne.dejaEcoute = true;
-  // Le regroupement ne vaut que pour l'écrit. Ce que l'agent DIT — « d'accord, j'y vais »,
-  // un débrief — a déjà un énoncé par ligne, et les coller donnerait une relecture de
-  // phrases sans rapport.
-  const groupe = e.genre === "texte";
-  // La LISTE de ce tour-ci, retenue par reference. `ecrituresDuTour` est REASSIGNEE au tour
-  // suivant : une fermeture qui lisait la variable lisait donc le tour courant, pas le sien.
-  // Toucher « écouter » sur une réponse d'il y a deux tours lisait la dernière réponse — ou,
-  // si le nouveau tour n'avait encore rien écrit, ne faisait rien du tout. Quitter la
-  // conversation et revenir « réparait » : le rejeu reconstruisait tout.
-  const duTour = ecrituresDuTour;
-  if (groupe) {
-    duTour.forEach(l => {
-      if (l !== ligne && l.zoneEcoute) {
-        l.zoneEcoute.hidden = true;
-        if (l.zoneEcoute.style) l.zoneEcoute.style.display = "none";
-      }
-    });
-    duTour.push(ligne);
-  }
   const zone = document.createElement("span");
   zone.className = "lecture";
   const b = document.createElement("button");
@@ -5530,10 +5589,7 @@ function outillerEcoute(ligne, e) {
   b.title = "lire cette réponse sur cet appareil";
   b.onclick = () => {
     debloquerLecture();
-    // Tout ce que le tour a écrit, dans l'ordre : c'est une réponse, pas un paragraphe.
-    const t = groupe
-      ? duTour.map(texteDeLigne).filter(Boolean).join("\n\n")
-      : texteDeLigne(ligne);
+    const t = texteDeLigne(ligne);
     if (!t) { noteBarre("rien à lire dans cette ligne"); return; }
     couperLectureLocale();
     lectureLocale = true;

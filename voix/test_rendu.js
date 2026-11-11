@@ -328,6 +328,10 @@ setTimeout(async () => {
                     lecRecul: b("#lec-recul"), lecPause: b("#lec-pause"),
                     lecAvance: b("#lec-avance"), lecVitesse: b("#lec-vitesse"),
                     lecCouper: b("#lec-couper"),
+                    // Les deux barres de la pause, peintes : c'est le trait de 2,6 px qui
+                    // les grossit, donc seule la mesure a l'ecran dit ce qu'on voit.
+                    pauseG: b("#lec-pause .si-pause rect:nth-of-type(1)"),
+                    pauseD: b("#lec-pause .si-pause rect:nth-of-type(2)"),
                     convs: b("#convs") };
   releve.vue = { w: innerWidth, h: innerHeight };
   const pre = document.createElement("pre");
@@ -530,6 +534,18 @@ if (bo.lecRail && bo.lecPause && bo.lecCouper) {
   dire(bo.lecRail.b <= bo.lecPause.t,
        `le rail est au-dessus des commandes, pas melange a elles `
        + `(${bo.lecRail.b} <= ${bo.lecPause.t})`);
+  // Les deux barres de la pause, mesurees PEINTES. Elles portaient le trait commun des
+  // formes pleines — 2,6 px, donc 1,3 de chaque cote — et dessinees a 1,6 px d'ecart elles
+  // se touchaient a l'ecran : la pause se lisait comme un bloc sombre, sur le bouton qu'on
+  // vise du pouce sans regarder. La geometrie du source ne pouvait pas le dire, le trait
+  // vient d'une feuille de style ecrite ailleurs.
+  if (bo.pauseG && bo.pauseD) {
+    const ecart = bo.pauseD.l - (bo.pauseG.l + bo.pauseG.w);
+    dire(ecart >= 1.5,
+         `les deux barres de la pause se voient comme deux barres (${ecart.toFixed(2)} px entre elles)`);
+    dire(bo.pauseG.w >= 2.5 && bo.pauseG.h >= 10,
+         `et chacune a de quoi se voir (${bo.pauseG.w.toFixed(1)} x ${bo.pauseG.h.toFixed(1)} px)`);
+  }
   dire(bo.lecTemps && bo.lecTemps.w > 0 && bo.lecTemps.l > bo.lecRail.l,
        `et le temps restant se lit au bout du rail (${bo.lecTemps && bo.lecTemps.w} px)`);
   dire(bo.lecBarre.b <= bo.forme.t + 1,

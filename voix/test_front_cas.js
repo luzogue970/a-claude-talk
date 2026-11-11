@@ -1543,6 +1543,7 @@ dire(md('code avec `a ** b` dedans') === '<p>code avec <code>a ** b</code> dedan
 async function testerEcritEnMorceaux() {
   titre('reponse ecrite : les morceaux se re-rendent, ils ne s empilent pas');
   flux.children.length = 0; dernier = null; enRejeu = true;
+  nouveauTour();          // sinon la ligne ecrite du cas precedent recueille ces morceaux
   actifs.add('texte');
   ajouter({ genre: 'texte', n: 9100, h: '10:00', texte: '**voila** ce que j ai fait :\n' });
   ajouter({ genre: 'texte', n: 9101, h: '10:00', texte: '- un point\n', suite: true });
@@ -2242,10 +2243,11 @@ async function testerEcouteHistorique() {
        'le libelle du bouton ne part pas dans la synthese');
   couperLectureLocale();
 
-  // --- une reponse ecrite en plusieurs fois reste UNE reponse a ecouter -------------------
+  // --- ce qui est ecrit puis depasse est une ETAPE, pas une reponse ----------------------
   // Mesure sur une vraie session : un tour produit de deux a onze lignes ecrites, parce que
-  // Claude ecrit, lance un outil, et reprend. Chacune portait son bouton, donc la reponse
-  // s ecoutait en deux fois — on en lisait une, on cherchait l autre.
+  // Claude ecrit, lance un outil, et reprend. Chacune portait son bouton vert, donc la
+  // reponse s ecoutait en morceaux — et les morceaux du milieu racontent le travail, pas la
+  // reponse. « Tant que c est pas fini, on n a pas besoin d ecouter ca. »
   recevoir({ genre: 'toi', texte: 'et la suite ?', n: 20100, h: '09:01' });
   recevoir({ genre: 'texte', texte: 'Premier bout de la reponse.', n: 20101, h: '09:01' });
   const bout1 = dernier;
@@ -2253,18 +2255,24 @@ async function testerEcouteHistorique() {
   recevoir({ genre: 'texte', texte: 'Second bout, apres l outil.', n: 20103, h: '09:01' });
   const bout2 = dernier;
   dire(bout1 !== bout2, 'un outil au milieu ouvre bien deux lignes dans le flux');
+  dire(bout1.classList.contains('etape'),
+       'le bout que l outil a depasse devient une etape du travail');
+  dire(bout1.querySelector('.badge').textContent === 'étape',
+       'et son badge le dit : ' + bout1.querySelector('.badge').textContent);
   dire(bout1.zoneEcoute && bout1.zoneEcoute.hidden === true,
-       'mais un seul bouton reste : celui du premier bout s efface');
+       'une etape ne s ecoute pas : son bouton s efface');
   dire(!!bout2.zoneEcoute && bout2.zoneEcoute.hidden !== true,
-       'et c est la derniere ligne ecrite qui le porte');
+       'et c est la derniere ligne ecrite — la reponse — qui porte le seul bouton');
+  dire(!bout2.classList.contains('etape'),
+       'elle, n est pas une etape : rien ne l a depassee');
 
   joues.length = 0; requetes.length = 0;
   bout2.zoneEcoute.children[0].onclick();
   await tick(); await tick(); await tick();
   const dem2 = requetes.filter(r => /\/parler\/preparer$/.test(r.url));
   const lu = dem2[0] && JSON.parse(dem2[0].opts.body).texte;
-  dire(/Premier bout/.test(lu || '') && /Second bout/.test(lu || ''),
-       'et il lit TOUT ce que le tour a ecrit, d un seul tenant : ' + JSON.stringify(lu || ''));
+  dire(/Second bout/.test(lu || '') && !/Premier bout/.test(lu || ''),
+       'et il lit la reponse, pas le recit du travail : ' + JSON.stringify(lu || ''));
   couperLectureLocale();
 
   // Une question neuve ouvre un tour neuf : la reponse d avant ne se recolle pas a celle
@@ -3553,7 +3561,10 @@ async function testerBandeauLecture() {
   dire(!!barre && barre.hidden, 'rien ne se lit : le bandeau ne mange aucune place');
 
   recevoir({ genre: '_histoire', evenements: [
-    { genre: 'texte', texte: 'Premiere phrase du debrief. Deuxieme phrase, plus longue, qui tient la lecture.',
+    // Trois phrases au moins : le rail se gradue en phrases quand la duree est inconnue,
+    // et naviguer entre deux n a rien a prouver. Elles viennent de CETTE ligne et d elle
+    // seule — un tour n a qu une reponse, et le bouton lit la ligne ou il se trouve.
+    { genre: 'texte', texte: 'Premiere phrase du debrief. Deuxieme phrase, plus longue, qui tient la lecture. Et une troisieme, pour avoir de quoi naviguer.',
       n: 99500, h: '09:00', passe: true },
   ] });
   const ligne = dernier;
@@ -4350,6 +4361,95 @@ async function testerEtatCoherent() {
        'une reprise forcee jette la socket menteuse avant de peindre ce qu elle voit');
 }
 
+
+// ---- un tour, une chose a ecouter ------------------------------------------------------
+//
+// Signale le 12 novembre 2026 : « au lieu de pouvoir tout ecouter d un coup, je dois
+// cliquer sur trois boutons ecouter, alors qu a la fin je devrais avoir qu une chose a
+// ecouter ». Les trois existaient bel et bien, et c etaient trois lignes du MEME tour.
+async function testerUnTourUneEcoute() {
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  titre('un tour ne laisse qu une chose a ecouter');
+  couperLectureLocale(); noteBarre(null);
+  const visible = l => !!(l && l.zoneEcoute) && l.zoneEcoute.hidden !== true;
+  // Compte DANS le tour : les tours d avant gardent le leur, et c est voulu — on reecoute
+  // une reponse d il y a deux tours la ou elle est.
+  const duTour = () => [inter, etape, rep, debrief].filter(visible).length;
+
+  recevoir({ genre: 'toi', texte: 'repare le micro', n: 120000, h: '10:00' });
+
+  // 1. L interjection dite au depart. Seule pour l instant, elle est ce qu on peut ecouter.
+  emettre({ genre: 'voix', texte: "d'accord, j'y vais." });
+  const inter = dernier;
+  dire(visible(inter), 'la phrase dite au depart porte « écouter » tant qu elle est seule');
+
+  // 2. Claude ecrit, puis repart travailler : ce qu il a ecrit racontait son travail.
+  emettre({ genre: 'texte', texte: 'Je regarde le fichier du micro.', suite: true });
+  const etape = dernier;
+  dire(!visible(inter), 'des que la reponse commence, l interjection rend le bouton');
+  dire(visible(etape), 'et il passe sur ce qui vient d etre ecrit');
+  emettre({ genre: 'outil', texte: 'Read micro.js', id: 'o1' });
+  dire(etape.classList.contains('etape') && !visible(etape),
+       'un outil derriere : ce bout devient une etape, et une etape ne s ecoute pas');
+
+  // 3. La vraie reponse, et la reflexion qui s intercale au milieu d elle. C etait le
+  //    « ecrit en trois fois » : chaque pensee coupait le message en deux a l ecran.
+  emettre({ genre: 'texte', texte: 'Le micro restait ouvert au retour. ', suite: true });
+  const rep = dernier;
+  emettre({ genre: 'pensee', texte: 'verifier le cas iOS', suite: true });
+  emettre({ genre: 'texte', texte: 'Je rends le flux au depart.', suite: true });
+  dire(dernier !== rep, 'la reflexion a bien sa propre ligne, posee sous la reponse');
+  dire(/restait ouvert au retour/.test(rep.brutMd) && /rends le flux/.test(rep.brutMd),
+       'mais la reponse reste UN message : ' + JSON.stringify(rep.brutMd));
+  dire(visible(rep) && !visible(etape), 'et c est elle, seule, qui porte « écouter »');
+
+  // 4. Le debrief parle conclut : le bouton migre une derniere fois, en bas du tour.
+  emettre({ genre: 'voix', texte: 'Le micro se rend au depart maintenant.', id: 'D1', suite: true });
+  const debrief = dernier;
+  dire(visible(debrief) && !visible(rep),
+       'le debrief parle prend le relais : c est la derniere chose produite');
+  dire(duTour() === 1, 'a la fin du tour, UN seul bouton sur ses quatre lignes (' + duTour() + ')');
+
+  // 5. Et il lit SA ligne — pas le tour entier, pas la derniere reponse d une autre.
+  joues.length = 0; requetes.length = 0; azureMarche = true;
+  debrief.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const dit = requetes.filter(r => /\/parler\/preparer$/.test(r.url))
+                      .map(r => JSON.parse(r.opts.body).texte)[0] || '';
+  dire(/se rend au depart/.test(dit) && !/j'y vais/.test(dit) && !/regarde le fichier/.test(dit),
+       'il lit la reponse du tour, et rien d autre : ' + JSON.stringify(dit));
+  couperLectureLocale();
+
+  // 6. Le tour suivant ne vole pas le bouton du precedent : on reecoute une reponse d il y
+  //    a deux tours en la retrouvant la ou elle est, et elle se lit ELLE.
+  recevoir({ genre: 'toi', texte: 'et ensuite ?', n: 120010, h: '10:01' });
+  emettre({ genre: 'voix', texte: 'Ensuite, rien a faire.', id: 'D2', suite: true });
+  const debrief2 = dernier;
+  dire(visible(debrief) && visible(debrief2),
+       'la reponse du tour d avant garde son bouton : on peut encore la reecouter');
+  joues.length = 0; requetes.length = 0;
+  debrief.zoneEcoute.children[0].onclick();
+  await tick(); await tick(); await tick();
+  const vieux = requetes.filter(r => /\/parler\/preparer$/.test(r.url))
+                        .map(r => JSON.parse(r.opts.body).texte)[0] || '';
+  dire(/se rend au depart/.test(vieux) && !/rien a faire/.test(vieux),
+       'et elle lit la sienne, pas la derniere arrivee : ' + JSON.stringify(vieux));
+  couperLectureLocale();
+
+  // 7. L icone de pause. Les deux barres portaient le trait commun des formes pleines —
+  //    2,6 px, donc 1,3 de chaque cote — et dessinees a 1,6 px d ecart elles se TOUCHAIENT
+  //    une fois peintes. La mesure a l ecran est dans test_rendu.js ; ici on tient la
+  //    geometrie, parce qu elle se reecrit sans qu on y pense.
+  const svg = /<g class="si-pause">([\s\S]*?)<\/g>/.exec(__html);
+  const rects = svg ? [...svg[1].matchAll(/x="([\d.]+)"[^>]*width="([\d.]+)"/g)] : [];
+  dire(rects.length === 2, 'la pause est bien faite de deux barres');
+  const g = rects.length === 2
+    ? (+rects[1][1]) - ((+rects[0][1]) + (+rects[0][2])) : 0;
+  dire(g >= 2.5, 'et l ecart entre elles depasse le trait qui les grossit : ' + g);
+  dire(/#lec-pause \.si-pause rect\{stroke:none\}/.test(__html),
+       'ce trait leur est retire : sans ca, l ecart dessine n est pas l ecart vu');
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -4364,6 +4464,7 @@ async function testerEtatCoherent() {
       .then(testerLongMessage)
       .then(testerAttenteReponse)
       .then(testerEtatCoherent)
+      .then(testerUnTourUneEcoute)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));
