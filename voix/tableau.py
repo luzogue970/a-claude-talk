@@ -3500,6 +3500,10 @@ let microVu = false;
 let serveurRepond = null;
 let diagEnCours = false;
 let etatRecu = false, attenteAgent = null;   // l'agent a-t-il déjà dit où il en est ?
+// Le dernier état publié par l'agent, gardé en VALEUR. Il n'existait que peint dans le DOM :
+// pour savoir ce que l'agent faisait, la page lisait sa propre pastille — donc elle ne
+// pouvait jamais la reconstruire après l'avoir écrasée par « reconnexion… ».
+let etatAgent = "";
 
 // --- le panneau de liaison : ce qui se passe, et le geste qui repare --------------------
 //
@@ -5119,18 +5123,12 @@ function recevoir(e, etat = false) {
     }
     if (e.genre === "quota") { quota = e.fenetres || []; majCompteurs(); return; }
     if (e.genre === "etat") {
-      etatRecu = true; clearTimeout(attenteAgent);
-      // L'agent vient de se brancher : la promesse d'attente n'a plus lieu d'etre.
-      if (champ && champ.placeholder.startsWith("l'agent démarre")) champ.placeholder = ECRIRE_ICI;
-      const el = document.getElementById("etat");
-      el.textContent = ETATS[e.vers] || e.vers;
-      // « vif » fait respirer la pastille tant que la session n'est pas au repos : un coup
-      // d'oeil suffit alors pour savoir si le système est vivant.
-      el.className = "e-" + e.vers + (e.vers === "listening" ? "" : " vif");
-      // L'infobulle suit, sinon le motif de la DERNIERE coupure resterait affiche sur une
+      // On garde la VALEUR, et on laisse peindre celui dont c'est le travail. L'infobulle
+      // suit au passage, sinon le motif de la DERNIERE coupure resterait affiche sur une
       // liaison redevenue saine — on lisait « coupure réseau » en survolant une pastille
-      // parfaitement verte. Liaison bonne : elle dit ce que le serveur raconte de lui-meme.
-      el.title = motDuServeur();
+      // parfaitement verte.
+      etatRecu = true; etatAgent = e.vers;
+      peindreEtatAgent();
       if (e.vers !== "speaking") resoudre("voix", "ok");
       return;
     }
@@ -7621,6 +7619,18 @@ let DELAI_OUVERTURE = 8000;
 const ATTENTES = [800, 1500, 3000, 5000, 8000, 12000, 20000];
 const attenteRebranche = () => ATTENTES[Math.min(echecs, ATTENTES.length - 1)];
 
+// Recaler l'affichage sur ce que le SERVEUR dit, pouls ou bonjour. Un champ `etat` vide
+// n'est pas une absence d'information : il dit que l'agent n'a pas encore publie d'etat,
+// donc qu'il demarre. Le cas se produit vraiment — l'agent est relance pendant qu'une page
+// reste ouverte — et croire l'ancien etat affichait « écoute » sur une session qui n'existe
+// plus.
+function recalerEtatAgent(d) {
+  if (!d || typeof d.etat === "undefined") return;
+  etatAgent = d.etat || "";
+  etatRecu = !!d.etat;
+  if (liaisonSaine()) peindreEtatAgent();
+}
+
 // Ce que le serveur a dit de lui-meme en dernier, en une ligne d'infobulle.
 function motDuServeur() {
   if (!serveur) return "aucun signe du serveur pour l'instant";
@@ -7635,11 +7645,76 @@ function motDuServeur() {
   return bouts.join(" · ");
 }
 
+// --- la pastille d'etat : une seule fonction peint, et elle connait la priorite ---------
+//
+// Trois endroits la peignaient sans se parler : le compte a rebours de reconnexion, le
+// gestionnaire d'ouverture de la socket, et l'etat publie par l'agent. Aucun ne savait ce
+// que les deux autres venaient d'ecrire, donc ce qui restait a l'ecran dependait de l'ordre
+// d'arrivee. Deux consequences vecues, et c'est la meme cause :
+//
+// - Apres une reconnexion, `onopen` ne repeignait QUE si l'agent n'avait JAMAIS donne son
+//   etat. Sur une conversation deja ouverte une fois, plus personne ne repeignait : la
+//   pastille restait sur « reconnexion… », halo compris, pendant que les messages partaient
+//   et revenaient normalement. Et le serveur ne republie son etat qu'au CHANGEMENT — donc
+//   ca durait jusqu'au prochain tour, parfois des heures.
+// - Le diagnostic HTTP repeint en DIFFERE : parti pendant la coupure, il repond quelques
+//   centaines de millisecondes plus tard et rappelait `direLiaison()` sans regarder si la
+//   liaison etait revenue entre-temps. D'ou le « reconnexion » qui reapparait tout seul une
+//   ou deux secondes apres que tout est reparti, en boucle.
+//
+// La regle, desormais : la LIAISON prime sur l'agent — un etat d'agent sans liaison est une
+// information perimee — et une seule fonction tranche entre les deux.
+function liaisonSaine() {
+  return !!socket && socket.readyState === 1 && !perimee();
+}
+
+// Arme le filet des 30 s sans le REARMER : cette fonction est appelee a chaque repeinture,
+// y compris par la veille toutes les 15 s. Rearmee a chaque passage, l'echeance n'aurait
+// jamais ete atteinte, et un agent muet ne l'aurait jamais ete non plus.
+function veillerSurAgent(el) {
+  if (attenteAgent) return;
+  attenteAgent = setTimeout(() => {
+    attenteAgent = null;
+    if (etatRecu || !liaisonSaine()) return;
+    el.textContent = "l'agent ne répond pas"; el.className = "e-listening";
+    noteBarre("l'agent n'a pas donné signe de vie en 30 s — voir son journal", true);
+  }, 30000);
+}
+
+// Ce que l'ecran dit quand la liaison tient : l'etat de l'agent, et lui seul.
+function peindreEtatAgent() {
+  const el = document.getElementById("etat");
+  if (!el) return;
+  // Le clic « reessayer » appartient a la pastille de panne. Le laisser sur une liaison
+  // saine proposait de reparer ce qui marche, et un appui refermait une socket vivante.
+  el.onclick = null;
+  el.title = motDuServeur();
+  if (!etatRecu) {
+    // La page de l'agent repond avant que sa session soit prete : plusieurs secondes.
+    // Annoncer « prêt » ici etait un mensonge, et le premier message partait dans le vide.
+    el.textContent = "l'agent démarre…"; el.className = "e-initializing vif";
+    if (champ) champ.placeholder = "l'agent démarre — ça partira";
+    veillerSurAgent(el);
+    return;
+  }
+  clearTimeout(attenteAgent); attenteAgent = null;
+  const vers = etatAgent || "listening";
+  el.textContent = ETATS[vers] || vers;
+  // « vif » fait respirer la pastille tant que la session n'est pas au repos : un coup
+  // d'oeil suffit alors pour savoir si le systeme est vivant.
+  el.className = "e-" + vers + (vers === "listening" ? "" : " vif");
+  if (champ) champ.placeholder = ECRIRE_ICI;
+}
+
 // L'affichage de la liaison quand elle n'est PAS etablie. Appelee a chaque seconde du compte
 // a rebours : dire « reconnexion... » sans fin ne distingue pas une reprise d'une panne.
 function direLiaison() {
   const el = document.getElementById("etat");
   if (!el) return;
+  // La liaison est revenue : tout ce qui suit est perime. Sans ce garde, n'importe quel
+  // appel differe — diagnostic HTTP, minuterie de compte a rebours rescapee, un `offline`
+  // suivi d'un `online` — repeint « reconnexion » par-dessus une liaison parfaitement saine.
+  if (liaisonSaine()) { arreterRebranche(); peindreEtatAgent(); return; }
   if (!navigator.onLine) {
     el.textContent = "hors ligne";
     el.className = "e-perdu";
@@ -7783,8 +7858,13 @@ function rebrancherMaintenant(pourquoi, force) {
   // dans 12 s » sur une tentative deja en cours.
   prochaineTentative = 0;
   reconnexionPrevue = false;
-  direLiaison();
+  // `brancher()` AVANT de peindre, et l'ordre compte : cette fonction est appelee surtout
+  // quand la socket ment — toujours « ouverte », plus rien qui circule. Peindre d'abord
+  // laissait `liaisonSaine()` regarder cette socket-la, conclure que tout allait bien, et
+  // effacer la cause qu'on venait justement de nommer. `brancher()` la jette ; ce qui suit
+  // voit alors une liaison qui s'ouvre, c'est-a-dire la verite.
   brancher();
+  direLiaison();
 }
 
 // Une socket « ouverte » dont plus rien ne sort. Le serveur envoie un pouls toutes les 25 s :
@@ -7858,7 +7938,14 @@ function surveillerLiaison() {
     // justement le filet cense rattraper ce cas. On se fie donc a ce qui tourne vraiment.
     if (socket.readyState === 3 && !minuterieRebranche) {
       rebrancherMaintenant("liaison fermée sans reprise programmée", true);
+      return;
     }
+    // Le dernier filet, et il ne regarde pas la liaison mais l'ECRAN. Tout ce qui precede
+    // verifie que la socket va bien ; rien ne verifiait que ce qu'on lit dit la meme chose.
+    // Une seule repeinture manquee, et la pastille garde « reconnexion… » sur une liaison
+    // saine jusqu'au prochain changement d'etat de l'agent. Ici, l'ecart ne peut pas durer
+    // plus de quinze secondes.
+    if (socket.readyState === 1) peindreEtatAgent();
   }, DELAI_VEILLE);
 }
 
@@ -7959,27 +8046,11 @@ function brancher() {
     // écoute plusieurs secondes avant que la session soit prête. Dire « prêt » ici était
     // un mensonge — on l'a cru, et le premier message partait dans le vide. L'état réel
     // arrive en rejeu dès qu'il existe ; d'ici là, on dit ce qu'on sait.
-    const et = document.getElementById("etat");
-    if (et) et.title = motDuServeur();
-    if (et && !etatRecu) {
-      et.textContent = "l'agent démarre…"; et.className = "e-initializing vif";
-      clearTimeout(attenteAgent);
-      attenteAgent = setTimeout(() => {
-        if (!etatRecu) {
-          et.textContent = "l'agent ne répond pas"; et.className = "e-listening";
-          noteBarre("l'agent n'a pas donné signe de vie en 30 s — voir son journal", true);
-        }
-      }, 30000);
-    }
+    // Repeindre SANS condition. Ce bloc ne repeignait que si l'agent n'avait jamais donne
+    // son etat : sur une conversation deja ouverte une fois, la pastille restait donc sur
+    // « reconnexion… » apres chaque retour de liaison, pendant que tout fonctionnait.
+    peindreEtatAgent();
     majEnvoyer();
-    // Tant que l'agent n'a pas donne signe de vie, le dire LA ou le regard est quand on
-    // veut parler. On arrive maintenant dans la conversation PENDANT son demarrage : un
-    // champ qui invite a ecrire sans rien dire de plus laisse croire que le message part
-    // dans le vide. Il est mis de cote et rejoue — c'est ce que cette phrase promet.
-    champ.placeholder = etatRecu ? ECRIRE_ICI
-      : "l'agent démarre — ça partira";
-    const etatEl = document.getElementById("etat");
-    if (etatEl) etatEl.onclick = null;
     // Les clics faits pendant la coupure partent maintenant, dans l'ordre.
     viderFile();
   };
@@ -7992,6 +8063,11 @@ function brancher() {
     if (d.genre === "_recu") { accuserJeton(d.jeton); return; }
     if (d.genre === "_pouls") {
       serveur = d; verifierVersion(d.version, d.libelle);
+      // Le pouls porte l'etat de l'agent, et c'est le filet d'integrite : toutes les 25 s,
+      // ce que l'ecran affiche est recale sur ce que le serveur sait, quoi qu'il se soit
+      // passe entre-temps. Sans lui, un seul evenement manque et l'ecran ment jusqu'au
+      // prochain tour.
+      recalerEtatAgent(d);
       majDeploiement(d.deploiement); return;
     }
     if (d.genre === "_bonjour") {
@@ -7999,6 +8075,9 @@ function brancher() {
       minuterieBonjour = null;
       serveur = d;
       verifierVersion(d.version, d.libelle);
+      // Avant tout le reste : la pastille affiche encore « reconnexion… » a cet instant, et
+      // le bonjour est la premiere chose qui dise ce que l'agent fait VRAIMENT.
+      recalerEtatAgent(d);
       majDeploiement(d.deploiement);
       // Le rejeu RALLUME les indicateurs du passe, et c'est la source la plus visible de
       // « ça tourne alors que rien ne tourne ». L'historique renvoyé contient les lignes

@@ -3312,6 +3312,10 @@ async function testerReouverture() {
     .find(b => /Rouvrir|relance/.test(b.textContent));
 
   // 1. Le tableau de bord refuse — plafond de sessions, projet inconnu. On le DIT.
+  // La socket est FERMEE pour de bon : ce panneau n'a de sens que sans liaison, et un cas
+  // precedent peut en laisser une ouverte. Sans cette ligne le test mesurait un panneau que
+  // la page a desormais raison de ne pas peindre.
+  if (socket) socket.readyState = 3;
   finirOuverture('');
   globalThis.relanceRefuse = true;
   serveurRepond = false; coupeDepuis = Date.now() - 60000; echecs = 5;
@@ -4240,6 +4244,112 @@ async function testerLongMessage() {
   stockPlein = 0;
 }
 
+
+// ---- la pastille d'etat dit ce qui se passe VRAIMENT ------------------------------------
+//
+// Plainte du 11 novembre 2026, mot pour mot : « j'arrive sur une conversation, et j'ai
+// reconnexion, trois petits points, puis ca fait une seconde, deux secondes, puis ca revient
+// en trois petits points » — et surtout : « le message s'envoie au serveur, il m'est revenu
+// dans ma conversation, on a donc retrouve la connexion, et pourtant j'ai toujours le
+// reconnexion ». L'ecran et le serveur ne racontaient pas la meme histoire.
+async function testerEtatCoherent() {
+  titre('l etat affiche en haut dit ce qui se passe vraiment');
+  const et = document.getElementById('etat');
+  const net = () => (et.textContent || '').trim();
+  const souffler = () => new Promise(r => setTimeout(r, 30));
+
+  // Une conversation DEJA vue : l'agent a donne son etat au moins une fois. C'est la
+  // condition du bug — sur une page fraiche, `onopen` repeignait, donc on ne voyait rien.
+  sockets.length = 0; echecs = 0; coupeDepuis = 0; dernierPouls = 0;
+  serveurRepond = true;
+  brancher(); ouvrirSock();
+  socket.onmessage({ data: JSON.stringify({ genre: 'etat', vers: 'listening' }) });
+  dire(net() === 'écoute', 'une conversation au repos dit « écoute » (' + net() + ')');
+
+  // 1. La coupure se voit. C'est la moitie honnete du comportement, et elle doit rester.
+  document.visibilityState = 'visible';
+  fermerSock(1006, 'coupure');
+  dire(/reconnexion|déconnect/.test(net()),
+       'une liaison coupee se dit tout de suite (' + net() + ')');
+
+  // 2. LE BUG. La liaison revient : l'ecran doit suivre, sans attendre que l'agent change
+  // d'etat de lui-meme. Le serveur ne republie son etat qu'au CHANGEMENT — sur une
+  // conversation au repos, ca n'arrive pas, et « reconnexion… » restait des heures.
+  ouvrirSock();
+  dire(net() === 'écoute',
+       'la liaison revenue efface « reconnexion » SANS attendre un nouveau tour (' + net() + ')');
+  dire(!/vif/.test(et.className), 'et le halo d alerte s eteint avec (' + et.className + ')');
+  dire(champ.placeholder === ECRIRE_ICI,
+       'la barre de saisie cesse d annoncer une panne : ' + champ.placeholder);
+
+  // 3. L'autre moitie du clignotement : le diagnostic HTTP part pendant la coupure et
+  // repond quelques centaines de millisecondes plus tard. Il rappelait `direLiaison()` sans
+  // regarder si la liaison etait revenue entre-temps — d'ou le « reconnexion » qui
+  // reapparait tout seul une ou deux secondes apres que tout est reparti.
+  direLiaison();
+  dire(net() === 'écoute',
+       'un appel differe arrive apres coup ne repeint PAS une panne finie (' + net() + ')');
+
+  // 4. Le clic « reessayer » appartient a la pastille de panne. Le laisser sur une liaison
+  // saine proposait de reparer ce qui marche, et un appui refermait une socket vivante.
+  dire(!et.onclick, 'la pastille saine ne porte plus le clic « reessayer »');
+
+  // 5. Le parcours decrit par le signalement, en entier : on ecrit pendant la coupure, ca
+  // part au retour, la reponse arrive — et l ecran n a plus le droit de dire « reconnexion ».
+  envoyes.length = 0;
+  fermerSock(1006, 'coupure');
+  champ.value = 'tu es la ?'; composer.onsubmit({ preventDefault() {} });
+  ouvrirSock();
+  await souffler();
+  emettre({ genre: 'claude', texte: 'oui, je suis la' });
+  dire(!/reconnexion/.test(net()),
+       'une reponse recue dans la conversation interdit le « reconnexion » a l ecran (' + net() + ')');
+
+  // 6. L etat publie par l agent reprend la main des que la liaison tient.
+  socket.onmessage({ data: JSON.stringify({ genre: 'etat', vers: 'thinking' }) });
+  dire(net() === 'réfléchit' && /vif/.test(et.className),
+       'l agent qui travaille le dit, halo compris (' + net() + ')');
+
+  // 7. Le pouls PORTE l etat de l agent, et la page l ignorait. C est la seule source qui
+  // arrive meme quand rien ne change : sans elle, une page qui rate un message `etat` reste
+  // fausse jusqu au tour suivant.
+  socket.onmessage({ data: JSON.stringify({ genre: '_pouls', pret: true, etat: 'speaking' }) });
+  dire(net() === 'parle', 'le pouls recale la pastille sur l etat reel (' + net() + ')');
+
+  // 8. Un `etat` VIDE n est pas une absence d information : il dit que l agent n a pas encore
+  // publie d etat, donc qu il demarre. Le cas arrive pour de vrai — l agent est relance
+  // pendant qu une page reste ouverte — et croire l ancien etat affichait « écoute » sur une
+  // session qui n existait plus.
+  socket.onmessage({ data: JSON.stringify({ genre: '_bonjour', rejoue: 0, pret: true, etat: '' }) });
+  dire(net() === "l'agent démarre…",
+       'un agent relance derriere la page se voit, au lieu de passer pour vivant (' + net() + ')');
+  dire(/e-initializing/.test(et.className), 'avec la couleur du demarrage (' + et.className + ')');
+
+  // 9. Une socket « ouverte » dont plus rien ne sort n est pas une liaison saine. C est
+  // exactement la socket zombie du telephone en veille : le navigateur la dit vivante, et
+  // aucun octet n a circule depuis deux minutes.
+  socket.onmessage({ data: JSON.stringify({ genre: 'etat', vers: 'listening' }) });
+  dernierPouls = Date.now() - 120000;
+  direLiaison();
+  dire(/reconnexion|déconnect/.test(net()),
+       'une socket ouverte mais muette depuis deux minutes ne passe pas pour saine (' + net() + ')');
+  dernierPouls = Date.now();
+
+  // 10. Le filet de quinze secondes. Une seule repeinture manquee, et la pastille garde une
+  // valeur perimee jusqu au prochain changement d etat de l agent ; ici l ecart ne peut pas
+  // durer plus longtemps que la veille. On le verifie dans la source : attendre quinze
+  // secondes dans un test est le meilleur moyen qu il ne soit jamais lance.
+  dire(/if \(socket\.readyState === 1\) peindreEtatAgent\(\);/.test(__html),
+       'la veille des 15 s repeint la pastille sur une liaison saine, en filet');
+
+  // 11. Et l ordre qui rend tout ca vrai : `rebrancherMaintenant` jette la socket AVANT de
+  // peindre. Peindre d abord laissait le garde regarder la socket qui ment, conclure que
+  // tout allait bien, et effacer la cause qu on venait de nommer.
+  const corps = /function rebrancherMaintenant[\s\S]*?\n\}/.exec(__html);
+  dire(!!corps && corps[0].indexOf('brancher();') < corps[0].indexOf('direLiaison();'),
+       'une reprise forcee jette la socket menteuse avant de peindre ce qu elle voit');
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -4253,6 +4363,7 @@ async function testerLongMessage() {
       .then(testerAudioToujours)
       .then(testerLongMessage)
       .then(testerAttenteReponse)
+      .then(testerEtatCoherent)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

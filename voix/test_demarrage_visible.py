@@ -131,10 +131,20 @@ def le_champ_promet_l_attente_pendant_le_demarrage():
     # se replie et la barre saute d'une ligne a l'ouverture de la conversation.
     trop = [m for m in __import__("re").findall(r'champ\.placeholder = "([^"]{34,})"', page)]
     dire(not trop, "et il tient sur une ligne" + (f" — TROP LONG : {trop}" if trop else ""))
-    dire('champ.placeholder = etatRecu ? ECRIRE_ICI' in page,
+    # Cette promesse se faisait a trois endroits qui ne se parlaient pas, et c'est ainsi
+    # qu'elle restait affichee sur un agent debout depuis longtemps. Une seule fonction
+    # peint desormais la pastille ET le champ : on verifie donc qu'elle est seule a le
+    # faire, et que les deux branches disent chacune la verite de leur cote.
+    peintre = __import__("re").search(
+        r"function peindreEtatAgent\(\) \{(.*?)\n\}", page, __import__("re").S)
+    corps = peintre.group(1) if peintre else ""
+    dire(page.count('champ.placeholder = "l\'agent démarre') == 1,
+         "un seul endroit dans toute la page promet l'attente")
+    avant = corps.find('champ.placeholder = "l\'agent démarre')
+    apres = corps.find("champ.placeholder = ECRIRE_ICI")
+    dire(0 < avant < apres and "if (!etatRecu)" in corps,
          "et il ne le dit QUE tant que l'agent n'a pas donne signe de vie")
-    dire('if (champ && champ.placeholder.startsWith("l\'agent démarre")) champ.placeholder = ECRIRE_ICI;'
-         in page,
+    dire(apres > corps.find("clearTimeout(attenteAgent)") > 0,
          "la promesse s'efface des que l'agent se branche")
 
 
