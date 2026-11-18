@@ -284,7 +284,26 @@ class Journal:
                     "donc la fin manque")
         if self.stop == "refusal":
             return "j'ai refusé de poursuivre cette réponse"
+        if self.tour_blanc():
+            if self.relances >= RELANCES_MAX:
+                return ("Claude Code me rend la main sans rien faire : ni un mot, ni une "
+                        f"action, {self.relances + 1} fois de suite. Ce n'est pas le réseau "
+                        "— c'est presque toujours la session qui n'est plus authentifiée, "
+                        "ou le quota épuisé. Il faut se reconnecter sur la machine ; "
+                        "redemander ne changera rien.")
+            return ("je n'ai rien produit du tout : la main m'a été rendue tout de suite, "
+                    f"sans un mot et sans une action{essais}")
         return None
+
+    def tour_blanc(self) -> bool:
+        """Ni un mot, ni une action, et la main rendue tout de suite : ce n'est pas une réponse.
+
+        `duree_s` fait office de garde : elle n'est renseignée qu'au message de résultat, donc
+        un tour qui vient de démarrer — forcément sans texte ni outil — n'est jamais pris pour
+        un tour blanc.
+        """
+        return (self.duree_s is not None and not self.textes and not self.outils
+                and not self.refus and self.duree_s < TOUR_BLANC_S)
 
     def lignes(self) -> list[str]:
         out = []
@@ -321,6 +340,17 @@ RELANCE_DE_FOND = "(une tâche de fond s'est terminée)"
 # savait pas le faire. La conversation s'arretait la, et on la retrouvait morte des heures
 # plus tard avec « x tours » pour toute explication.
 RELANCES_MAX = 3
+# Un tour « blanc » : Claude Code rend la main tout de suite, sans un mot et sans un geste.
+# Mesure du 18 novembre 2026 sur les 1 094 tours du journal de bord : 86 d'entre eux — 8 % —
+# sont revenus en moins de cinq secondes sans une action et sans une phrase. Quatre de suite
+# sur insnap cet apres-midi la : quatre messages dictes a 16 h 41, 16 h 41, 16 h 44 et
+# 16 h 47, quatre tours a « 0 s · _(rien dit)_ », et le compteur de jetons rigoureusement
+# identique entre les quatre — donc pas un seul appel n'est parti. Le CLI annonçait
+# « success », donc `reprenable` disait non, donc rien ne repartait ET rien ne le disait.
+# C'est ça, « la conversation est coupee sans raison » : ce n'etait pas une coupure, c'etait
+# un acquiescement vide. Les causes connues sont la session qui n'est plus authentifiee et
+# le quota epuise — toutes deux hors de portee d'une relance, d'ou le message explicite.
+TOUR_BLANC_S = 15
 # Des attentes qui montent. Une limite de debit ne se vide pas en dix secondes : repartir
 # tout de suite ne fait que reprendre le meme refus, en payant le contexte une fois de plus.
 ATTENTES_RELANCE = (20, 90, 300)
@@ -354,6 +384,10 @@ def reprenable(journal: "Journal") -> bool:
     # Le code HTTP d'abord : `pourquoi_arrete` le traite deja comme un arret anormal quel
     # que soit le sous-type, et un 429 reste un 429 meme annonce comme « success ».
     if journal.api_statut:
+        return True
+    # Un tour blanc n'a pas de sous-type a lui : le CLI le donne pour reussi. C'est pourtant
+    # l'arret le plus frequent, et le seul qui ne disait rien du tout.
+    if journal.tour_blanc():
         return True
     return journal.fin in ("error_during_execution", "error_max_turns")
 
@@ -988,7 +1022,12 @@ class Worker:
             if self.occupe or self.arret_demande or not self.client:
                 log.info("reprise auto abandonnee : le tour a repris sans elle")
                 return
-            await self.envoyer(RELANCE_APRES_PANNE.format(raison=raison), reprise=mort)
+            # Un tour blanc n'a rien commence : il n'y a aucun « la ou tu en etais » ou
+            # repartir. On REPOSE la question — c'est elle qui a ete avalee, c'est elle qui
+            # doit etre rejouee, et telle quelle pour que la reponse soit celle attendue.
+            relance = (mort.question if mort.tour_blanc() and mort.question
+                       else RELANCE_APRES_PANNE.format(raison=raison))
+            await self.envoyer(relance, reprise=mort)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

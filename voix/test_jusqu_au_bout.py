@@ -368,6 +368,78 @@ async def la_veille_ne_coupe_pas_un_tour_qui_travaille():
         W.PAS_DE_VEILLE, W.SILENCE_SIGNALE_S, W.SILENCE_MAX_TOUR_S = seuils
 
 
+def un_tour_blanc_est_une_panne_pas_une_reponse():
+    """Rendre la main sans un mot ni un geste, ce n'est pas répondre."""
+    import worker as W
+
+    print("\n=== un tour qui ne produit rien du tout est repéré ===")
+    blanc = W.Journal(question="Go", fin="success", duree_s=0.0)
+    dire(blanc.tour_blanc(), "pas un mot, pas une action, la main rendue tout de suite")
+    dire(W.reprenable(blanc),
+         "il repart tout seul, alors que le CLI l'annonçait comme réussi")
+
+    encours = W.Journal(question="Go")
+    dire(not encours.tour_blanc(),
+         "un tour qui vient de démarrer n'est pas blanc : il n'a pas encore eu le temps")
+    dire(not W.Journal(question="Go", duree_s=1.0, textes=["voilà"]).tour_blanc(),
+         "un tour qui a dit quelque chose, même court, est une vraie réponse")
+    dire(not W.Journal(question="Go", duree_s=1.0, outils=[("Bash", "ls")]).tour_blanc(),
+         "un tour qui a agi sans parler non plus : il s'est passé quelque chose")
+    dire(not W.Journal(question="Go", duree_s=1.0, refus=["Write"]).tour_blanc(),
+         "ni un tour arrêté par un refus de permission — ça, ça a une explication")
+    dire(not W.Journal(question="Go", duree_s=W.TOUR_BLANC_S + 1).tour_blanc(),
+         f"ni un tour muet qui a quand même duré plus de {W.TOUR_BLANC_S} s")
+
+    raison = blanc.pourquoi_arrete()
+    dire(raison and "rien produit" in raison,
+         f"et ça se DIT, au lieu du silence qu'on subissait — « {raison} »")
+    blanc.relances = W.RELANCES_MAX
+    fini = blanc.pourquoi_arrete()
+    dire(fini and "authentifi" in fini and "quota" in fini,
+         "quand ça se répète, la vraie piste est nommée : reconnexion ou quota")
+
+
+async def un_message_avale_est_repose_tel_quel():
+    """Le symptôme du 18 novembre : quatre messages dictés, quatre fois rien."""
+    import worker as W
+
+    print("\n=== ma question avalée repart d'elle-même, mot pour mot ===")
+    attentes, W.ATTENTES_RELANCE = W.ATTENTES_RELANCE, (0, 0, 0)
+    try:
+        tab = TableauFactice()
+        w = W.Worker(tableau=tab)
+        w.client = ClientScenarise([
+            [resultat("success")],                       # le tour blanc, tel qu'il arrive
+            [parole("voilà, c'est réglé"), resultat("success")],
+        ])
+        pompe = asyncio.create_task(w._drainer())
+        demande = "règle le son qui se coupe dans le fil"
+        await w.envoyer(demande)
+
+        recu = []
+
+        async def ecouter():
+            while True:
+                recu.append(await w.events.get())
+
+        oreille = asyncio.create_task(ecouter())
+        await attendre(lambda: any(g == "fin" for g, _ in recu))
+        oreille.cancel()
+        pompe.cancel()
+
+        fins = [j for g, j in recu if g == "fin"]
+        dire(len(fins) == 1,
+             f"un seul bilan : le tour blanc n'en rend aucun ({len(fins)})")
+        dire(fins and fins[0].textes == ["voilà, c'est réglé"],
+             "et c'est celui de la vraie réponse, obtenue sans que j'aie à relancer")
+        dire(len(w.client.envoyes) == 2 and w.client.envoyes[1] == demande,
+             "ma question est reposée TELLE QUELLE : elle n'avait pas commencé à être traitée")
+        dire("reprise_auto" in tab.genres(),
+             "la page le montre, au lieu d'afficher un tour réussi qui ne dit rien")
+    finally:
+        W.ATTENTES_RELANCE = attentes
+
+
 def la_fin_dit_dans_quel_etat_on_s_arrete():
     """« 16 tour(s) » ne dit pas si la conversation a fini ou si on l'a coupée."""
     import worker as W
@@ -398,6 +470,8 @@ async def principal():
     await trois_echecs_rendent_la_parole()
     await un_tour_fige_ne_me_fait_pas_attendre_une_heure()
     await la_veille_ne_coupe_pas_un_tour_qui_travaille()
+    un_tour_blanc_est_une_panne_pas_une_reponse()
+    await un_message_avale_est_repose_tel_quel()
     la_fin_dit_dans_quel_etat_on_s_arrete()
     print(f"\n{'TOUT VERT' if ok else 'DES ECHECS'}")
     return 0 if ok else 1
