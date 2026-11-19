@@ -266,6 +266,9 @@ setTimeout(async () => {
       corpsLargeur: corps ? corps.offsetWidth : -1,
       corpsHauteur: corps ? corps.offsetHeight : -1,
       opacite: parseFloat(cs(l).opacity),
+      // Masquee par un filtre, une ligne mesure zero partout. La mesurer quand meme, c'est
+      // faire tomber une verification de mise en page sur une ligne que personne ne voit.
+      visible: cs(l).display !== "none",
     });
   }
   const champ = document.getElementById("saisie");
@@ -406,7 +409,7 @@ dire(r.entete > 30, `l'en-tête est rendu (${r.entete} px)`);
 dire(r.lignes.length >= EVENEMENTS.length,
      `${r.lignes.length} lignes rendues, au moins les ${EVENEMENTS.length} du jeu d'essai`);
 
-const avecCorps = r.lignes.filter(l => l.corpsLargeur >= 0);
+const avecCorps = r.lignes.filter(l => l.corpsLargeur >= 0 && l.visible);
 const pire = avecCorps.reduce((a, b) => (b.corpsLargeur < a.corpsLargeur ? b : a));
 dire(pire.corpsLargeur > 400,
      `la colonne de texte est large partout — la plus étroite : ${pire.corpsLargeur} px `

@@ -87,17 +87,42 @@ dire(new Set(tousGenres.map(e => e.g)).size === tousGenres.length,
 
 // Le defaut : les genres qui repetent ou qui bruitent sont decoches.
 const caches = tousGenres.filter(e => e.cache).map(e => e.g).sort();
-// Cinq genres, et chacun pour une raison differente : le journal technique et l etat du micro
+// Huit genres, et chacun pour une raison differente : le journal technique et l etat du micro
 // changent souvent sans rien raconter de la conversation ; la transcription en cours et le
 // texte retenu sont deja SOUS LES YEUX dans la barre de saisie, donc la ligne du flux ne fait
 // que les repeter au moment le plus charge ; la sortie des outils est simplement enorme.
+// Les trois derniers sont la machinerie : le bilan chiffre d un tour, les ordres executes ici
+// (« micro mis en veille apres 20 min de silence »), et ce que le harnais s insere a lui-meme.
+// Sur un telephone ils s intercalent entre deux choses a lire sans rien apprendre a qui ecoute.
 // Tous restent disponibles dans les filtres, pour relire apres coup.
-dire(JSON.stringify(caches) === JSON.stringify(['dictee', 'log', 'micro', 'partiel', 'resultat']),
+dire(JSON.stringify(caches) === JSON.stringify(
+       ['dictee', 'log', 'micro', 'ordre', 'partiel', 'resultat', 'systeme', 'tour']),
      'decoches par defaut : ' + caches.join(', '));
 dire(!actifs.has('dictee'), 'le texte retenu n apparait pas dans le flux au demarrage');
 dire(tousGenres.some(e => e.g === 'dictee'),
      'mais il reste proposé dans les filtres : decoche n est pas supprime');
 dire(caches.every(g => !actifs.has(g)), 'et ils ne sont effectivement pas actifs');
+
+// Un filtre masque le ROUTINIER, jamais l anormal. Le bilan d un tour est decoche par defaut,
+// mais c est aussi la seule ligne qui porte « pourquoi ca s est arrete » : la masquer rendrait
+// un tour coupe parfaitement muet, la panne meme qu on vient de faire parler.
+flux.children.length = 0; dernier = null; vuJusqua = 0;
+ajouter({ n: 650, genre: 'tour', actions: 3, duree: 12, h: '12:00:00' });
+const tourNormal = flux.children[flux.children.length - 1];
+dire(tourNormal.style.display === 'none',
+     'le bilan d un tour qui s est bien passe ne s affiche plus de lui-meme');
+ajouter({ n: 651, genre: 'tour', actions: 0, duree: 0, h: '12:00:01',
+          pourquoi: "je n ai rien produit du tout" });
+const tourCoupe = flux.children[flux.children.length - 1];
+dire(tourCoupe.style.display === '',
+     'mais un tour qui dit POURQUOI il s est arrete reste visible, filtre ou pas');
+ajouter({ n: 652, genre: 'tour', actions: 1, h: '12:00:02', erreurs: ['429'] });
+dire(flux.children[flux.children.length - 1].style.display === '',
+     'et un tour qui porte une erreur aussi');
+appliquerFiltres();
+dire(tourCoupe.style.display === '' && tourNormal.style.display === 'none',
+     'et cela tient quand on retouche les filtres, pas seulement a la creation');
+flux.children.length = 0; dernier = null; vuJusqua = 0;
 
 // le compteur de la famille se lit sans l ouvrir.
 // Le total est DEDUIT de la declaration, jamais ecrit a la main : ajouter un genre a la

@@ -2658,7 +2658,14 @@ const GROUPES = [
     { g: "texte",    lib: "écrit",     quoi: "sa réponse écrite, mise en forme — c'est celle qu'on lit" },
     { g: "outil",    lib: "outil",     quoi: "chaque action : lecture, édition, commande" },
     { g: "resultat", lib: "résultat",  quoi: "la sortie des outils — souvent longue", cache: true },
-    { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre" },
+    // Décoché par défaut : sur un téléphone, ce bilan chiffré s'intercale entre deux
+    // choses à lire sans rien apprendre à qui écoute — le nombre d'actions et les jetons
+    // se regardent après coup, pas au milieu d'une conversation. Il reste coché d'un
+    // doigt. ATTENTION : un tour qui s'est MAL terminé reste visible quoi qu'il arrive
+    // (voir `toujoursVisible`) — c'est la seule ligne qui dise pourquoi, et la masquer
+    // ramènerait exactement le silence qu'on vient de corriger.
+    { g: "tour",     lib: "tour",      quoi: "le bilan d'un tour : actions, durée, jetons, fenêtre",
+      cache: true },
     { g: "attente_fond", lib: "dit plus tard",
       quoi: "un tour qui n'annonçait qu'une attente : gardé pour être dit avec la suite, en une seule écoute" },
     { g: "reprise_auto", lib: "reprise auto",
@@ -2666,7 +2673,11 @@ const GROUPES = [
     { g: "contexte", lib: "contexte",  quoi: "la conversation compactée, et ce qu'elle pesait" },
   ]},
   { nom: "Commandes", aide: "ce que tu pilotes, à la voix ou depuis cette page", genres: [
-    { g: "ordre",      lib: "ordre local", quoi: "un ordre exécuté ici, jamais transmis à Claude" },
+    // Décoché par défaut : ces lignes racontent la machinerie d'ici — « micro mis en veille
+    // après 20 min de silence », un ordre tapé sur cette page. Rien de tout ça n'est la
+    // conversation, et ça s'intercale dedans.
+    { g: "ordre",      lib: "ordre local", quoi: "un ordre exécuté ici, jamais transmis à Claude",
+      cache: true },
     { g: "micro",      lib: "micro",       quoi: "ouverture et coupure du micro", cache: true },
     { g: "arret",      lib: "arrêt",       quoi: "arrêt du travail en cours" },
     { g: "modele",     lib: "modèle",      quoi: "changement de modèle, permanent ou d'un tour" },
@@ -2677,7 +2688,10 @@ const GROUPES = [
     // Le fil porte des messages que la machine insère sous le rôle « user » : fin de tâche
     // de fond, résumé de compactage, commande locale. Ils s'affichaient en « toi », et
     // signaient donc à ta place. Genre à part, parce qu'ils ne sont ni toi ni Claude.
-    { g: "systeme",     lib: "machine", quoi: "ce que la machine a inséré dans le fil : fin de tâche de fond, compactage, commande locale" },
+    // Décoché par défaut, même raison : ce que le harnais s'écrit à lui-même n'a jamais été
+    // dit par personne. Le lire au milieu d'un échange fait chercher un sens qu'il n'a pas.
+    { g: "systeme",     lib: "machine", quoi: "ce que la machine a inséré dans le fil : fin de tâche de fond, compactage, commande locale",
+      cache: true },
     { g: "session",     lib: "session", quoi: "l'identifiant de session, celui qui sert à reprendre" },
     { g: "reprise",     lib: "reprise", quoi: "le rechargement d'une conversation précédente" },
     { g: "quota_seuil", lib: "quota",   quoi: "franchissement d'un palier de rate limit" },
@@ -2716,9 +2730,19 @@ function dejaVu(e) {
 
 // Une liste deroulante par famille. <details> porte l'ouverture et la fermeture sans une
 // ligne de JS ; on ne code que ce qui a du sens metier : l'etat des cases et le compteur.
+// Un filtre masque ce qui est ROUTINIER, jamais ce qui est anormal. Le bilan d'un tour est
+// décoché par défaut parce qu'il ne dit rien d'intéressant quand tout va bien ; mais c'est
+// AUSSI la seule ligne qui porte « pourquoi ça s'est arrêté ». La masquer dans ce cas-là
+// rendrait un tour coupé parfaitement silencieux — la panne qu'on a passé la veille à faire
+// parler. Ces lignes-là portent donc une marque, et elles passent outre le filtre.
+function toujoursVisible(e) {
+  return e.genre === "tour" && !!(e.pourquoi || (e.erreurs && e.erreurs.length));
+}
+
 function appliquerFiltres() {
   for (const el of flux.children) {
-    if (el.dataset.g) el.style.display = actifs.has(el.dataset.g) ? "" : "none";
+    if (!el.dataset.g) continue;
+    el.style.display = (actifs.has(el.dataset.g) || el.dataset.toujours) ? "" : "none";
   }
 }
 
@@ -3427,7 +3451,8 @@ function ajouter(e) {
                     + (e.parent ? " delegue" : "")
                     + (enRejeu || e.passe ? "" : " neuve");
     ligne.dataset.g = e.genre;
-    ligne.style.display = actifs.has(e.genre) ? "" : "none";
+    if (toujoursVisible(e)) ligne.dataset.toujours = "1";
+    ligne.style.display = (actifs.has(e.genre) || ligne.dataset.toujours) ? "" : "none";
     // L'heure de l'horloge plutôt que des secondes depuis le lancement : « 14:23:07 » se
     // recoupe avec un commit ou un souvenir, « 812.4 » ne se recoupe avec rien. L'écoulé
     // reste en infobulle, parce qu'il sert à mesurer une latence entre deux lignes.
