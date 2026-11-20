@@ -785,15 +785,28 @@ class Tableau:
         # toutes les quinze secondes manquait les tours plus courts que ca — il n'avait
         # jamais vu « travail » vrai, donc jamais vu sa fin. Une date qui change, elle, se
         # voit a n'importe quelle cadence. Zero tant qu'un tour est en cours.
+        def horloge(t: float) -> float:
+            return round(time.time() - (time.monotonic() - self._t0) + float(t), 1)
         fin = 0.0
-        if not travail.get("actif") and travail.get("t") is not None:
-            fin = round(time.time() - (time.monotonic() - self._t0) + float(travail["t"]), 1)
+        debut = 0.0
+        if travail.get("t") is not None:
+            if travail.get("actif"):
+                debut = horloge(travail["t"])
+            else:
+                fin = horloge(travail["t"])
         return web.json_response({
             "projet": valeurs.get("projet", ""),
             "port": self.port,
             "etat": (etat.get("etat") or {}).get("vers", ""),
             "travail": bool(travail.get("actif")),
             "fin": fin,
+            # Le DEBUT du tour en cours, en temps d'horloge, symetrique de « fin » et zero
+            # tant qu'aucun tour ne tourne. Sans lui, ce qui regarde la session de
+            # l'exterieur n'avait que « depuis » sous la main pour dire depuis combien de
+            # temps ca travaille — or « depuis » est l'age de l'AGENT, pas celui du tour :
+            # le tableau affichait « travaille · 26 h » sur un tour commence a l'instant,
+            # parce que la session etait ouverte depuis la veille. Mesure le 20 novembre 2026.
+            "debut": debut,
             "reponse": str(travail.get("reponse") or "")[:200],
             "micro": bool((etat.get("micro") or {}).get("actif")),
             "session": {"id": session.get("id", ""), "titre": session.get("titre") or ""},
@@ -814,6 +827,10 @@ class Tableau:
                 "attend": bool((etat.get("attente_reponse") or {}).get("actif")),
                 "texte": (etat.get("attente_reponse") or {}).get("texte") or "",
                 "depuis": (etat.get("attente_reponse") or {}).get("depuis") or "",
+                # L'heure de la question en temps d'horloge. « depuis » est un « HH:MM:SS »
+                # fait pour etre lu ; une duree se calcule sur un nombre, et un nombre ne
+                # change pas de sens a minuit.
+                "quand": float((etat.get("attente_reponse") or {}).get("quand") or 0.0),
             },
             # « pret » : l'agent a branche ses commandes. Avant, la page repond mais un
             # message n'a personne pour le recevoir — c'est ce qu'un lanceur doit attendre.

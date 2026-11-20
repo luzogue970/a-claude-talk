@@ -215,3 +215,25 @@ Et la conséquence qu'on ne voyait pas : pendant ces deux minutes, la page de
 l'agent ne répondait pas, donc le lanceur du tableau le déclarait mort et **tuait
 son groupe de processus**. Le poids du transcript ne ralentissait pas l'ouverture,
 il l'empêchait.
+
+## `/etat.json` date le TOUR, et c'est autre chose que l'âge de la session
+
+Le 20 novembre 2026, le tableau de bord affichait « travaille · 26 h » sur un tour
+commencé douze minutes plus tôt, et « prête · 20 min » sur une conversation dont le
+dernier tour datait de la veille. Rien n'était faux chez nous : il n'avait que `depuis`
+et `inactif` sous la main, et aucun des deux ne date un tour.
+
+- **`depuis` est l'âge de l'AGENT** (`time.monotonic() - self._t0`), `inactif` le temps
+  écoulé depuis le dernier événement hors `BRUIT` — que `micro`, `session`, `travail`,
+  `etat`, `fond` ou `agents` remettent à zéro. Les deux servent la veille qui ferme les
+  sessions oisives ; ni l'un ni l'autre ne dit quand un tour a commencé ou fini.
+- **`fin` et `debut` le disent, en temps d'horloge**, et sont exclusifs : pendant un
+  tour, `debut` est daté et `fin` vaut zéro ; le tour fini, l'inverse. Une date d'horloge
+  se lit à n'importe quelle cadence, contrairement à un passage de booléen qu'un
+  superviseur qui ne passe qu'aux quinze secondes manque.
+- **`question.quand` double `question.depuis`** pour la même raison : `depuis` est un
+  `HH:MM:SS` fait pour être lu, et une question posée avant minuit s'y lirait dans le
+  futur. Une durée se calcule sur un nombre.
+
+Ce qui regarde une session de l'extérieur n'a que ce fichier. Un champ qu'on n'y publie
+pas devient un champ que quelqu'un d'autre reconstruit mal.

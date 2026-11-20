@@ -647,6 +647,15 @@ async def l_etat_se_lit_sans_page():
         dire(d["session"]["titre"] == "refonte des cartes", "et le titre de la conversation")
 
         dire(d["fin"] == 0, "tant que le tour dure, aucune fin n'est datee")
+        # Le defaut du 20 novembre 2026 : le tableau de bord n'avait que « depuis » pour
+        # dire depuis combien de temps ca travaille, et « depuis » est l'age de l'AGENT.
+        # Une conversation ouverte la veille et occupee depuis dix secondes s'affichait
+        # « travaille · 26 h ». Le debut du tour, lui, ne parle que du tour.
+        import time as _t
+        dire(abs(d["debut"] - _t.time()) < 5,
+             f"le debut du tour en cours est date en temps d'horloge ({d['debut']:.0f})")
+        dire(d["debut"] > _t.time() - d["depuis"] - 5 or d["depuis"] < 5,
+             "et il ne se confond pas avec l'age de l'agent")
 
         t.publier("travail", actif=False, reponse="Les cartes sont refaites, relis la deuxième.")
         async with aiohttp.ClientSession() as s:
@@ -662,6 +671,8 @@ async def l_etat_se_lit_sans_page():
              f"la fin du dernier tour est datee en temps d'horloge ({d2['fin']:.0f})")
         dire(d2["reponse"].startswith("Les cartes sont refaites"),
              "et un extrait de la reponse voyage avec, pour une notification qui dit quoi")
+        dire(d2["debut"] == 0,
+             "et le tour fini n'a plus de debut — sinon on compterait encore")
 
         # L'entretien ne fait pas une session active. La consommation des moteurs se
         # republie toutes les vingt secondes : si elle comptait, une session oubliee

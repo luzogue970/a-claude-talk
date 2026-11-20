@@ -1139,8 +1139,12 @@ class Voix(Agent):
         même silence et mêmes zéro événement. Le disque, pour que fermer l'application ne
         fasse pas disparaître la question : on la retrouve au relancement.
         """
+        # « depuis » se lit a l'ecran, « quand » se calcule : une duree ne se tire pas
+        # d'un « HH:MM:SS » sans date, et une question posee avant minuit se lirait dans
+        # le futur. Les deux, donc, et chacun pour son usage.
         self._attente = {"id": marque, "texte": dite, "questions": pour_la_page,
-                         "depuis": datetime.now().strftime("%H:%M:%S")}
+                         "depuis": datetime.now().strftime("%H:%M:%S"),
+                         "quand": time.time()}
         self._voir("attente_reponse", actif=True, **self._attente)
         try:
             journal.noter_question(getattr(self.worker, "session_id", None), self._attente)

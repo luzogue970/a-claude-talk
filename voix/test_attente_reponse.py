@@ -126,6 +126,17 @@ async def principal():
             dire(posees.get("entete") == "Fichier",
                  "l'en-tête voyage aussi : c'est le titre du panneau")
 
+            # « depuis » se lit (« 14:03:22 »), « quand » se calcule. Le tableau de bord
+            # affichait « question en attente · 20 min » en comptant une inactivité que
+            # n'importe quel événement interne remettait à zéro ; une date d'horloge, elle,
+            # ne bouge pas. Mesuré le 20 novembre 2026.
+            import time as _t
+            dire(abs(float(ouvertures[0].get("quand") or 0) - _t.time()) < 5,
+                 "l'heure de la question voyage aussi en temps d'horloge, pour en tirer "
+                 f"une durée → {ouvertures[0].get('quand')}")
+            dire(bool(ouvertures[0].get("depuis")),
+                 "sans perdre l'heure lisible, qui s'affiche telle quelle")
+
             print("\n=== et elle est écrite sur le disque, pour survivre à la fermeture ===")
             sur_disque = journal.question_en_attente(WorkerFactice.session_id)
             dire(bool(sur_disque), "la question est retrouvable par son identifiant de session")
