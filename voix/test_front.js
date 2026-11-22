@@ -131,6 +131,9 @@ function elem(nom) {
     },
     selectionStart: 0, selectionEnd: 0,
     setSelectionRange(d, f) { this.selectionStart = d; this.selectionEnd = f; },
+    // Un vrai textarea sait se selectionner. Sans ça, le repli du presse-papier — le seul
+    // chemin qui marche sur un telephone en http — levait avant d'avoir rien tente.
+    select() { this.setSelectionRange(0, (this.value || "").length); },
     // scrollHeight simule : ~48 caracteres par ligne de 21 px, plus le rembourrage. Sans ca
     // ajusterHauteur() n'aurait rien a mesurer et le test ne verifierait rien.
     get scrollHeight() {

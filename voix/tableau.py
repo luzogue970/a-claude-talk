@@ -1205,6 +1205,29 @@ PAGE = r"""<!doctype html>
      marquent des objets differents — la barre de saisie d'un cote, une reponse de Claude de
      l'autre — et qu'on voudra peut-etre un jour en changer une sans l'autre. */
   --attend:#e3b341;
+
+  /* ── L'echelle typographique ──────────────────────────────────────────────────────
+     Il y avait DIX tailles dans cette feuille, de 10,5 a 15 px, posees une par une au
+     fil des besoins : 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15. Dix tailles ne
+     font pas une hierarchie, elles font un degrade — rien ne se detache parce que tout
+     se ressemble a un demi-pixel pres.
+     Cinq crans, et ils veulent dire quelque chose :
+       --t-mot  ce qui se lit sans etre lu : heures, compteurs, etiquettes
+       --t-cote ce qui accompagne : libelles, machinerie, details
+       --t-lit  CE QU'ON VIENT LIRE — la reponse, la question, le message
+       --t-fort un titre dans une reponse
+     Le cran de lecture est le seul qui grandit sur telephone : c'est le seul qu'on lit
+     vraiment, et c'est la que l'ecran est le plus petit. */
+  --t-mot:11px; --t-cote:12.5px; --t-lit:14.5px; --t-fort:16px;
+  /* L'interligne de lecture. 1,62 plutot que 1,55 : sur fond sombre les lettres claires
+     « bavent » legerement (halation), et les lignes se collent. Un cran d'air repare ça
+     sans etaler la page. */
+  --lh:1.62;
+  /* La MESURE : combien de caracteres par ligne avant que l'oeil perde le debut de la
+     suivante. L'optimum connu est 60-75 ; la page n'en avait aucune, donc sur un ecran
+     large une reponse s'etalait sur 140 caracteres — deux fois trop. Sans effet sur
+     telephone, ou la largeur decide avant cette borne. */
+  --mesure:72ch;
 }
 *{box-sizing:border-box}
 
@@ -1979,26 +2002,90 @@ body{overflow-x:hidden}
 #envoyer:not(:disabled):hover{border-color:var(--toi);color:#8fd6de}
 #envoyer:disabled{opacity:.3;cursor:default}
 .g-toi .tape{color:var(--faible);font-size:11px;margin-right:5px}
-.ev{display:grid;grid-template-columns:62px 92px 14px 1fr;gap:12px;padding:7px 0;
-  border-bottom:1px solid #1c2129;align-items:baseline}
+/* ── La forme d'un message ────────────────────────────────────────────────────────────
+   C'etait une grille a quatre colonnes fixes — heure, GENRE EN CAPITALES, pastille,
+   texte — avec un trait sous chaque ligne. C'est la grammaire d'un fichier de log, et
+   elle etait appliquee aussi bien a une commande interne qu'a la reponse qu'on vient
+   lire. Verdict a l'usage : « c'est bien en termes de developpeurs, on pourrait rendre
+   quelque chose de plus beau a lire ».
+   Deux grammaires, donc, parce qu'il y a deux populations de lignes :
+   — ce qui SE DIT (toi, claude, ce qu'il ecrit, sa reflexion) prend la forme d'un
+     message : une en-tete legere, puis le texte sur toute la largeur ;
+   — ce qui SE FAIT (outils, journal, bilans) reste une ligne de journal, compacte et
+     grise, parce que c'est ce qu'elle est et qu'on ne la lit qu'en cas de doute.
+   Les traits disparaissent : dans une conversation, c'est l'espace qui separe. Un trait
+   sous chaque message dessine un tableau, et l'oeil compte des lignes au lieu de lire. */
+.ev{display:grid;grid-template-columns:auto auto 1fr;gap:1px 7px;
+  padding:4px 9px;align-items:baseline;border-radius:10px}
+.ev > .badge{grid-column:1}
+.ev > .pip{grid-column:2}
+.ev > .t{grid-column:3;justify-self:end}
+.ev > .corps{grid-column:1 / -1}
 /* Seules les lignes qui arrivent VRAIMENT en direct s'animent. Animer le rejeu d'historique
    lancerait cinq cents animations d'un coup, ce qui fait exactement l'effet inverse. */
 @keyframes pose{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .ev.neuve{animation:pose .16s ease-out}
-.t{color:#5a636e;font-size:11px;font-variant-numeric:tabular-nums;text-align:right}
-.badge{font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.04em}
-.corps{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* L'heure : elle ne se lit pas, elle se retrouve. Elle s'efface donc jusqu'a ce qu'on
+   la cherche — ou qu'on survole la ligne. */
+.t{color:#49515c;font-size:var(--t-mot);font-variant-numeric:tabular-nums;
+  text-align:right;opacity:.65}
+.ev:hover > .t{opacity:1}
+/* Le nom de qui parle. Les CAPITALES etaient le dernier reste du log : elles crient le
+   mot « VOIX » deux fois plus fort que la phrase en dessous, qui est ce qu'on vient
+   lire. Les libelles sont deja ecrits en minuscules a la source (« toi », « claude »,
+   « ecrit ») — il suffisait d'arreter de les transformer. */
+.badge{font-size:var(--t-cote);font-weight:600;letter-spacing:.01em}
+/* `anywhere` coupait les mots francais n'importe ou, au milieu d'une syllabe, des que la
+   ligne etait serree — « conver / sation ». `break-word` ne coupe que ce qui ne tient
+   vraiment pas, et la cesure s'en charge proprement (l'element racine porte lang="fr",
+   donc le navigateur connait les regles). Le code, lui, garde `anywhere` : un chemin de
+   fichier sans espace DOIT pouvoir se couper. */
+.corps{min-width:0;overflow-wrap:break-word;hyphens:auto;white-space:pre-wrap}
 /* L'enveloppe du texte qui s'accumule. Elle n'a pas d'allure propre — elle sert a ce que le
    texte et les boutons soient deux choses distinctes, et qu'allonger l'un n'efface pas
    l'autre. */
 .propos{white-space:pre-wrap}
 /* Survol : la ligne se detache. Dans un flux de deux cents lignes, suivre une ligne du
    regard sans repere est fatigant. */
-.ev{border-radius:6px;padding-left:6px;margin-left:-6px}
+.ev{margin-left:-9px;margin-right:-9px}
 .ev:hover{background:#141a22}
-.g-toi .badge{color:var(--toi)} .g-toi .corps{color:#d0f0f4}
+/* ── Qui parle ────────────────────────────────────────────────────────────────────────
+   Le texte LUI-MEME etait colore : cyan pale pour toi, vert pale pour Claude, violet
+   pour la reflexion. C'est ce qui faisait « terminal », et c'est le defaut le plus
+   couteux de l'ancienne page : un paragraphe de deux mille signes en vert pastel se lit
+   mal, et la couleur n'y apprend rien que le nom juste au-dessus ne dise deja.
+   Desormais la couleur tient dans le NOM et dans un filet — trois mots teintes au lieu
+   de trois cents — et le texte reprend la couleur de lecture, la plus contrastee de la
+   page. L'identite reste lisible d'un coup d'oeil, sans la payer a chaque phrase. */
+.ev:is(.g-toi,.g-voix,.g-texte) .corps{color:#e6edf3;font-size:var(--t-lit);
+  line-height:var(--lh);text-wrap:pretty}
+/* La mesure borne la LIGNE, pas seulement le texte dedans. Posee sur le seul corps, elle
+   laissait le bloc d'un message s'etendre sur toute la page avec quatre cents pixels de
+   vide a droite — on bornait le texte et on gardait le cadre trop grand. */
+.ev:is(.g-toi,.g-voix,.g-texte,.g-pensee){max-width:calc(var(--mesure) + 26px)}
+/* Ce que JE dis : un bloc. Tout le reste de la page est pose a plat sur le fond ; ce
+   seul relief suffit a retrouver ses propres messages en faisant defiler vite, et il
+   remplace l'alternance de couleurs qu'il a fallu abandonner ci-dessus. Pas de bulle
+   alignee a droite : sur un telephone tenu a une main, une bulle a droite rogne la
+   mesure de vingt pour cent pour ne rien dire de plus qu'un filet. */
+.ev.g-toi{background:#151c25;border-left:2px solid var(--toi);
+  border-radius:4px 12px 12px 4px;padding:9px 12px}
+.ev.g-toi:hover{background:#18202a}
+.g-toi .badge{color:var(--toi)}
+/* Un tour commence quand JE parle. C'est le seul endroit du flux ou il faut de l'air :
+   entre deux lignes d'une meme reponse, l'air separe ce qui va ensemble. */
+.ev.g-toi{margin-top:22px}
+#flux > .ev.g-toi:first-child{margin-top:0}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
-.g-voix .badge{color:var(--voix)} .g-voix .corps{color:#c6f0cf}
+.g-voix .badge{color:var(--voix)}
+/* Deux lignes du meme locuteur a la suite : la seconde n'a pas besoin de redire qui
+   parle ni a quelle seconde. Une reponse arrive souvent en trois ou quatre morceaux, et
+   l'ancienne page en faisait quatre en-tetes empilees — c'est-a-dire quatre fois plus de
+   gris que de texte. */
+.ev.g-voix + .ev.g-voix > :is(.badge,.t),
+.ev.g-texte + .ev.g-texte > :is(.badge,.t){display:none}
+.ev.g-voix + .ev.g-voix,
+.ev.g-texte + .ev.g-texte{padding-top:0;margin-top:-2px}
 /* Une reponse qui ATTEND une reponse. Le defaut : « c'est fait » et « il me faut ton avis
    sur trois points » arrivaient dans la meme ligne, de la meme couleur, et se lisaient a
    voix haute de la meme facon — donc il fallait ecouter la reponse ENTIERE a chaque fois
@@ -2013,7 +2100,29 @@ body{overflow-x:hidden}
 .quest{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;
   background:var(--attend);color:#161b22;font-size:10.5px;font-weight:700;
   text-transform:uppercase;letter-spacing:.03em;vertical-align:1px}
-.g-pensee .badge{color:var(--pensee)} .g-pensee .corps{color:#c3a6f5;font-size:13px}
+/* La reflexion : presente, jamais au premier plan. Elle s'intercale au milieu d'une
+   reponse, et si elle a le meme poids que la reponse on lit les deux en alternance. */
+.g-pensee .badge{color:var(--pensee)}
+.g-pensee .corps{color:#a396bd;font-size:var(--t-cote);line-height:1.55;
+  max-width:var(--mesure)}
+/* ── La machinerie ────────────────────────────────────────────────────────────────────
+   Ce que Claude FAIT, par opposition a ce qu'il dit : les outils, leurs sorties, les
+   bilans, le journal technique. Ces lignes-la gardent la forme d'un journal — nom,
+   pastille, texte sur la meme ligne, petit et gris — parce que c'est ce qu'elles sont et
+   qu'on ne les lit qu'en cas de doute. Les confondre avec la conversation etait tout le
+   probleme : un appel de grep et une reponse de six paragraphes avaient le meme poids a
+   l'ecran. */
+.ev:is(.g-outil,.g-resultat,.g-tour,.g-ordre,.g-micro,.g-log,.g-session,.g-effort,
+       .g-modele,.g-attente,.g-contexte,.g-quota_seuil,.g-arret,.g-reprise_auto,
+       .g-attente_fond,.g-systeme){
+  grid-template-columns:auto auto minmax(0,1fr) auto;gap:0 7px;padding:2px 9px;
+  font-size:var(--t-cote)}
+.ev:is(.g-outil,.g-resultat,.g-tour,.g-ordre,.g-micro,.g-log,.g-session,.g-effort,
+       .g-modele,.g-attente,.g-contexte,.g-quota_seuil,.g-arret,.g-reprise_auto,
+       .g-attente_fond,.g-systeme) > .corps{grid-column:3;font-size:var(--t-cote)}
+.ev:is(.g-outil,.g-resultat,.g-tour,.g-ordre,.g-micro,.g-log,.g-session,.g-effort,
+       .g-modele,.g-attente,.g-contexte,.g-quota_seuil,.g-arret,.g-reprise_auto,
+       .g-attente_fond,.g-systeme) > .t{grid-column:4}
 .g-texte .badge{color:#7d8590}
 /* La reponse ECRITE : c'est elle qu'on lit, donc elle a le contraste et la mise en forme
    d'une reponse de modele, pas la grisaille d'une ligne technique. `white-space:normal`
@@ -2027,26 +2136,64 @@ body{overflow-x:hidden}
 .g-texte.etape .corps{color:#98a3b0;font-size:13px}
 .g-texte.etape .corps strong{color:#b9c3cf}
 .g-texte.etape .corps h4{color:#aab4c0;font-size:13.5px}
-.g-texte .corps{color:var(--texte);white-space:normal;line-height:1.5}
-.g-texte .corps p{margin:0 0 .55em}
-.g-texte .corps p:last-child{margin-bottom:0}
-.g-texte .corps h4{margin:.7em 0 .3em;font-size:14px;color:#e6edf3;font-weight:600}
-.g-texte .corps h4:first-child{margin-top:0}
-.g-texte .corps strong{color:#f0f6fc;font-weight:650}
+/* ── Le rythme vertical de ce qu'on lit ───────────────────────────────────────────────
+   Un seul ecart entre deux blocs (.72em), un titre qui prend son air AU-DESSUS et pas
+   en dessous — c'est ce qui le rattache a ce qu'il annonce plutot qu'a ce qui precede.
+   Les marges etaient reglees une par une (.55, .7/.3, .2/.6, .3, .6) et aucune ne
+   s'accordait avec l'autre : les paragraphes se touchaient presque, les titres
+   flottaient au milieu. */
+.g-texte .corps{color:var(--texte);white-space:normal;line-height:var(--lh)}
+.g-texte .corps > :first-child{margin-top:0}
+.g-texte .corps > :last-child{margin-bottom:0}
+.g-texte .corps p{margin:0 0 .72em}
+.g-texte .corps h4{margin:1.25em 0 .35em;font-size:var(--t-fort);color:#f0f6fc;
+  font-weight:600;line-height:1.3;letter-spacing:-.01em;text-wrap:balance}
+/* Le gras sert a retrouver une phrase en diagonale : il doit se voir sans se crier.
+   Du blanc pur sur un corps a #e6edf3 n'ouvrait qu'un cran — on le prenait pour un
+   defaut de rendu. Un demi-cran de graisse en plus fait le travail que la couleur ne
+   faisait pas. */
+.g-texte .corps strong{color:#fff;font-weight:680}
 .g-texte .corps em{color:#dbe3ec}
 /* Les listes gardent leurs puces mais pas le retrait par defaut du navigateur : quarante
    pixels de marge sur un ecran de telephone, c'est un cinquieme de la largeur utile. */
-.g-texte .corps ul,.g-texte .corps ol{margin:.2em 0 .6em;padding-left:1.25em}
-.g-texte .corps li{margin:.15em 0}
+.g-texte .corps ul,.g-texte .corps ol{margin:0 0 .72em;padding-left:1.2em}
+.g-texte .corps li{margin:0 0 .28em}
+.g-texte .corps li:last-child{margin-bottom:0}
+/* La puce prend la couleur du locuteur plutot que celle du texte : elle cesse d'etre un
+   caractere de plus a lire et redevient un repere. */
+.g-texte .corps li::marker{color:#5c6673}
 .g-texte .corps code{background:#1d2430;border:1px solid var(--bord);border-radius:4px;
   padding:0 4px;font-size:12.5px;color:#c9d6e4}
 .g-texte .corps pre{background:#11161d;border:1px solid var(--bord);border-radius:6px;
   padding:8px 10px;margin:.4em 0 .6em;overflow-x:auto}
 .g-texte .corps pre code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.45}
-.g-texte .corps blockquote{margin:.3em 0;padding-left:.7em;border-left:2px solid var(--bord);
-  color:var(--faible)}
-.g-texte .corps hr{border:0;border-top:1px solid var(--bord);margin:.6em 0}
-.g-texte .corps a{color:var(--toi)}
+/* Un bloc de code n'est pas du texte a lire, c'est un objet qu'on PREND. Il a donc un cadre,
+   une etiquette qui dit la langue, et un bouton de copie. Sur un telephone, le selectionner
+   a la main veut dire viser le premier caractere, tenir, et faire glisser jusqu'au bout sans
+   que la page defile — personne ne le fait deux fois. */
+.g-texte .corps .bloc{margin:.55em 0 .72em;border:1px solid var(--bord);border-radius:8px;
+  overflow:hidden;background:#11161d}
+.g-texte .corps .bloc figcaption{display:flex;align-items:center;gap:10px;
+  justify-content:space-between;padding:2px 4px 2px 11px;background:#161c25;
+  border-bottom:1px solid var(--bord)}
+.g-texte .corps .bloc .langue{font-size:var(--t-mot);color:#6e7a88;letter-spacing:.05em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+/* 32 px de haut : la plus petite cible qu'un pouce atteint sans viser. */
+.g-texte .corps .bloc .copier{border:0;background:none;color:#8b96a3;font:inherit;
+  font-size:var(--t-mot);padding:7px 10px;min-height:32px;border-radius:6px;cursor:pointer}
+.g-texte .corps .bloc .copier:hover{background:#1d2430;color:var(--texte)}
+.g-texte .corps .bloc .copier.fait{color:#7bd88f}
+.g-texte .corps .bloc .copier.rate{color:#e0756a}
+/* Le cadre est porte par la figure : le pre n'en pose pas un deuxieme par-dessus. */
+.g-texte .corps .bloc pre{margin:0;border:0;border-radius:0;background:none}
+.g-texte .corps blockquote{margin:0 0 .72em;padding:.1em 0 .1em .8em;
+  border-left:2px solid #2f3945;color:#a9b4c0;font-style:italic}
+.g-texte .corps hr{border:0;border-top:1px solid var(--bord);margin:1.1em 0}
+/* Un lien doit se voir sans etre souligne de bout en bout : le soulignement decale, fin,
+   se lit comme une invitation et pas comme une rature. */
+.g-texte .corps a{color:#79cfdc;text-decoration-color:#79cfdc66;
+  text-underline-offset:2px}
+.g-texte .corps a:hover{text-decoration-color:#79cfdc}
 .g-outil .badge{color:var(--outil)}
 /* L'action tient sur une ligne et une seule : elle partage l'ecran avec la conversation. */
 .g-outil .corps{display:flex;align-items:baseline;gap:8px;white-space:normal}
@@ -2110,11 +2257,17 @@ body{overflow-x:hidden}
 .g-dictee .badge{color:var(--outil)} .g-dictee .corps{color:#e8d9a8}
 /* « Voilà l'historique, voilà maintenant. » Une ligne pleine largeur, pas une ligne de flux
    parmi les autres : c'est un repère, il doit se voir sans être cherché. */
-.ev.g-reprise{grid-template-columns:62px 1fr;gap:12px;padding:14px 6px 12px;
-  border-bottom:1px solid var(--tour);border-top:1px solid var(--tour);
-  background:#101a1c;margin:10px -6px}
-.g-reprise .badge,.g-reprise .pip{display:none}
-.g-reprise .corps{color:#aab6c6;font-size:12px;letter-spacing:.04em;
+/* La couture entre ce qui a ete rejoue et ce qui arrive en direct. C'etait un bandeau
+   plein, encadre de deux traits : le seul objet de la page qui criait plus fort que les
+   messages. Un trait fin qui traverse, avec le texte pose dessus — la forme universelle
+   du « a partir d'ici, autre chose ». */
+.ev.g-reprise{grid-template-columns:1fr;padding:6px 0;margin:20px 0 14px;
+  background:none;border:0;text-align:center;position:relative}
+.ev.g-reprise::before{content:"";position:absolute;left:0;right:0;top:50%;
+  border-top:1px solid #232b35}
+.g-reprise .badge,.g-reprise .pip,.g-reprise .t{display:none}
+.g-reprise .corps{position:relative;display:inline-block;background:var(--fond);
+  padding:0 12px;color:#6e7a88;font-size:var(--t-mot);letter-spacing:.06em;
   text-transform:uppercase;font-weight:650}
 .apres{color:#5a636e;margin-left:9px;font-size:11px}
 .g-log .badge{color:#4d5560} .g-log .corps{color:#6e7681;font-size:12px;
@@ -2308,19 +2461,15 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   }
 
   /* --- Flux ------------------------------------------------------------------
-     Mesure : la grille de bureau (62 | 92 | 14 | 1fr) laisse ~200 px au texte
-     sur 390. Sur telephone : une ligne d en-tete compacte, puis le corps sur
-     toute la largeur. */
+     La mise en page du flux ne se dedouble plus : « en-tete legere puis corps sur
+     toute la largeur » etait la forme reservee au telephone, et c'est la bonne
+     partout — la grille de bureau a quatre colonnes laissait ~200 px de texte sur
+     390 et, meme au large, elle rangeait une conversation comme un tableau.
+     Il ne reste ici que ce qui tient vraiment au telephone : le cran de lecture
+     grandit, parce que c'est le seul texte qu'on lit et le plus petit ecran. */
   /* 8 haut + 48 (le champ) + 8 + 46 (les boutons) + 8 bas = 118, plus la barre du systeme. */
-  :root { --barre: calc(118px + env(safe-area-inset-bottom)); }
+  :root { --barre: calc(118px + env(safe-area-inset-bottom)); --t-lit: 16px; }
   #flux { padding: 8px 10px calc(var(--barre) + 24px); }
-  .ev { grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 8px; padding: 9px 0; }
-  .ev .t { grid-column: 1; text-align: left; font-size: 10.5px; }
-  .ev .badge { grid-column: 2; font-size: 10.5px; }
-  .ev .pip { grid-column: 3; align-self: center; }
-  .ev .corps { grid-column: 1 / -1; font-size: 15px; line-height: 1.5; }
-  .ev.g-reprise { grid-template-columns: auto minmax(0, 1fr); }
-  .ev.g-reprise > * { grid-column: auto; }
   .ev .corps pre, .ev .corps code { font-size: 12px; max-width: 100%; overflow-x: auto;
                                     white-space: pre-wrap; overflow-wrap: anywhere; }
   .lecture button { min-height: 32px; padding: 4px 12px; }
@@ -3058,7 +3207,7 @@ function ligneRendue(l) {
 function md(src) {
   const lignes = String(src ?? "").split("\n");
   const sortie = [];
-  let para = [], liste = null, bloc = null;
+  let para = [], liste = null, bloc = null, langue = "";
   const viderPara = () => {
     if (!para.length) return;
     // Un retour a la ligne simple reste un retour a la ligne. Le markdown strict le mange,
@@ -3075,16 +3224,26 @@ function md(src) {
   };
   const vider = () => { viderPara(); viderListe(); };
 
+  // Un bloc de code est le seul objet d'une reponse qu'on ne lit pas : on le PREND. Il
+  // sort donc du paragraphe — une barre qui nomme le langage, et un bouton pour le copier
+  // d'un doigt. Avant, il fallait le selectionner a la main sur un telephone, c'est-a-dire
+  // viser le debut, tenir, faire glisser jusqu'au bout sans que la page defile.
+  const blocRendu = (lignesCode, langue) =>
+    `<figure class="bloc"><figcaption><span class="langue">${ech(langue || "texte")}</span>`
+    + `<button type="button" class="copier">copier</button></figcaption>`
+    + "<pre><code>" + ech(lignesCode.join("\n")) + "</code></pre></figure>";
+
   for (const brute of lignes) {
     const l = brute.replace(/\s+$/, "");
     if (bloc !== null) {
       if (/^```/.test(l.trim())) {
-        sortie.push("<pre><code>" + ech(bloc.join("\n")) + "</code></pre>");
-        bloc = null;
+        sortie.push(blocRendu(bloc, langue));
+        bloc = null; langue = "";
       } else bloc.push(brute);
       continue;
     }
-    if (/^\s*```/.test(l)) { vider(); bloc = []; continue; }
+    const ouvre = /^\s*```\s*([A-Za-z0-9_+#.-]*)/.exec(l);
+    if (ouvre) { vider(); bloc = []; langue = ouvre[1] || ""; continue; }
     if (!l.trim()) { vider(); continue; }
     const titre = /^(#{1,6})\s+(.*)$/.exec(l);
     if (titre) {
@@ -3110,10 +3269,66 @@ function md(src) {
     viderListe();
     para.push(l);
   }
-  if (bloc !== null) sortie.push("<pre><code>" + ech(bloc.join("\n")) + "</code></pre>");
+  // Un bloc encore ouvert : la reponse arrive morceau par morceau, et on re-rend a chaque
+  // fois. Le fermer visuellement est ce qu'il faut — sinon le code s'affiche comme du
+  // texte courant pendant qu'il arrive, puis saute dans son cadre a la derniere ligne.
+  if (bloc !== null) sortie.push(blocRendu(bloc, langue));
   vider();
   return sortie.join("");
 }
+
+// Copier un bloc de code.
+//
+// navigator.clipboard n'existe QUE en contexte sécurisé. La page est servie en http sur
+// l'IP de la machine : depuis le téléphone — c'est-à-dire l'usage principal — il est
+// absent. Le repli par textarea est donc le seul chemin qui marche là où on en a besoin,
+// et pas une politesse pour vieux navigateurs.
+function copierTexte(t) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  return new Promise((bon, non) => {
+    const z = document.createElement("textarea");
+    z.value = t;
+    z.setAttribute("readonly", "");
+    z.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+    document.body.appendChild(z);
+    let fait = false;
+    try {
+      z.select();
+      // iOS ignore select() sur un champ ; il lui faut la plage, explicitement.
+      if (z.setSelectionRange) z.setSelectionRange(0, t.length);
+      fait = document.execCommand("copy");
+    } catch (err) { fait = false; }
+    z.remove();
+    fait ? bon() : non(new Error("copie refusée"));
+  });
+}
+
+// L'écouteur est délégué au flux : chaque morceau reçu re-rend le corps du message, donc un
+// écouteur posé sur le bouton partirait avec lui au morceau suivant — et le bouton ne
+// répondrait qu'une fois sur deux, au hasard de l'arrivée du texte.
+if (flux && flux.addEventListener) flux.addEventListener("click", (ev) => {
+  const cible = ev.target;
+  const b = cible && cible.closest ? cible.closest(".copier") : null;
+  if (!b) return;
+  const cadre = b.closest("figure");
+  const code = cadre ? cadre.querySelector("code") : null;
+  if (!code) return;
+  const remettre = () => setTimeout(() => {
+    b.textContent = "copier";
+    b.classList.remove("fait", "rate");
+  }, 1600);
+  copierTexte(code.textContent).then(() => {
+    b.textContent = "copié";
+    b.classList.add("fait");
+    remettre();
+  }).catch(() => {
+    // Un bouton qui ne réagit pas se represse trois fois. Dire que ça n'a pas marché vaut
+    // mieux que se taire : on sélectionne à la main, en le sachant.
+    b.textContent = "impossible";
+    b.classList.add("rate");
+    remettre();
+  });
+});
 
 // Le titre de la fenêtre porte le projet. Avec trois conversations ouvertes, trois onglets
 // nommés « claude-talk » sont indiscernables — et c'est le titre qu'on lit dans la barre des

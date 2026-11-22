@@ -1563,6 +1563,63 @@ dire(!/href/.test(md('[piege](javascript:alert(1))')),
 dire(md('code avec `a ** b` dedans') === '<p>code avec <code>a ** b</code> dedans</p>',
      'ce qui est dans du code n est plus interprete : ' + md('code avec `a ** b` dedans'));
 
+// ---- le bloc de code : un objet qu on prend, pas du texte qu on lit ----------------------
+// Sur un telephone, selectionner un bloc a la main veut dire viser le premier caractere,
+// tenir, et faire glisser jusqu au bout sans que la page defile. Personne ne le fait deux
+// fois : le bloc sort donc du paragraphe, avec une barre qui dit la langue et un bouton.
+titre('bloc de code : un cadre, une langue, un bouton');
+const figBash = md('```bash\nls -la\n```');
+dire(/<figure class="bloc">/.test(figBash), 'le bloc a son propre cadre : ' + figBash);
+dire(/<span class="langue">bash<\/span>/.test(figBash),
+     'la langue du fence devient l etiquette du cadre');
+dire(/class="copier"/.test(figBash) && /<button type="button"/.test(figBash),
+     'et un vrai bouton, pas une zone cliquable devinee');
+dire(/<span class="langue">texte<\/span>/.test(md('```\nsans langue\n```')),
+     'un fence nu dit « texte » plutot que de laisser l etiquette vide');
+dire(!/<script>alert/.test(md('```js\n<script>alert(1)</script>\n```')),
+     'et ce qu il contient reste echappe : ' + md('```js\n<script>alert(1)</script>\n```'));
+// Le fence non ferme arrive a CHAQUE reponse en cours de frappe : le bloc doit se rendre
+// quand meme, sinon le code apparait en clair puis saute dans son cadre a la derniere ligne.
+dire(/<figure class="bloc">/.test(md('```py\nx = 1')),
+     'un bloc encore ouvert se rend deja dans son cadre');
+
+titre('copier un bloc : le presse-papier, et le repli qui sert vraiment');
+async function testerCopie() {
+  const vraiSecure = window.isSecureContext;
+  const vraiPresse = navigator.clipboard;
+  let recu = null;
+  window.isSecureContext = true;
+  navigator.clipboard = { writeText: (t) => { recu = t; return Promise.resolve(); } };
+  await copierTexte('ls -la');
+  dire(recu === 'ls -la', 'en contexte securise, le texte part au presse-papier du navigateur');
+
+  // Le cas qui compte : la page est servie en http sur l IP de la machine, donc depuis le
+  // telephone — l usage principal — navigator.clipboard n existe PAS. Sans ce repli, le
+  // bouton ne marcherait que sur le PC qui n en a pas besoin.
+  window.isSecureContext = false;
+  let copiee = null;
+  document.execCommand = (c) => {
+    if (c !== 'copy') return false;
+    const z = document.body.children[document.body.children.length - 1];
+    copiee = z ? z.value : null;
+    return true;
+  };
+  const avant = document.body.children.length;
+  await copierTexte('git status');
+  dire(copiee === 'git status', 'hors contexte securise, le repli copie le meme texte');
+  dire(document.body.children.length === avant,
+       'et il ne laisse pas son champ cache derriere lui dans la page');
+
+  let refus = false;
+  document.execCommand = () => false;
+  await copierTexte('rien').catch(() => { refus = true; });
+  dire(refus, 'un refus se SAIT : le bouton pourra le dire au lieu de ne rien faire');
+
+  window.isSecureContext = vraiSecure;
+  navigator.clipboard = vraiPresse;
+  delete document.execCommand;
+}
+
 // Ce qui arrive en MORCEAUX. Une liste a moitie arrivee n est pas du markdown valide : on
 // garde le brut et on re-rend l ensemble, au lieu d empiler des fragments rendus.
 async function testerEcritEnMorceaux() {
@@ -4598,6 +4655,7 @@ async function testerPropositions() {
       .then(testerEtatCoherent)
       .then(testerUnTourUneEcoute)
       .then(testerPropositions)
+      .then(testerCopie)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

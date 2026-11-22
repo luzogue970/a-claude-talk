@@ -106,7 +106,7 @@ const MARKDOWN = "**Trois choses** ont bouge, et la troisieme explique les deux 
   + "- le diagnostic `etat.json`, qui distingue un agent arrete d'un reseau coupe\n\n"
   + "## Ce qui reste\n\n"
   + "Rien de bloquant. Le detail tient dans une ligne de commande un peu longue :\n\n"
-  + "```\n"
+  + "```bash\n"
   + "git log --oneline --graph --decorate --all --since='2 weeks ago' -- voix/tableau.py\n"
   + "```\n\n"
   + "Voir aussi le [journal](https://example.org/journal) si besoin.";
@@ -262,7 +262,13 @@ setTimeout(async () => {
       largeurMax: Math.max(0, ...[...l.querySelectorAll("*")].map(x => Math.ceil(x.getBoundingClientRect().right))),
       passe: l.className.split(" ").includes("passe"),
       hauteur: l.offsetHeight,
+      largeur: l.offsetWidth,
       colonnes: cs(l).gridTemplateColumns,
+      // La casse du nom de qui parle, et la couleur du texte : les deux marques qui
+      // faisaient ressembler une conversation a un fichier de log.
+      badgeCasse: (() => { const b = l.querySelector(".badge");
+                           return b ? cs(b).textTransform : ""; })(),
+      corpsCouleur: corps ? cs(corps).color : "",
       corpsLargeur: corps ? corps.offsetWidth : -1,
       corpsHauteur: corps ? corps.offsetHeight : -1,
       opacite: parseFloat(cs(l).opacity),
@@ -271,6 +277,40 @@ setTimeout(async () => {
       visible: cs(l).display !== "none",
     });
   }
+  // Le bloc de code est le seul objet d'une reponse qu'on ne lit pas : on le PREND. On
+  // verifie donc qu'il tient dans la colonne, que son bouton est une cible au pouce, et
+  // surtout que le clic ARRIVE — l'ecouteur est delegue au flux, parce que chaque morceau
+  // recu re-rend le corps ; une faute de selecteur le rendrait muet sans rien casser.
+  {
+    const fig = flux.querySelector(".bloc");
+    const bco = fig ? fig.querySelector(".copier") : null;
+    if (fig && bco) {
+      const pere = fig.closest(".corps");
+      const rb = bco.getBoundingClientRect();
+      // On intercepte le presse-papier. Sans fenetre, le vrai est absent ou refuse — et ce
+      // qu'on veut verifier n'est pas qu'il marche, c'est que LE TEXTE ENVOYE est celui du
+      // bloc, pas le libelle de la barre ni le bouton lui-meme.
+      let copie = null;
+      try {
+        Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+        Object.defineProperty(navigator, "clipboard", { configurable: true,
+          value: { writeText: t => { copie = t; return Promise.resolve(); } } });
+      } catch (e) {}
+      releve.code = {
+        langue: (fig.querySelector(".langue") || {}).textContent || "",
+        largeur: fig.offsetWidth,
+        deborde: Math.ceil(fig.getBoundingClientRect().right)
+                 - Math.ceil((pere || fig).getBoundingClientRect().right),
+        boutonHauteur: Math.round(rb.height),
+        avant: bco.textContent,
+      };
+      bco.click();
+      await new Promise(r => setTimeout(r, 120));
+      releve.code.apres = bco.textContent;
+      releve.code.copie = copie;
+    }
+  }
+
   const champ = document.getElementById("saisie");
   const bcc = champ.getBoundingClientRect();
   releve.champ = {
@@ -415,9 +455,14 @@ dire(pire.corpsLargeur > 400,
      `la colonne de texte est large partout — la plus étroite : ${pire.corpsLargeur} px `
      + `(${pire.genre}${pire.passe ? ", passée" : ""})`);
 
+// Le plafond est passe de 300 a 560 le 22 novembre 2026, et pas parce qu'une ligne a
+// grossi toute seule : le texte qu'on lit est desormais BORNE par la mesure (72 caracteres),
+// donc le meme paragraphe occupe une fois et demie plus de lignes sur un ecran large. C'est
+// l'effet recherche. Le plafond continue de servir a ce pour quoi il a ete pose : attraper
+// une ligne qui avale l'ecran — un bloc de code qui ne se replie pas, une image sans taille.
 const haute = r.lignes.reduce((a, b) => (b.hauteur > a.hauteur ? b : a));
-dire(haute.hauteur < 300,
-     `aucune ligne anormalement haute — la plus haute : ${haute.hauteur} px (${haute.genre})`);
+dire(haute.hauteur < 560,
+     `aucune ligne n'avale l'écran — la plus haute : ${haute.hauteur} px (${haute.genre})`);
 
 // La reponse ECRITE est mise en forme, et elle tient dans la colonne. Un `pre` ne se replie
 // pas tout seul : sans `overflow-x` sur lui, une ligne de commande un peu longue elargit la
@@ -431,10 +476,57 @@ dire(!!ecrit && ecrit.largeurMax <= r.page.largeur,
      `et rien n'en déborde : ${ecrit ? ecrit.largeurMax : "?"} px pour une page de `
      + `${r.page.largeur} px`);
 
-// quatre colonnes, et la derniere prend la place restante
-const cols = r.lignes[0].colonnes.split(/\s+/);
-dire(cols.length === 4, `la grille garde ses quatre colonnes : ${r.lignes[0].colonnes}`);
-dire(parseFloat(cols[3]) > 400, `la quatrième colonne est celle du texte (${cols[3]})`);
+// ── La grammaire du flux : une conversation, pas un journal ────────────────────────────
+// C'etait « la grille garde ses quatre colonnes » — heure, genre, pastille, texte — et ce
+// test protegeait donc exactement la forme dont on voulait sortir : celle d'un fichier de
+// log, ou un appel de grep et une reponse de six paragraphes pesaient pareil. Ce qu'on tient
+// desormais, c'est ce qui rend une conversation lisible.
+const lToi = r.lignes.find(l => l.genre === "toi" && l.visible);
+const lTexte = r.lignes.find(l => l.genre === "texte" && l.visible);
+
+// 1. Le message prend toute la largeur de sa ligne : son en-tete est AU-DESSUS, pas a cote.
+dire(!!lToi && lToi.corpsLargeur > lToi.largeur * 0.82,
+     `le message occupe toute sa ligne (${lToi ? lToi.corpsLargeur : "?"} px `
+     + `sur ${lToi ? lToi.largeur : "?"} px)`);
+
+// 2. Mais pas plus que la mesure. Sans borne, la page large etalait une reponse sur plus de
+//    mille pixels, soit ~140 caracteres par ligne : au retour a la ligne, l'oeil ne retrouve
+//    plus le debut de la suivante. L'optimum connu est 60-75 caracteres.
+dire(!!lTexte && lTexte.corpsLargeur > 380 && lTexte.corpsLargeur < 780,
+     `et le texte qu'on lit reste dans la mesure : ${lTexte ? lTexte.corpsLargeur : "?"} px `
+     + `sur une page de ${r.page.largeur} px`);
+
+// 3. Le nom de qui parle ne crie plus. Les CAPITALES donnaient au mot « VOIX » deux fois le
+//    poids de la phrase en dessous, qui est ce qu'on vient lire.
+dire(r.lignes.every(l => l.badgeCasse !== "uppercase" || l.genre === "reprise"),
+     "le nom de qui parle s'écrit en minuscules, comme un nom");
+
+// 4. Le TEXTE n'est plus teinte par locuteur. Trois cents mots en vert pastel se lisent mal,
+//    et la couleur n'apprend rien que le nom juste au-dessus ne dise deja.
+const dits = r.lignes.filter(l => ["toi", "voix", "texte"].includes(l.genre) && l.visible);
+dire(dits.length >= 2 && new Set(dits.map(l => l.corpsCouleur)).size === 1,
+     `ce qui se dit partage une seule couleur de lecture (${dits[0]?.corpsCouleur})`);
+
+// 5. La machinerie, elle, reste une ligne de journal : nom, pastille et texte cote a cote.
+const lOutil = r.lignes.find(l => l.genre === "outil" && l.visible);
+dire(!!lOutil && lOutil.hauteur < 46,
+     `un appel d'outil tient sur une ligne (${lOutil ? lOutil.hauteur : "?"} px)`);
+
+// 6. Le bloc de code : un cadre qui tient dans la colonne, et un bouton qui repond.
+const bc = r.code;
+dire(!!bc, "la réponse écrite rend bien son bloc de code dans un cadre à lui");
+dire(!!bc && bc.langue === "bash",
+     `le cadre dit la langue du bloc (« ${bc ? bc.langue : "?"} ») : on sait ce qu'on copie`);
+dire(!!bc && bc.deborde <= 1,
+     `et il ne déborde pas de la colonne (${bc ? bc.deborde : "?"} px de débord) — un débord `
+     + "latéral cache la moitié du texte sur un téléphone");
+dire(!!bc && bc.boutonHauteur >= 30,
+     `« copier » est une cible qu'un pouce atteint sans viser (${bc ? bc.boutonHauteur : "?"} px)`);
+dire(!!bc && bc.avant === "copier" && bc.apres !== "copier",
+     `cliquer le dit (« ${bc ? bc.avant : "?"} » → « ${bc ? bc.apres : "?"} ») : l'écouteur est `
+     + "délégué au flux, donc un sélecteur faux le rendrait muet sans bruit");
+dire(!!bc && typeof bc.copie === "string" && bc.copie.startsWith("git log --oneline"),
+     "et c'est le CONTENU du bloc qui part au presse-papier, pas le libellé de la barre");
 
 // Le passe n'est PAS grise : c'est la meme conversation, on la reprend. Un affaiblissement
 // visuel donnait l'impression de lire une archive alors qu'on relit son propre travail.
