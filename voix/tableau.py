@@ -1509,11 +1509,17 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #choix-prop .vide{padding:10px 4px;text-align:center}
 #choix-prop .pied{border-top:1px solid var(--bord);margin-top:8px;padding:8px 2px 2px;
   color:#5a636e;line-height:1.5}
-/* Dans le flux, la phrase qui PROPOSE. Volontairement discret : une reponse en contient
-   deux ou trois, et trois pavés colorés dans un message en feraient un sapin de Noel. Ce
-   qu'on veut est qu'elle accroche l'oeil de quelqu'un qui fait defiler sans lire. */
-.prop{background:#d8a6571a;border-bottom:1px dashed #d8a65777;border-radius:3px;
-  padding:0 2px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+/* Dans le flux, la phrase qui PROPOSE. Premiere version : un fond ambre et un pointille
+   dessous. Verdict a l'usage, le 22 novembre 2026 — « je trouve ça assez moche ». Il avait
+   raison, et la raison est connue : un surlignage pose DEUX marques (une surface et un
+   trait) la ou une suffit, et le pointille est la texture du correcteur orthographique —
+   l'oeil y lit « erreur », pas « regarde ».
+   Il reste donc une seule marque : un trait continu, fin, sous la phrase, qui evite les
+   jambages. C'est la marque d'un lecteur au crayon, et elle accroche l'oeil de quelqu'un
+   qui fait defiler sans lire — ce qui est tout ce qu'on lui demande. */
+.prop{text-decoration:underline;text-decoration-color:#d8a657b0;
+  text-decoration-thickness:1.5px;text-underline-offset:3px;
+  text-decoration-skip-ink:auto}
 
 /* Le panneau de liaison. Pleine largeur au-dessus de la barre, parce qu'une panne de
    liaison concerne toute la page et pas un coin de celle-ci. Deux teintes seulement :
