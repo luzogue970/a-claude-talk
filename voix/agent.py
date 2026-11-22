@@ -58,6 +58,7 @@ import stt_local
 import complexite
 import config
 import journal
+import propositions
 import question_en_plan
 
 from intentions import modele_demande, reconnaitre
@@ -584,6 +585,10 @@ class Voix(Agent):
             self._attend_reponse = None
             # Garde pour le titre : c'est la premiere DEMANDE qui dit le sujet, pas la reponse.
             self._dernier_tour_utilisateur = texte
+        # « Tant que je n'ai pas dit : ce truc-là, mets-le en place. » C'est ce message-ci,
+        # et il peut arriver des jours plus tard, dans une autre conversation — d'où un
+        # registre commun à tous les projets plutôt qu'une liste par session.
+        self._solder_propositions(texte)
         if not deja_occupe:
             await self._ajuster_effort(texte)
         await self.worker.envoyer(envoi)
@@ -970,6 +975,12 @@ class Voix(Agent):
         ecrit = (getattr(journal_, "textes", None) or [""])[-1]
         demande = question_en_plan.attend_une_reponse(ecrit, self._dernier_debrief)
         self._attend_reponse = demande
+        # Ce que cette réponse PROPOSE, et qui vivra plus longtemps qu'elle. Une question
+        # posée bloque la conversation, donc on finit par la voir ; une proposition, non —
+        # elle est écrite une fois, dans le message qu'on n'écoute plus parce que la tâche
+        # est finie, et le message suivant l'enterre. C'est le seul endroit où l'on tient
+        # le texte complet d'une réponse : après, il n'existe plus que dans le flux.
+        self._noter_propositions(ecrit)
         if self._dernier_debrief:
             self._paroles[cle] = self._dernier_debrief
             # Bornée : garder tout l'historique parlé d'une session de deux jours n'aurait
@@ -989,6 +1000,41 @@ class Voix(Agent):
                                   jetons=getattr(journal_, "jetons", None),
                                   duree=getattr(journal_, "duree_s", None),
                                   attend=demande)
+
+    def _noter_propositions(self, ecrit: str | None) -> None:
+        """Retenir ce que cette réponse propose, et dire combien attendent.
+
+        Tout est entouré : une liste de bonnes idées ne vaut pas qu'on perde une réponse
+        parce que son fichier JSON était illisible.
+        """
+        try:
+            neuves = propositions.enregistrer(
+                propositions.extraire(ecrit or self._dernier_debrief or ""),
+                projet=getattr(self.conv, "projet", "") or "",
+                session=getattr(self.conv, "session_id", "") or "",
+                conversation=getattr(getattr(self.conv, "fichier", None), "name", "") or "")
+        except Exception:
+            log.debug("propositions : extraction impossible", exc_info=True)
+            return
+        if neuves:
+            self._voir("propositions", combien=len(neuves),
+                       total=propositions.compter(),
+                       textes=[p["texte"] for p in neuves])
+
+    def _solder_propositions(self, texte: str) -> None:
+        """Fermer celles que ce message vient de demander.
+
+        Sans ça, la liste ne se vide jamais : on met la chose en place, et la proposition
+        reste affichée comme si personne ne s'en était occupé. Une liste qui ne décroît
+        pas se ferme et ne se rouvre plus.
+        """
+        try:
+            faites = propositions.resoudre(texte)
+        except Exception:
+            log.debug("propositions : solde impossible", exc_info=True)
+            return
+        if faites:
+            self._voir("propositions", faites=len(faites), total=propositions.compter())
 
     async def _ajuster_effort(self, texte: str) -> None:
         """Mettre l'effort au niveau que CETTE demande merite, avant de la transmettre.
@@ -1252,6 +1298,24 @@ async def entrypoint(ctx: JobContext):
     logging.getLogger().addHandler(tableau.journal_handler())
     log.info("tableau de bord : %s", url)
     print(f"  tableau {url}")
+
+    # ─── Les propositions déjà faites, une seule fois ───────────────────────────────
+    #
+    # Le registre naît vide, donc la pastille naît invisible — alors que les
+    # propositions à traiter, elles, existent déjà : elles sont dans les transcripts des
+    # derniers jours, et c'est précisément là qu'elles se sont perdues. On relit donc
+    # dix jours en arrière au tout premier lancement. En tâche de fond : rien n'attend
+    # ce travail, et la publication à la fin suffit à réveiller la page.
+    async def _amorcer_propositions():
+        try:
+            n = await asyncio.to_thread(propositions.amorcer)
+        except Exception:
+            log.debug("amorce des propositions impossible", exc_info=True)
+            return
+        if n:
+            tableau.publier("propositions", total=propositions.compter())
+
+    asyncio.create_task(_amorcer_propositions())
 
     # ─── L'historique, avant tout le reste ──────────────────────────────────────────
     #

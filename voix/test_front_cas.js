@@ -4475,6 +4475,113 @@ async function testerUnTourUneEcoute() {
        'ce trait leur est retire : sans ca, l ecart dessine n est pas l ecart vu');
 }
 
+// ---- les propositions qui attendent -----------------------------------------------------
+//
+// Le defaut qu'on corrige : « le dev est fini, je ne regarde pas le message de reponse, et
+// je renvoie un message pour une nouvelle chose ». Ce qui se perd la est toujours la meme
+// chose — la partie qui PROPOSE la suite. Deux reponses ici, et il faut les deux : le
+// surlignage, pour qui fait defiler sans lire, et la liste, pour qui n'a rien lu du tout.
+async function testerPropositions() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  titre('les propositions se voient dans le flux, et se traitent en un doigt');
+
+  // 1. Le surlignage. Ce qui propose est marque la ou il est ecrit ; ce qui raconte ne
+  //    l est pas, sans quoi un message entier devient jaune et plus rien ne ressort.
+  const propose = md('Il faudrait maintenant borner l attente de la liaison a trois secondes.');
+  dire(/class="prop"/.test(propose),
+       'une phrase qui propose quelque chose accroche l oeil dans le flux');
+  const raconte = md('C est fait, 2478 vertes. Le build passe.');
+  dire(!/class="prop"/.test(raconte),
+       'un compte rendu ordinaire reste du texte ordinaire');
+  const liste = md('- On pourrait aussi colorer ces phrases.\n- Le test tombait sur un zero.');
+  dire((liste.match(/class="prop"/g) || []).length === 1,
+       'dans une liste, seule la puce qui propose est marquee');
+  dire(!/class="prop"/.test(md('Il aurait fallu le voir plus tot.')),
+       'et le passe ne propose rien : « il aurait fallu » raconte, il n engage pas');
+
+  // 2. La pastille. Invisible a zero — une pastille toujours la cesse d etre vue, ce qui
+  //    est exactement le defaut qu elle corrige.
+  globalThis.listeProps = [];
+  await chargerProps(true);
+  dire(btnProps.hidden === true, 'rien en attente : aucune pastille, aucun bruit');
+
+  globalThis.listeProps = [
+    { cle: 'aaa', texte: 'Il faudrait un filet pour les conversations sans ligne de fin.',
+      projet: 'claude-talk', quand: Date.now() / 1000 - 60 },
+    { cle: 'bbb', texte: 'On pourrait colorer les propositions dans le flux.',
+      projet: 'insnap', quand: Date.now() / 1000 - 3600 },
+  ];
+  await chargerProps(true);
+  dire(btnProps.hidden === false && /2 propositions/.test(btnProps.innerHTML),
+       'deux propositions en attente : la pastille le dit, sans ouvrir quoi que ce soit');
+
+  const panneau = document.getElementById('choix-prop');
+  dessinerProps();
+  dire(/filet pour les conversations/.test(panneau.innerHTML)
+       && /colorer les propositions/.test(panneau.innerHTML),
+       'et le panneau les montre toutes les deux, meme celle d un autre projet');
+  dire(/claude-talk/.test(panneau.innerHTML) && /insnap/.test(panneau.innerHTML),
+       'avec le projet d ou elles viennent : sans ca on ne sait pas de quoi on parle');
+
+  const boutons = a => [...panneau.querySelectorAll('[data-a]')]
+    .filter(b => b.getAttribute('data-a') === a);
+  const clic = async b => { await b.onclick({ stopPropagation() {} }); };
+
+  // 3. Ecarter. Elle sort, et RIEN ne part a Claude : c est tout l interet du geste.
+  globalThis.tranchees = [];
+  const avantEnvois = enVol.length;
+  await clic(boutons('ecarter').find(b => b.getAttribute('data-cle') === 'bbb'));
+  dire(globalThis.tranchees.length === 1 && globalThis.tranchees[0].etat === 'ecartee'
+       && globalThis.tranchees[0].cle === 'bbb',
+       'ecarter la tranche cote serveur : elle ne reviendra pas au prochain bilan');
+  dire(props.length === 1 && props[0].cle === 'aaa',
+       'elle quitte la liste tout de suite, sans attendre le serveur');
+  dire(enVol.length === avantEnvois, 'et rien n est parti a Claude : on l a juste rangee');
+
+  // 4. Modifier. Elle arrive dans la barre, entiere, et on peut ecrire par-dessus. Elle
+  //    reste en attente : c est l envoi qui tranchera, pas le fait d avoir commence a ecrire.
+  champ.value = '';
+  globalThis.tranchees = [];
+  dessinerProps();
+  await clic(boutons('modifier')[0]);
+  dire(/filet pour les conversations/.test(champ.value),
+       'modifier la depose dans la barre : on complete au lieu de la retaper');
+  dire(globalThis.tranchees.length === 0 && props.length === 1,
+       'et elle reste en attente tant que le message n est pas parti — changer d avis '
+       + 'en ecrivant ne doit pas la perdre');
+  dire(panneau.hidden === true, 'le panneau se referme : la barre est sous les doigts');
+
+  // 5. Faire. Elle part telle quelle, et elle sort de la liste.
+  champ.value = '';
+  globalThis.tranchees = [];
+  const avant = enVol.length;
+  panneau.hidden = false;
+  dessinerProps();
+  await clic(boutons('faire')[0]);
+  dire(enVol.length === avant + 1 && /filet pour les conversations/.test(enVol[enVol.length - 1].texte),
+       'faire envoie la demande en citant la proposition mot pour mot');
+  dire(globalThis.tranchees.length === 1 && globalThis.tranchees[0].etat === 'faite',
+       'et la liste la marque faite : elle ne reviendra pas demander la meme chose');
+  dire(props.length === 0 && btnProps.hidden === true,
+       'la derniere traitee, la pastille disparait');
+
+  // 6. L evenement ne fait PAS une ligne de flux. Une ligne de plus dans le fil pour
+  //    annoncer une chose faite exactement pour ne plus dependre du fil serait absurde.
+  const lignesAvant = flux.children.length;
+  globalThis.listeProps = [{ cle: 'ccc', texte: 'Il faudrait verifier ce point la aussi.',
+                             projet: 'claude-talk', quand: Date.now() / 1000 }];
+  emettre({ genre: 'propositions', combien: 1, total: 1 });
+  await pause(5);
+  dire(flux.children.length === lignesAvant,
+       'une proposition notee n ajoute rien au flux qu on ne lit deja pas');
+  dire(props.length === 1 && btnProps.hidden === false,
+       'mais la pastille monte toute seule, sans recharger la page');
+
+  globalThis.listeProps = [];
+  await chargerProps(true);
+}
+
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -4490,6 +4597,7 @@ async function testerUnTourUneEcoute() {
       .then(testerAttenteReponse)
       .then(testerEtatCoherent)
       .then(testerUnTourUneEcoute)
+      .then(testerPropositions)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

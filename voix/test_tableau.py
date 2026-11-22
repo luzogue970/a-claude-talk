@@ -940,6 +940,10 @@ def tout_genre_affiche_a_un_filtre():
         # « agents » est la LISTE des delegues en cours : meme raison, et un agent qui mene
         # trente actions republierait trente fois la meme liste dans la conversation.
         "agents",
+        # « propositions » ne pilote qu'une pastille et une liste servie par HTTP. En faire
+        # une ligne de flux serait contradictoire : cette liste existe precisement parce
+        # qu'une proposition posee dans le fil ne se lit pas.
+        "propositions",
     }
     attendus = publies - hors_flux
     manquants = sorted(attendus - declares)

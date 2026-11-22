@@ -31,6 +31,7 @@ import aiohttp
 from aiohttp import WSMsgType, web
 
 import deploiement
+import propositions
 
 # La voix d'Azure se lit dans la configuration, comme partout ailleurs. Aucun cycle : config
 # ne connait pas ce module, et c'est lui qui tient la cle, la region et le nom de la voix —
@@ -752,6 +753,36 @@ class Tableau:
             self._voix_cache.popitem(last=False)
         return cle, None, tronque
 
+    async def _propositions(self, _req):
+        """Ce qui a été proposé un jour et n'a toujours pas été tranché.
+
+        Servi par HTTP plutôt que poussé dans le flux : la liste survit aux conversations,
+        donc une page qui s'ouvre doit pouvoir la demander, et non esperer avoir ete la
+        quand la proposition est passee.
+        """
+        try:
+            return web.json_response({"liste": propositions.ouvertes()})
+        except Exception:
+            log.debug("propositions illisibles", exc_info=True)
+            return web.json_response({"liste": []})
+
+    async def _proposition(self, requete):
+        """Trancher : faite, ou ecartee. Les deux la sortent de la liste."""
+        try:
+            ordre = await requete.json()
+        except Exception:
+            ordre = {}
+        cle = (ordre or {}).get("cle") or ""
+        etat = (ordre or {}).get("etat") or ""
+        if not cle or etat not in ("faite", "ecartee", "ouverte"):
+            return web.json_response({"erreur": "cle ou etat manquant"}, status=400)
+        touche = propositions.marquer(cle, etat)
+        reste = propositions.compter()
+        # Republie pour toutes les pages ouvertes : trancher sur le telephone doit
+        # decrementer la pastille de l'onglet reste ouvert sur l'ordinateur.
+        self.publier("propositions", total=reste, tranchee=cle, etat=etat)
+        return web.json_response({"ok": touche, "total": reste})
+
     async def _etat(self, _req):
         """« Qui travaille encore ? », en un appel et sans devenir un client de plus.
 
@@ -1072,6 +1103,8 @@ class Tableau:
         app.router.add_get("/", self._page)
         app.router.add_get("/flux", self._flux)
         app.router.add_get("/etat.json", self._etat)
+        app.router.add_get("/propositions.json", self._propositions)
+        app.router.add_post("/proposition", self._proposition)
         app.router.add_post("/commande", self._commande)
         app.router.add_post("/image", self._image)
         app.router.add_post("/audio", self._audio)
@@ -1447,6 +1480,41 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
    barre, du côté opposé à l'indicateur d'activité pour qu'ils puissent coexister. Elle
    s'efface d'elle-même : une explication qui reste affichée alors que la situation a changé
    devient un mensonge. */
+/* Les propositions. La pastille emprunte la forme de #convs — c'est une entree du meme
+   rang, elle doit s'y lire comme les autres — et sa couleur a celle de l'attente : ce qui
+   attend une reponse de moi porte deja cette teinte dans la liste des conversations. */
+#props{border:1px solid #d8a65755;border-radius:999px;padding:2px 10px;background:#d8a6571a;
+  color:var(--attend);font-weight:650;cursor:pointer;display:inline-flex;align-items:center;
+  gap:5px;font-size:11.5px;line-height:1.6}
+#props:hover{border-color:var(--attend);background:#d8a65728}
+#props[hidden]{display:none}
+#choix-prop{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+  width:max-content;max-width:min(460px, calc(100vw - 32px));
+  max-height:min(70vh, 620px);overflow-y:auto;
+  background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:10px 12px;
+  box-shadow:0 12px 32px #00000080;font-size:11.5px;color:var(--faible)}
+#choix-prop[hidden]{display:none}
+#choix-prop .p{border-left:2px solid #d8a65766;padding:7px 9px;border-radius:0 6px 6px 0}
+#choix-prop .p+.p{margin-top:6px;border-top:1px solid #ffffff10}
+#choix-prop .quoi{color:var(--texte);line-height:1.5;white-space:pre-wrap}
+#choix-prop .meta{color:#5a636e;margin-top:4px}
+/* Trois cibles de 40 px, cote a cote : c'est un panneau qu'on ouvre au doigt, et une
+   action qu'on rate la premiere fois est une action qu'on ne refait pas. */
+#choix-prop .actes{display:flex;gap:6px;margin-top:7px}
+#choix-prop .actes button{flex:1;min-height:40px;border:1px solid var(--bord);border-radius:7px;
+  background:#1b2027;color:var(--texte);font-size:11.5px;cursor:pointer;padding:0 6px}
+#choix-prop .actes button:hover{background:#222932;border-color:#4b5563}
+#choix-prop .actes .faire{border-color:#3e7a4e;color:#9fe0ad}
+#choix-prop .actes .ecarter{color:var(--faible)}
+#choix-prop .vide{padding:10px 4px;text-align:center}
+#choix-prop .pied{border-top:1px solid var(--bord);margin-top:8px;padding:8px 2px 2px;
+  color:#5a636e;line-height:1.5}
+/* Dans le flux, la phrase qui PROPOSE. Volontairement discret : une reponse en contient
+   deux ou trois, et trois pavés colorés dans un message en feraient un sapin de Noel. Ce
+   qu'on veut est qu'elle accroche l'oeil de quelqu'un qui fait defiler sans lire. */
+.prop{background:#d8a6571a;border-bottom:1px dashed #d8a65777;border-radius:3px;
+  padding:0 2px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+
 /* Le panneau de liaison. Pleine largeur au-dessus de la barre, parce qu'une panne de
    liaison concerne toute la page et pas un coin de celle-ci. Deux teintes seulement :
    ambre tant que ça se repare tout seul, rouge quand le geste revient a l'utilisateur. */
@@ -2412,6 +2480,14 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <button type="button" id="deploie" title="version en service"></button>
     <div id="choix-deploie" hidden></div>
   </span>
+  <!-- Ce qui a ete propose un jour et qu'on n'a jamais tranche. Masque quand il n'y a
+       rien : une pastille a zero est du bruit permanent, et on cesse de la voir — ce qui
+       est exactement le defaut qu'elle corrige. -->
+  <span class="avec-choix">
+    <button type="button" id="props" hidden
+            title="les propositions qui attendent encore une réponse"></button>
+    <div id="choix-prop" hidden></div>
+  </span>
   <button type="button" id="maj-vite" hidden></button>
   <div id="activite"></div>
   </span>
@@ -2917,6 +2993,62 @@ function mdEnLigne(t) {
     .replace(/\u0000c([^\u0000]*)\u0000/g, "<code>$1</code>");
 }
 
+// Ce qui PROPOSE quelque chose, cote page. La meme liste qu'en Python (voix/propositions.py)
+// et il faut qu'elle le reste : si la page surligne une phrase que le registre n'a pas
+// retenue, on cherche dans la liste une chose qu'on vient de voir en jaune et qui n'y est
+// pas. `test_front_cas.js` tient les deux cotes sur les memes phrases.
+//
+// Pourquoi surligner ALORS QU'il y a une liste : la liste se consulte, le flux se subit.
+// « Des fois elles sont au milieu du message, je ne les regarde pas » — une proposition
+// doit pouvoir accrocher l'oeil la ou elle est ecrite, sans rien ouvrir.
+// La liste est celle de voix/propositions.py, alternative par alternative, et elle
+// doit le rester : la page surligne, le registre retient, et voir l'un sans l'autre
+// fait chercher une proposition dans une liste ou elle n'est pas. Un test compare
+// les deux listes a chaque passage.
+const MARQUEURS_PROP = [
+  "\\bje (te )?propose\\b",
+  "\\bje sugg[èe]re\\b",
+  "\\bon (pourrait|devrait|gagnerait)\\b",
+  "\\bil (faudrait|faudra|resterait)\\b",
+  "\\bil reste [àa]\\b",
+  "\\breste [àa] faire\\b",
+  "\\bce qui reste\\b",
+  "\\bprochaine[s]? [ée]tape[s]?\\b",
+  "[àa] faire (ensuite|plus tard|un jour)\\b",
+  "\\bje ferais (ensuite|bien)?\\b",
+  "\\bsi tu veux,? je (peux|pourrais)\\b",
+  "\\bje peux (aussi|ensuite|le faire)\\b",
+  "(ça|cela|ca) m[ée]riterait\\b",
+  "\\bm[ée]riterait (d'|de |un|une)\\b",
+  "\\bune piste\\b",
+  "\\bpiste[s]? ([àa] creuser|possible)\\b",
+  "\\bla suite logique\\b",
+  "\\bl'[ée]tape d'apr[èe]s\\b",
+  "\\bje n'ai pas (trait[ée]|fait|couvert|touch[ée])\\b",
+  "\\bnon trait[ée]\\b",
+  "\\bpas (encore )?trait[ée]\\b",
+  "\\bun cran plus loin\\b",
+  "\\bam[ée]lioration[s]? (possible|[àa] faire)\\b",
+  "\\bdis-?\\s?moi si j'(enchaîne|enchaine|y vais|attaque)\\b",
+  "\\bveux-tu que je\\b",
+  "\\btu veux que je\\b",
+];
+const MARQUE_PROP = new RegExp(MARQUEURS_PROP.join("|"), "i");
+const ANNULE_PROP = new RegExp("\\b(aurait fallu|ne pourrait pas|n'aurait|il fallait)\\b", "i");
+
+function proposante(ligne) {
+  const t = String(ligne || "");
+  return t.length >= 25 && MARQUE_PROP.test(t) && !ANNULE_PROP.test(t);
+}
+
+// Enrobe la LIGNE entiere, pas la phrase. Decouper en phrases imposerait de recoudre du
+// HTML deja balise — et une balise coupee en deux casse la mise en page du message entier,
+// ce qui coute infiniment plus cher qu'un surlignage trop large.
+function ligneRendue(l) {
+  const html = mdEnLigne(l);
+  return proposante(l) ? '<span class="prop">' + html + "</span>" : html;
+}
+
 function md(src) {
   const lignes = String(src ?? "").split("\n");
   const sortie = [];
@@ -2926,12 +3058,12 @@ function md(src) {
     // Un retour a la ligne simple reste un retour a la ligne. Le markdown strict le mange,
     // et ce n'est pas ce qu'on veut ici : une reponse se lit sur un telephone, et la coupe
     // voulue par l'auteur porte du sens.
-    sortie.push("<p>" + para.map(mdEnLigne).join("<br>") + "</p>");
+    sortie.push("<p>" + para.map(ligneRendue).join("<br>") + "</p>");
     para = [];
   };
   const viderListe = () => {
     if (!liste) return;
-    sortie.push(`<${liste.type}>` + liste.items.map(i => "<li>" + mdEnLigne(i) + "</li>").join("")
+    sortie.push(`<${liste.type}>` + liste.items.map(i => "<li>" + ligneRendue(i) + "</li>").join("")
                 + `</${liste.type}>`);
     liste = null;
   };
@@ -4961,6 +5093,10 @@ function recevoir(e, etat = false) {
       if (e.actif) ouvrirQuestionnaire(e);
       else if (!questionPosee || questionPosee.id === (e.id || "")) fermerQuestionnaire();
     }
+    // Une proposition notee ou soldee ne fait PAS une ligne de flux : ce serait une ligne
+    // de plus dans le fil qu'on ne lit pas, pour annoncer une chose faite exactement pour
+    // ne plus dependre de ce fil. Seule la pastille bouge.
+    if (e.genre === "propositions") { chargerProps(); return; }
     if (e.genre === "modeles") { remplirModeles(e.liste || [], e.actuel); return; }
     if (e.genre === "efforts") { remplirEfforts(e.liste || [], e.actuel); return; }
     // Plus rien ne part tout seul : le delai d'envoi et le mode « retenir » ne pilotent
@@ -5508,6 +5644,146 @@ addEventListener("click", ev => {
   const b = document.getElementById("choix-moteur");
   if (b && !b.hidden && !b.contains(ev.target) && ev.target !== pastilleMoteur) b.hidden = true;
 });
+
+// --- les propositions qui attendent ------------------------------------------------------
+//
+// Le defaut, dit tel quel : « le dev est fini, je ne regarde pas le message de reponse, et
+// je renvoie un message pour une nouvelle chose ». Ce qui se perd la n'est pas n'importe
+// quoi : c'est systematiquement la partie qui PROPOSE la suite. Elle est ecrite une fois,
+// a la fin, au moment ou l'attention est deja partie — puis le message suivant l'enterre.
+//
+// Une liste separee du flux, donc, parce qu'un flux n'a pas d'etat : rien n'y distingue une
+// proposition traitee d'une proposition jamais lue. Elle est servie par HTTP et non poussee
+// dans le flux, parce qu'elle survit aux conversations : une page ouverte aujourd'hui doit
+// voir ce qui a ete propose la semaine derniere, sur un autre projet.
+let props = [];
+const btnProps = document.getElementById("props");
+
+function majPastilleProps() {
+  if (!btnProps) return;
+  const n = props.length;
+  btnProps.hidden = n === 0;
+  btnProps.innerHTML = '<span class="ico-prop">◇</span>' + n
+    + (n > 1 ? " propositions" : " proposition");
+  btnProps.title = n
+    ? n + " proposition(s) faite(s) et jamais tranchée(s) — appuie pour les traiter"
+    : "";
+}
+
+async function chargerProps(redessiner) {
+  try {
+    const r = await fetch("/propositions.json", { cache: "no-store" });
+    const d = await r.json();
+    props = (d && d.liste) || [];
+  } catch (e) { return; }
+  majPastilleProps();
+  const b = document.getElementById("choix-prop");
+  if (b && (redessiner || !b.hidden)) dessinerProps();
+}
+
+function acte(cle, nom, classe, libelle, titre) {
+  return '<button type="button" class="' + classe + '" data-a="' + nom
+    + '" data-cle="' + ech(cle) + '" title="' + ech(titre) + '">' + libelle + "</button>";
+}
+
+function dessinerProps() {
+  const b = document.getElementById("choix-prop");
+  if (!b) return;
+  if (!props.length) {
+    b.innerHTML = '<div class="vide">Rien en attente. Tout ce qui a été proposé a été '
+      + 'traité ou écarté.</div>';
+    return;
+  }
+  let html = "";
+  for (const p of props) {
+    const ou = [p.projet || "", p.quand ? ilYA(new Date(p.quand * 1000).toISOString()) : ""]
+      .filter(Boolean).join(" · ");
+    html += '<div class="p" data-cle="' + ech(p.cle) + '">'
+      + '<div class="quoi">' + ech(p.texte) + "</div>"
+      + (ou ? '<div class="meta">' + ech(ou) + "</div>" : "")
+      + '<div class="actes">'
+      // La cle est portee par CHAQUE bouton, pas seulement par la carte : remonter au
+      // parent suppose un arbre, et le talon des tests n'en a pas — mais surtout, un
+      // bouton qui porte lui-meme ce sur quoi il agit ne peut pas se tromper de ligne.
+      + acte(p.cle, "faire", "faire", "↑ faire", "l\'envoyer comme demande, telle quelle")
+      + acte(p.cle, "modifier", "modifier", "✎ modifier",
+             "la mettre dans la barre pour la compléter")
+      + acte(p.cle, "ecarter", "ecarter", "✕ écarter",
+             "elle ne se fera pas — la sortir de la liste")
+      + "</div></div>";
+  }
+  html += '<div class="pied">Une proposition sort d\'ici dès qu\'elle est demandée — '
+    + 'd\'ici, ou dans n\'importe quelle conversation, en lui redisant ce qu\'elle dit. '
+    + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes.</div>';
+  b.innerHTML = html;
+  brancherProps(b);
+}
+
+// La phrase qu'on envoie. Elle CITE la proposition mot pour mot, et c'est volontaire a deux
+// titres : Claude retrouve de quoi il s'agit sans avoir a relire la conversation d'origine,
+// et le solde automatique — qui compare les mots — reconnait la proposition dans la demande.
+function demandeProp(texte) {
+  return "Mets en place cette proposition : « " + texte + " »";
+}
+
+function brancherProps(b) {
+  for (const bouton of [...b.querySelectorAll("[data-a]")]) {
+    bouton.onclick = async ev => {
+      ev.stopPropagation();
+      const cle = bouton.getAttribute("data-cle");
+      const p = props.find(x => x.cle === cle);
+      if (!p) return;
+      const acte = bouton.getAttribute("data-a");
+      if (acte === "modifier") {
+        // Rien n'est tranché ici : c'est l'envoi qui tranchera. La proposition reste dans
+        // la liste tant que le message n'est pas parti — sortir avant, c'est la perdre si
+        // on change d'avis en écrivant.
+        champ.value = demandeProp(p.texte) + " ";
+        b.hidden = true;
+        majEnvoyer();
+        ajusterHauteur();
+        champ.focus();
+        champ.setSelectionRange(champ.value.length, champ.value.length);
+        return;
+      }
+      await trancherProp(cle, acte === "faire" ? "faite" : "ecartee");
+      if (acte === "faire") {
+        b.hidden = true;
+        envoyerReponseQuestion(demandeProp(p.texte));
+      }
+    };
+  }
+}
+
+async function trancherProp(cle, etat) {
+  // On retire TOUT DE SUITE, sans attendre le serveur. Un doigt qui appuie sur un téléphone
+  // doit voir la ligne partir ; attendre l'aller-retour donne l'impression que rien ne s'est
+  // passé, et on appuie deux fois.
+  props = props.filter(p => p.cle !== cle);
+  majPastilleProps();
+  dessinerProps();
+  try {
+    await fetch("/proposition", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cle, etat }),
+    });
+  } catch (e) { chargerProps(); }
+}
+
+if (btnProps) {
+  btnProps.onclick = ev => {
+    ev.stopPropagation();
+    const b = document.getElementById("choix-prop");
+    b.hidden = !b.hidden;
+    // Relu a l'ouverture : une autre conversation a pu en ajouter ou en solder depuis.
+    if (!b.hidden) { dessinerProps(); placerPanneau(b); chargerProps(true); }
+  };
+  addEventListener("click", ev => {
+    const b = document.getElementById("choix-prop");
+    if (b && !b.hidden && !b.contains(ev.target) && !btnProps.contains(ev.target)) b.hidden = true;
+  });
+  chargerProps();
+}
 
 // --- les conversations en parallèle -----------------------------------------------------
 // Une seule écoute à la fois. Le reste continue de travailler : le micro est la seule

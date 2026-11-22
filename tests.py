@@ -105,6 +105,8 @@ SUITES = [
      False),
     ("question-en-plan", "test_question_en_plan.py", "py",
      "distinguer une réponse qui attend MA réponse d'un simple compte rendu", False),
+    ("propositions", "test_propositions.py", "py",
+     "ce qu'une réponse propose ne tombe pas dans le flux : repéré, listé, tranché", False),
     ("front", "test_front.js", "node", "interface, sans navigateur : dictée, filtres, indicateurs", False),
     ("micro-retour", "test_micro_retour.py", "py",
      "le micro après un aller-retour : la page raconte, l'agent écrit, rien ne devient un ordre", False),
