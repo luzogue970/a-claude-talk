@@ -471,13 +471,17 @@ globalThis.relanceRefuse = false;
 // Les propositions en attente, telles que le serveur les rendrait, et ce que la page
 // tranche dessus. Sans ce talon, ouvrir le panneau partait chercher un serveur absent.
 globalThis.listeProps = [];
+// Ce qui est deja tranche : le panneau le montre sous un trait, parce qu'ecarter prend un
+// dixieme de seconde et se regrette la minute d'apres.
+globalThis.traiteesProps = [];
 globalThis.tranchees = [];
 globalThis.fetch = (url, opts) => {
   globalThis.requetes.push({ url, opts });
   if (String(url).indexOf("/propositions.json") >= 0) {
     return Promise.resolve({ ok: true, status: 200, redirected: false,
                              headers: { get: () => "application/json" },
-                             json: () => Promise.resolve({ liste: globalThis.listeProps }) });
+                             json: () => Promise.resolve({ liste: globalThis.listeProps,
+                                                           traitees: globalThis.traiteesProps }) });
   }
   if (String(url).endsWith("/proposition")) {
     try { globalThis.tranchees.push(JSON.parse((opts || {}).body || "{}")); } catch (e) {}

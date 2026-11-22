@@ -124,6 +124,50 @@ def une_proposition_a_un_etat():
             propositions.FICHIER = ancien
 
 
+def ce_qui_est_tranche_reste_consultable():
+    print("\n=== trancher n'efface pas : ce qui est fait ou écarté reste relisible ===")
+    with tempfile.TemporaryDirectory() as d:
+        ancien = propositions.FICHIER
+        propositions.FICHIER = Path(d) / "propositions.json"
+        try:
+            dire(propositions.tranchees() == [],
+                 "rien de tranché, rien à montrer — pas une erreur, une liste vide")
+
+            propositions.enregistrer(["Il faudrait borner l'attente de la liaison."],
+                                     projet="claude-talk")
+            propositions.enregistrer(["On pourrait colorer les propositions dans le flux."],
+                                     projet="insnap")
+            a, b = [p["cle"] for p in propositions.ouvertes()]
+            propositions.marquer(a, "ecartee")
+            time.sleep(0.01)          # deux dates distinctes, sinon l'ordre ne veut rien dire
+            propositions.marquer(b, "faite")
+
+            faits = propositions.tranchees()
+            dire(len(faits) == 2, f"les deux tranchées sont là → {len(faits)}")
+            # Écarter prend un dixième de seconde et se regrette la minute d'après. Sans
+            # cette liste, le TEXTE de la proposition n'existe plus nulle part : il faut
+            # retrouver la conversation d'origine pour le relire.
+            dire(faits[0]["cle"] == b,
+                 "la plus récemment tranchée d'abord : c'est celle qu'on vient de rater")
+            dire(all(p.get("texte") for p in faits),
+                 "avec leur texte entier — c'est tout ce qui permet d'y revenir")
+            dire({p["etat"] for p in faits} == {"faite", "ecartee"},
+                 "et leur sort, pour distinguer « c'est fait » de « j'ai dit non »")
+
+            dire(propositions.compter() == 0 and len(propositions.tranchees()) == 2,
+                 "les deux listes ne se mélangent pas : ce qui attend n'est pas ce qui est fait")
+
+            # La porte du retour : remettre en attente ce qu'on a tranché trop vite.
+            propositions.marquer(b, "ouverte")
+            dire(propositions.compter() == 1 and len(propositions.tranchees()) == 1,
+                 "remise en attente, elle repasse dans la liste qui attend")
+
+            dire(len(propositions.tranchees(limite=0)) == 0,
+                 "la liste se borne : elle informe, elle ne devient pas une archive")
+        finally:
+            propositions.FICHIER = ancien
+
+
 def demander_une_proposition_la_solde():
     print("\n=== « mets ça en place » la sort de la liste, même trois jours plus tard ===")
     with tempfile.TemporaryDirectory() as d:
@@ -180,7 +224,13 @@ async def le_serveur_sert_la_liste_et_la_tranche():
                     dire(r.status == 400, "un ordre sans état est refusé, pas deviné")
 
                 async with http.get(f"{url}/propositions.json") as r:
-                    dire((await r.json())["liste"] == [], "et elle ne revient pas")
+                    rendu = await r.json()
+                dire(rendu["liste"] == [], "et elle ne revient pas")
+                # Le même appel rend les deux : une page qui s'ouvre doit pouvoir montrer
+                # ce qui attend ET ce qui a été tranché, sans un second aller-retour.
+                dire(len(rendu.get("traitees") or []) == 1
+                     and rendu["traitees"][0]["etat"] == "ecartee",
+                     "mais elle reste consultable, avec son sort, dans la même réponse")
 
             publies = [json.loads(c).get("genre") for c in
                        [c for c in t.etat.values()]] if t.etat else []
@@ -255,6 +305,9 @@ def la_page_surligne_ce_que_le_registre_retient():
     page = (Path(__file__).parent / "tableau.py").read_text(encoding="utf-8")
     dire("MARQUE_PROP" in page and "class=\"prop\"" in page,
          "la page porte sa propre liste de marqueurs — elle surligne sans attendre l'agent")
+    dire("btnProps.hidden" not in page,
+         "le bouton ne se masque plus tout seul : il est au même endroit tous les jours, "
+         "y compris ceux où la réponse à « qu'est-ce que j'ai laissé en plan ? » est « rien »")
     dire('id="props"' in page and "/propositions.json" in page,
          "et le bouton, qui va chercher la liste par HTTP")
     # Les deux listes ne peuvent pas être partagées (l'une est en Python, l'autre dans du
@@ -355,6 +408,7 @@ def l_agent_amorce_au_demarrage():
 async def principal():
     on_reconnait_ce_qui_propose()
     une_proposition_a_un_etat()
+    ce_qui_est_tranche_reste_consultable()
     demander_une_proposition_la_solde()
     await le_serveur_sert_la_liste_et_la_tranche()
     l_agent_note_et_solde_sans_jamais_tomber()

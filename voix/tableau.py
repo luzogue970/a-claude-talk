@@ -761,10 +761,11 @@ class Tableau:
         quand la proposition est passee.
         """
         try:
-            return web.json_response({"liste": propositions.ouvertes()})
+            return web.json_response({"liste": propositions.ouvertes(),
+                                      "traitees": propositions.tranchees()})
         except Exception:
             log.debug("propositions illisibles", exc_info=True)
-            return web.json_response({"liste": []})
+            return web.json_response({"liste": [], "traitees": []})
 
     async def _proposition(self, requete):
         """Trancher : faite, ou ecartee. Les deux la sortent de la liste."""
@@ -1511,6 +1512,12 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   gap:5px;font-size:11.5px;line-height:1.6}
 #props:hover{border-color:var(--attend);background:#d8a65728}
 #props[hidden]{display:none}
+/* Rien en attente : le bouton RESTE, mais il se tait. Il reprend la grammaire grise de
+   #deploie plutot que de disparaitre — un bouton qui n'est pas au meme endroit d'une fois
+   sur l'autre ne devient jamais un reflexe, et la question « qu'est-ce que j'ai laisse en
+   plan ? » se pose justement les jours ou la reponse est « rien, je crois ». */
+#props.calme{border-color:var(--bord);background:none;color:var(--faible);font-weight:500}
+#props.calme:hover{border-color:#4b5563;color:var(--texte)}
 #choix-prop{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
   width:max-content;max-width:min(460px, calc(100vw - 32px));
   max-height:min(70vh, 620px);overflow-y:auto;
@@ -1521,6 +1528,15 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #choix-prop .p+.p{margin-top:6px;border-top:1px solid #ffffff10}
 #choix-prop .quoi{color:var(--texte);line-height:1.5;white-space:pre-wrap}
 #choix-prop .meta{color:#5a636e;margin-top:4px}
+/* Ce qui est deja tranche. Visible, mais clairement en-dessous : on vient ici pour ce qui
+   attend, et on descend seulement quand on cherche « le truc que j'ai ecarte trop vite ».
+   Ecarter est le geste le plus rapide des trois, donc celui qu'on rate. */
+#choix-prop .deja{margin-top:10px;padding-top:8px;border-top:1px solid var(--bord)}
+#choix-prop .titre-deja{color:#5a636e;font-size:10.5px;letter-spacing:.06em;margin-bottom:5px}
+#choix-prop .p.fini{border-left-color:#3a434e;opacity:.78}
+#choix-prop .p.fini:hover{opacity:1}
+#choix-prop .p.fini.ok{border-left-color:#3f7d58}
+#choix-prop .p.fini .quoi{color:var(--faible)}
 /* Trois cibles de 40 px, cote a cote : c'est un panneau qu'on ouvre au doigt, et une
    action qu'on rate la premiere fois est une action qu'on ne refait pas. */
 #choix-prop .actes{display:flex;gap:6px;margin-top:7px}
@@ -1529,6 +1545,10 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #choix-prop .actes button:hover{background:#222932;border-color:#4b5563}
 #choix-prop .actes .faire{border-color:#3e7a4e;color:#9fe0ad}
 #choix-prop .actes .ecarter{color:var(--faible)}
+/* Une seule action sur une ligne deja tranchee : elle ne prend pas toute la largeur, sinon
+   elle a l'air aussi importante que les trois du haut — elle ne sert qu'a reparer. */
+#choix-prop .p.fini .actes button{flex:0 0 auto;min-height:34px;padding:0 12px;
+  color:var(--faible);font-size:11px}
 #choix-prop .vide{padding:10px 4px;text-align:center}
 #choix-prop .pied{border-top:1px solid var(--bord);margin-top:8px;padding:8px 2px 2px;
   color:#5a636e;line-height:1.5}
@@ -2541,6 +2561,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      et c'est la hauteur de la conversation qu'on defend ; en retard, la couleur suffit a
      faire ouvrir le panneau, qui lui a toute la place de s'expliquer. */
   #deploie .num { display: none; }
+  #props .mot { display: none; }
   /* Le libelle se raccourcit, le bouton reste : c'est lui qui compte. */
   #maj-vite { padding: 2px 8px; font-size: 11px; }
   #deploie { padding: 2px 7px; }
@@ -2635,11 +2656,12 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
     <button type="button" id="deploie" title="version en service"></button>
     <div id="choix-deploie" hidden></div>
   </span>
-  <!-- Ce qui a ete propose un jour et qu'on n'a jamais tranche. Masque quand il n'y a
-       rien : une pastille a zero est du bruit permanent, et on cesse de la voir — ce qui
-       est exactement le defaut qu'elle corrige. -->
+  <!-- Ce qui a ete propose un jour et qu'on n'a jamais tranche. Toujours la, a cote des
+       conversations et de la version : c'est une entree du meme rang. Masque a zero, il
+       n'existait que les jours ou quelque chose attendait — et un bouton qu'on ne trouve
+       pas deux fois au meme endroit ne devient pas un reflexe. -->
   <span class="avec-choix">
-    <button type="button" id="props" hidden
+    <button type="button" id="props"
             title="les propositions qui attendent encore une réponse"></button>
     <div id="choix-prop" hidden></div>
   </span>
@@ -5878,17 +5900,22 @@ addEventListener("click", ev => {
 // dans le flux, parce qu'elle survit aux conversations : une page ouverte aujourd'hui doit
 // voir ce qui a ete propose la semaine derniere, sur un autre projet.
 let props = [];
+// Ce qui est deja tranche. Il reste a l'ecran parce qu'ecarter prend un dixieme de seconde
+// et se regrette la minute d'apres : sans cette liste, le texte de la proposition n'existe
+// plus nulle part et il faut retrouver la conversation d'origine pour le relire.
+let propsFaites = [];
 const btnProps = document.getElementById("props");
 
 function majPastilleProps() {
   if (!btnProps) return;
   const n = props.length;
-  btnProps.hidden = n === 0;
-  btnProps.innerHTML = '<span class="ico-prop">◇</span>' + n
-    + (n > 1 ? " propositions" : " proposition");
+  btnProps.classList.toggle("calme", n === 0);
+  btnProps.innerHTML = '<span class="ico-prop">◇</span>'
+    + (n ? n + '<span class="mot"> ' + (n > 1 ? "propositions" : "proposition") + "</span>"
+         : '<span class="mot">propositions</span>');
   btnProps.title = n
     ? n + " proposition(s) faite(s) et jamais tranchée(s) — appuie pour les traiter"
-    : "";
+    : "ce qui a été proposé : rien en attente, et ce qui a déjà été tranché";
 }
 
 async function chargerProps(redessiner) {
@@ -5896,6 +5923,7 @@ async function chargerProps(redessiner) {
     const r = await fetch("/propositions.json", { cache: "no-store" });
     const d = await r.json();
     props = (d && d.liste) || [];
+    propsFaites = (d && d.traitees) || [];
   } catch (e) { return; }
   majPastilleProps();
   const b = document.getElementById("choix-prop");
@@ -5907,18 +5935,24 @@ function acte(cle, nom, classe, libelle, titre) {
     + '" data-cle="' + ech(cle) + '" title="' + ech(titre) + '">' + libelle + "</button>";
 }
 
+// Le « quand » d'une proposition, en relatif : la date absolue d'une ligne qui dit
+// « on pourrait... » n'apprend rien, son age si.
+function quandProp(p, tranchee) {
+  const t = tranchee ? (p.repondu || p.quand) : p.quand;
+  return [p.projet || "", t ? ilYA(new Date(t * 1000).toISOString()) : ""]
+    .filter(Boolean).join(" · ");
+}
+
 function dessinerProps() {
   const b = document.getElementById("choix-prop");
   if (!b) return;
-  if (!props.length) {
-    b.innerHTML = '<div class="vide">Rien en attente. Tout ce qui a été proposé a été '
-      + 'traité ou écarté.</div>';
-    return;
-  }
   let html = "";
+  if (!props.length) {
+    html += '<div class="vide">Rien en attente. Tout ce qui a été proposé a été '
+      + 'traité ou écarté.</div>';
+  }
   for (const p of props) {
-    const ou = [p.projet || "", p.quand ? ilYA(new Date(p.quand * 1000).toISOString()) : ""]
-      .filter(Boolean).join(" · ");
+    const ou = quandProp(p, false);
     html += '<div class="p" data-cle="' + ech(p.cle) + '">'
       + '<div class="quoi">' + ech(p.texte) + "</div>"
       + (ou ? '<div class="meta">' + ech(ou) + "</div>" : "")
@@ -5933,9 +5967,28 @@ function dessinerProps() {
              "elle ne se fera pas — la sortir de la liste")
       + "</div></div>";
   }
-  html += '<div class="pied">Une proposition sort d\'ici dès qu\'elle est demandée — '
-    + 'd\'ici, ou dans n\'importe quelle conversation, en lui redisant ce qu\'elle dit. '
-    + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes.</div>';
+  if (props.length) {
+    html += '<div class="pied">Une proposition sort d\'ici dès qu\'elle est demandée — '
+      + 'd\'ici, ou dans n\'importe quelle conversation, en lui redisant ce qu\'elle dit. '
+      + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes.</div>';
+  }
+  // Ce qui a deja ete tranche, sous un trait. Le bouton etant desormais toujours la, un
+  // panneau qui n'ouvre QUE « rien en attente » serait un bouton qu'on cesse d'appuyer.
+  if (propsFaites.length) {
+    html += '<div class="deja"><div class="titre-deja">déjà tranché</div>';
+    for (const p of propsFaites) {
+      const faite = p.etat === "faite";
+      const ou = quandProp(p, true);
+      html += '<div class="p fini ' + (faite ? "ok" : "non") + '" data-cle="' + ech(p.cle) + '">'
+        + '<div class="quoi">' + (faite ? "✓ " : "✕ ") + ech(p.texte) + "</div>"
+        + (ou ? '<div class="meta">' + ech(ou) + "</div>" : "")
+        + '<div class="actes">'
+        + acte(p.cle, "rouvrir", "rouvrir", "↺ remettre",
+               "la remettre en attente — tranchée trop vite, ça se répare")
+        + "</div></div>";
+    }
+    html += "</div>";
+  }
   b.innerHTML = html;
   brancherProps(b);
 }
@@ -5952,9 +6005,15 @@ function brancherProps(b) {
     bouton.onclick = async ev => {
       ev.stopPropagation();
       const cle = bouton.getAttribute("data-cle");
-      const p = props.find(x => x.cle === cle);
+      const p = props.find(x => x.cle === cle) || propsFaites.find(x => x.cle === cle);
       if (!p) return;
       const acte = bouton.getAttribute("data-a");
+      if (acte === "rouvrir") {
+        // Le panneau RESTE ouvert : on vient de remonter une ligne de quelques centimetres,
+        // fermer par-dessus ferait croire qu'on a tranché une deuxieme fois.
+        await trancherProp(cle, "ouverte");
+        return;
+      }
       if (acte === "modifier") {
         // Rien n'est tranché ici : c'est l'envoi qui tranchera. La proposition reste dans
         // la liste tant que le message n'est pas parti — sortir avant, c'est la perdre si
@@ -5980,7 +6039,14 @@ async function trancherProp(cle, etat) {
   // On retire TOUT DE SUITE, sans attendre le serveur. Un doigt qui appuie sur un téléphone
   // doit voir la ligne partir ; attendre l'aller-retour donne l'impression que rien ne s'est
   // passé, et on appuie deux fois.
+  const ici = props.find(p => p.cle === cle) || propsFaites.find(p => p.cle === cle);
   props = props.filter(p => p.cle !== cle);
+  propsFaites = propsFaites.filter(p => p.cle !== cle);
+  if (ici) {
+    ici.etat = etat;
+    ici.repondu = Date.now() / 1000;
+    if (etat === "ouverte") props.unshift(ici); else propsFaites.unshift(ici);
+  }
   majPastilleProps();
   dessinerProps();
   try {

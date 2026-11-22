@@ -552,7 +552,11 @@ if (bo.modele && bo.effort) {
        `les sélecteurs restent compacts (modèle ${bo.modele.w} px, effort ${bo.effort.w} px)`);
 }
 if (bo.direct) {
-  dire(bo.direct.l > r.vue.w * 0.5,
+  // Le seuil etait a 0.5 tant que le bouton des propositions disparaissait a zero. Devenu
+  // permanent, il coute ~110 px a cette zone une fois pour toutes : mesure du 22 novembre
+  // 2026, x=637 sur 1280, soit 49,8 %. Ce qu'on protege ne change pas — cette zone ne
+  // deborde pas sur la moitie gauche, ou vivent le modele et l'effort.
+  dire(bo.direct.l > r.vue.w * 0.45,
        `la zone « ce qui se passe » reste à droite (x=${bo.direct.l} sur ${r.vue.w})`);
 }
 if (bo.cogit && bo.barre) {

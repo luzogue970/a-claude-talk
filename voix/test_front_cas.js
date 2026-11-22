@@ -4556,11 +4556,18 @@ async function testerPropositions() {
   dire(!/class="prop"/.test(md('Il aurait fallu le voir plus tot.')),
        'et le passe ne propose rien : « il aurait fallu » raconte, il n engage pas');
 
-  // 2. La pastille. Invisible a zero — une pastille toujours la cesse d etre vue, ce qui
-  //    est exactement le defaut qu elle corrige.
+  // 2. Le bouton. TOUJOURS la, a cote des conversations et de la version — masque a zero,
+  //    il n existait que les jours ou quelque chose attendait, et un bouton qu on ne
+  //    retrouve pas deux fois au meme endroit ne devient jamais un reflexe. Rien en
+  //    attente, il se tait : gris, sans compte.
   globalThis.listeProps = [];
+  globalThis.traiteesProps = [];
   await chargerProps(true);
-  dire(btnProps.hidden === true, 'rien en attente : aucune pastille, aucun bruit');
+  dire(btnProps.hidden !== true, 'le bouton des propositions est la meme quand rien n attend');
+  dire(/propositions/.test(btnProps.innerHTML) && !/\d/.test(btnProps.innerHTML),
+       'il se tait : il se nomme, sans annoncer un compte a zero');
+  dire(btnProps.classList.contains('calme'),
+       'et il prend la mise en sourdine, pour ne pas reclamer l oeil pour rien');
 
   globalThis.listeProps = [
     { cle: 'aaa', texte: 'Il faudrait un filet pour les conversations sans ligne de fin.',
@@ -4569,8 +4576,9 @@ async function testerPropositions() {
       projet: 'insnap', quand: Date.now() / 1000 - 3600 },
   ];
   await chargerProps(true);
-  dire(btnProps.hidden === false && /2 propositions/.test(btnProps.innerHTML),
-       'deux propositions en attente : la pastille le dit, sans ouvrir quoi que ce soit');
+  dire(/2<span class="mot"> propositions/.test(btnProps.innerHTML)
+       && !btnProps.classList.contains('calme'),
+       'deux propositions en attente : le bouton le dit, sans ouvrir quoi que ce soit');
 
   const panneau = document.getElementById('choix-prop');
   dessinerProps();
@@ -4619,8 +4627,28 @@ async function testerPropositions() {
        'faire envoie la demande en citant la proposition mot pour mot');
   dire(globalThis.tranchees.length === 1 && globalThis.tranchees[0].etat === 'faite',
        'et la liste la marque faite : elle ne reviendra pas demander la meme chose');
-  dire(props.length === 0 && btnProps.hidden === true,
-       'la derniere traitee, la pastille disparait');
+  dire(props.length === 0 && btnProps.hidden !== true && btnProps.classList.contains('calme'),
+       'la derniere traitee, le bouton reste — il se tait, il ne part pas');
+
+  // 5 bis. Ce qui est tranche reste consultable. Ecarter est le geste le plus rapide des
+  //    trois, donc celui qu on rate ; sans cette liste le texte de la proposition n existe
+  //    plus nulle part et il faut retrouver la conversation d origine pour le relire.
+  dire(/filet pour les conversations/.test(panneau.innerHTML),
+       'et le panneau garde sous un trait ce qui vient d etre tranche');
+  dire(/remettre/.test(panneau.innerHTML),
+       'avec de quoi le remettre en attente : trancher trop vite, ca se repare');
+  globalThis.tranchees = [];
+  panneau.hidden = false;
+  await clic(boutons('rouvrir')[0]);
+  dire(globalThis.tranchees.length === 1 && globalThis.tranchees[0].etat === 'ouverte',
+       'remettre la rouvre cote serveur, et pas seulement a l ecran');
+  dire(props.length === 1 && !btnProps.classList.contains('calme'),
+       'elle revient dans la liste qui attend, et le bouton le redit');
+  dire(panneau.hidden !== true,
+       'le panneau reste ouvert : la ligne a juste remonte de quelques centimetres');
+  // On la re-ecarte pour rendre la suite du test a son etat de depart.
+  dessinerProps();
+  await clic(boutons('ecarter')[0]);
 
   // 6. L evenement ne fait PAS une ligne de flux. Une ligne de plus dans le fil pour
   //    annoncer une chose faite exactement pour ne plus dependre du fil serait absurde.
@@ -4631,8 +4659,8 @@ async function testerPropositions() {
   await pause(5);
   dire(flux.children.length === lignesAvant,
        'une proposition notee n ajoute rien au flux qu on ne lit deja pas');
-  dire(props.length === 1 && btnProps.hidden === false,
-       'mais la pastille monte toute seule, sans recharger la page');
+  dire(props.length === 1 && !btnProps.classList.contains('calme'),
+       'mais le compte monte tout seul, sans recharger la page');
 
   globalThis.listeProps = [];
   await chargerProps(true);

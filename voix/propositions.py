@@ -228,6 +228,25 @@ def compter(projet: str = "") -> int:
     return len(ouvertes(projet))
 
 
+# Ce qu'on garde a l'ecran de ce qui est deja tranche. Assez pour retrouver « le truc d'hier
+# que j'ai ecarte trop vite », pas assez pour que la liste devienne une archive qu'on fait
+# defiler.
+TRANCHEES_VUES = 12
+
+
+def tranchees(limite: int = TRANCHEES_VUES) -> list[dict]:
+    """Ce qui a ete fait ou ecarte, le plus RECEMMENT tranche d'abord.
+
+    Sans ça, le panneau est vide des que tout est traite — et un bouton qui n'ouvre rien
+    cesse d'etre appuye. Surtout : ecarter est le geste le plus rapide des trois, donc
+    celui qu'on rate ; il faut pouvoir revenir dessus, et c'est le seul endroit ou le
+    texte de la proposition existe encore.
+    """
+    faits = [p for p in _lire() if p.get("etat") in ("faite", "ecartee")]
+    faits.sort(key=lambda p: p.get("repondu") or p.get("quand") or 0, reverse=True)
+    return faits[:max(0, limite)]
+
+
 def marquer(cle: str, etat: str) -> bool:
     """Changer l'etat d'une proposition. Vrai si elle existait."""
     tout = _lire()
