@@ -1539,13 +1539,18 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
   gap:5px;font-size:11.5px;line-height:1.6}
 #props:hover{border-color:var(--attend);background:#d8a65728}
 #props[hidden]{display:none}
+#props .nb{font-variant-numeric:tabular-nums;margin-left:5px}
 /* Rien en attente : le bouton RESTE, mais il se tait. Il reprend la grammaire grise de
    #deploie plutot que de disparaitre — un bouton qui n'est pas au meme endroit d'une fois
    sur l'autre ne devient jamais un reflexe, et la question « qu'est-ce que j'ai laisse en
    plan ? » se pose justement les jours ou la reponse est « rien, je crois ». */
 #props.calme{border-color:var(--bord);background:none;color:var(--faible);font-weight:500}
 #props.calme:hover{border-color:#4b5563;color:var(--texte)}
-#choix-prop{position:absolute;top:calc(100% + 8px);right:0;z-index:30;
+/* Ancre a GAUCHE du bouton, parce que le bouton a change de rangee : dans la zone des
+   controles il se tient dans le tiers gauche de l'en-tete, et un panneau de 460 px aligne
+   sur son bord droit partirait hors de l'ecran par la gauche. Sur telephone la rangee
+   s'aligne a droite, et l'ancre repasse a droite (voir le bloc <= 760px). */
+#choix-prop{position:absolute;top:calc(100% + 8px);left:0;z-index:30;
   width:max-content;max-width:min(460px, calc(100vw - 32px));
   max-height:min(70vh, 620px);overflow-y:auto;
   background:var(--carte);border:1px solid var(--bord);border-radius:10px;padding:10px 12px;
@@ -2122,9 +2127,14 @@ body{overflow-x:hidden}
 
    Et le cote fait ce qu'aucun filet ne fait : il se voit sans etre lu. En faisant defiler
    vite, on retrouve ses propres questions au bord droit sans avoir a lire les badges. */
+/* `margin-right:0` n'est pas un detail : `.ev` remonte de 9 px dans la marge des deux
+   cotes, ce qui convenait a une ligne de journal pleine largeur et colle une BULLE au bord
+   de l'ecran — a 420 px de large elle en sortait d'un pixel. Une bulle a besoin de son
+   fond ET de l'air autour, sinon ce n'est plus une bulle, c'est une bande. */
 .ev.g-toi{background:#17222e;border:1px solid #243244;border-right:2px solid var(--toi);
-  border-radius:14px 14px 4px 14px;padding:9px 12px;
-  margin-left:auto;width:fit-content;max-width:min(92%,calc(var(--mesure) + 26px))}
+  border-radius:15px 15px 5px 15px;padding:10px 13px;
+  margin-left:auto;margin-right:0;width:fit-content;
+  max-width:min(92%,calc(var(--mesure) + 26px))}
 .ev.g-toi:hover{background:#1b2735}
 /* L'heure et le nom suivent le cote : sur une bulle a droite, un badge colle a gauche
    pointe dans le vide. */
@@ -2134,15 +2144,17 @@ body{overflow-x:hidden}
    a plat sur le fond, face a une bulle, ne se lisait plus comme l'autre moitie de
    l'echange — juste comme du texte qui passe. */
 .ev:is(.g-texte,.g-voix){background:#141b22;border:1px solid #1f2731;
-  border-left:2px solid var(--voix);border-radius:14px 14px 14px 4px;
-  padding:9px 12px;margin-right:auto;max-width:min(94%,calc(var(--mesure) + 26px))}
+  border-left:2px solid var(--voix);border-radius:15px 15px 15px 5px;
+  padding:10px 13px;margin-left:0;margin-right:auto;
+  max-width:min(94%,calc(var(--mesure) + 26px))}
 .ev:is(.g-texte,.g-voix):hover{background:#171f27}
 /* Une etape n'est PAS une reponse, et elle ne doit pas en avoir l'air. Le message
    intermediaire ecrit au milieu du travail garde sa place dans le fil, mais perd la bulle :
    un filet pointille, du texte plus petit, et aucun bouton « écouter » — « le seul message
    que j'ai vraiment envie d'ecouter, c'est celui de la conclusion ». */
 .ev.g-texte.etape{background:none;border:0;border-left:2px dashed #39424d;
-  border-radius:0;padding:5px 0 5px 10px;margin-left:5px;max-width:calc(var(--mesure) + 26px)}
+  border-radius:0;padding:4px 0 4px 11px;margin-left:6px;margin-right:0;
+  max-width:calc(var(--mesure) + 26px)}
 .ev.g-texte.etape:hover{background:#111720}
 /* Les photos parties avec le message. En petit, cliquables en grand. */
 .jointes-vues{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
@@ -2151,9 +2163,20 @@ body{overflow-x:hidden}
 .jointes-vues .vue img{width:100%;height:100%;object-fit:cover;display:block}
 .jointes-vues .combien{font-size:11px;color:var(--faible);white-space:nowrap}
 .g-toi .badge{color:var(--toi)}
-/* Un tour commence quand JE parle. C'est le seul endroit du flux ou il faut de l'air :
-   entre deux lignes d'une meme reponse, l'air separe ce qui va ensemble. */
-.ev.g-toi{margin-top:22px}
+/* ── Le rythme vertical ─────────────────────────────────────────────────
+   Trois distances, et pas une de plus. Il n'y en avait que deux — « ma question » et « la
+   suite d'une reponse » — donc tout le reste heritait de ZERO : une etape se collait a la
+   bulle du dessus comme si les deux n'en faisaient qu'une, et c'est ce qu'on voyait sur le
+   telephone le 23 novembre 2026 (« des choses que j'ai dites et des reponses qui se font
+   un peu collees »).
+   — `--colle`  : deux morceaux d'un MEME message, coupe par le hasard du flux ;
+   — `--repond` : on se repond — c'est l'autre moitie de l'echange ;
+   — `--tour`   : un tour commence, et la respiration doit se voir en defilant vite.
+   L'espace est le seul separateur de cette page : des traits dessineraient un tableau. */
+:root{--colle:4px;--repond:12px;--tour:28px}
+.ev{margin-top:var(--colle)}
+.ev:is(.g-texte,.g-voix){margin-top:var(--repond)}
+.ev.g-toi{margin-top:var(--tour)}
 #flux > .ev.g-toi:first-child{margin-top:0}
 .g-partiel .badge{color:var(--toi);opacity:.5} .g-partiel .corps{color:var(--faible);font-style:italic}
 .g-voix .badge{color:var(--voix)}
@@ -2161,10 +2184,15 @@ body{overflow-x:hidden}
    parle ni a quelle seconde. Une reponse arrive souvent en trois ou quatre morceaux, et
    l'ancienne page en faisait quatre en-tetes empilees — c'est-a-dire quatre fois plus de
    gris que de texte. */
+/* ... et « de meme nature » compte. Une etape suivie de la CONCLUSION, ce n'est pas la
+   suite d'un meme message : c'est le passage du travail a la reponse. Les coller a quatre
+   pixels, badge masque, effacait la frontiere qu'on venait justement de dessiner. */
 .ev.g-voix + .ev.g-voix > :is(.badge,.t),
-.ev.g-texte + .ev.g-texte > :is(.badge,.t){display:none}
+.ev.g-texte.etape + .ev.g-texte.etape > :is(.badge,.t),
+.ev.g-texte:not(.etape) + .ev.g-texte:not(.etape) > :is(.badge,.t){display:none}
 .ev.g-voix + .ev.g-voix,
-.ev.g-texte + .ev.g-texte{margin-top:4px}
+.ev.g-texte.etape + .ev.g-texte.etape,
+.ev.g-texte:not(.etape) + .ev.g-texte:not(.etape){margin-top:var(--colle)}
 /* Une reponse qui ATTEND une reponse. Le defaut : « c'est fait » et « il me faut ton avis
    sur trois points » arrivaient dans la meme ligne, de la meme couleur, et se lisaient a
    voix haute de la meme facon — donc il fallait ecouter la reponse ENTIERE a chaque fois
@@ -2511,6 +2539,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   .zone-controles { order: 2; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px;
     justify-content: flex-end; }
   .zone-controles button { min-height: 40px; padding: 6px 11px; font-size: 13px; }
+  /* Le panneau des propositions suit son bouton : ici la rangee des controles s'aligne a
+     droite, donc le bouton touche le bord droit et son panneau s'ouvre vers la gauche. */
+  #choix-prop { left: auto; right: 0; }
+  /* Et le bouton lui-meme se presse au doigt comme les autres de la rangee. */
+  #props { min-height: 40px; padding: 4px 12px; }
   .zone-direct { order: 3; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; gap: 6px 8px;
     justify-content: flex-end; }
   #alerte-entete { order: 1; flex: 0 1 auto; min-width: 0; max-width: 100%;
@@ -2557,7 +2590,11 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      grandit, parce que c'est le seul texte qu'on lit et le plus petit ecran. */
   /* 8 haut + 48 (le champ) + 8 + 46 (les boutons) + 8 bas = 118, plus la barre du systeme. */
   :root { --barre: calc(118px + env(safe-area-inset-bottom)); --t-lit: 16px; }
-  #flux { padding: 8px 10px calc(var(--barre) + 24px); }
+  /* Les bulles remontent de 9 px dans la marge (voir `.ev`), heritage des lignes de
+     journal pleine largeur. A 10 px de gouttiere il restait donc UN pixel entre une bulle
+     et le bord de l'ecran, et zero en dessous de 420 px : le texte semblait sortir de la
+     page. Les bulles ne remontent plus, et la gouttiere a de quoi respirer. */
+  #flux { padding: 10px 14px calc(var(--barre) + 24px); }
   .ev .corps pre, .ev .corps code { font-size: 12px; max-width: 100%; overflow-x: auto;
                                     white-space: pre-wrap; overflow-wrap: anywhere; }
   .lecture button { min-height: 32px; padding: 4px 12px; }
@@ -2629,7 +2666,6 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
      et c'est la hauteur de la conversation qu'on defend ; en retard, la couleur suffit a
      faire ouvrir le panneau, qui lui a toute la place de s'expliquer. */
   #deploie .num { display: none; }
-  #props .mot { display: none; }
   /* Le libelle se raccourcit, le bouton reste : c'est lui qui compte. */
   #maj-vite { padding: 2px 8px; font-size: 11px; }
   #deploie { padding: 2px 7px; }
@@ -2649,7 +2685,7 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   #envoyer { padding: 0 11px; font-size: 13px; }
   header { padding-left: 10px; padding-right: 10px; }
   header h1 { font-size: 14px; }
-  #flux { padding-left: 8px; padding-right: 8px; }
+  #flux { padding-left: 11px; padding-right: 11px; }
   .zone-controles button { padding: 6px 9px; font-size: 12.5px; }
 }
 
@@ -2709,6 +2745,21 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
         rx="2.6"/></svg><span class="lib">arrêter</span></button>
     <select id="modele" title="modèle utilisé pour le travail"></select>
     <select id="effort" title="niveau d'effort de réflexion"></select>
+    <!-- Ce qui a ete propose un jour et qu'on n'a jamais tranche. Il a vecu deux versions
+         dans la zone « ce qui se passe », a cote des conversations et de la version : c'est
+         bien la son rang, et pourtant il n'a jamais ete trouve une seule fois. Mesure du
+         23 novembre 2026 : sur telephone, `header.compact` replie cette zone entiere a
+         `max-height:0` des 160 px de defilement — c'est-a-dire des qu'on entre dans une
+         conversation. Le bouton etait donc present, permanent, et invisible exactement
+         pendant les seuls moments ou on le cherche.
+         Il vit maintenant avec ce qu'on PILOTE, la seule rangee qui survit au repli, et en
+         dernier : sur telephone cette rangee s'aligne a droite, c'est-a-dire sous le pouce
+         de la main qui tient l'appareil. -->
+    <span class="avec-choix">
+      <button type="button" id="props"
+              title="les propositions qui attendent encore une réponse"></button>
+      <div id="choix-prop" hidden></div>
+    </span>
   </span>
 
   <span class="zone zone-direct">
@@ -2723,15 +2774,6 @@ details pre{margin:6px 0 0;background:#11161d;border:1px solid var(--bord);borde
   <span class="avec-choix">
     <button type="button" id="deploie" title="version en service"></button>
     <div id="choix-deploie" hidden></div>
-  </span>
-  <!-- Ce qui a ete propose un jour et qu'on n'a jamais tranche. Toujours la, a cote des
-       conversations et de la version : c'est une entree du meme rang. Masque a zero, il
-       n'existait que les jours ou quelque chose attendait — et un bouton qu'on ne trouve
-       pas deux fois au meme endroit ne devient pas un reflexe. -->
-  <span class="avec-choix">
-    <button type="button" id="props"
-            title="les propositions qui attendent encore une réponse"></button>
-    <div id="choix-prop" hidden></div>
   </span>
   <button type="button" id="maj-vite" hidden></button>
   <div id="activite"></div>
@@ -6045,9 +6087,13 @@ function majPastilleProps() {
   if (!btnProps) return;
   const n = props.length;
   btnProps.classList.toggle("calme", n === 0);
+  // Le losange et le NOMBRE, rien de plus. Le mot entier etait deja masque sur telephone
+  // depuis la 0.40.0 : la forme courte est donc la seule que Mathieu ait jamais vue, et
+  // l ecrire au large coutait cent pixels dans une rangee qui n en a pas — assez pour
+  // pousser l en-tete a un troisieme rang, et chaque rang est vole au flux.
+  // Ce que le mot disait, le title le dit, et le panneau le redit en l ouvrant.
   btnProps.innerHTML = '<span class="ico-prop">◇</span>'
-    + (n ? n + '<span class="mot"> ' + (n > 1 ? "propositions" : "proposition") + "</span>"
-         : '<span class="mot">propositions</span>');
+    + (n ? '<span class="nb">' + n + "</span>" : "");
   btnProps.title = n
     ? n + " proposition(s) faite(s) et jamais tranchée(s) — appuie pour les traiter"
     : "ce qui a été proposé : rien en attente, et ce qui a déjà été tranché";

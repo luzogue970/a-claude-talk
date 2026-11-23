@@ -373,6 +373,51 @@ setTimeout(async () => {
     };
   }
 
+  // --- l air entre les blocs, mesure a l ecran -------------------------------------
+  // « des choses que j ai dites et des reponses qui se font un peu collees ». Ce qui se
+  // voit est l ECART REEL entre deux boites : une marge peut etre ecrite dans la feuille
+  // de style et perdue, ecrasee par une regle plus forte ou mangee par un margin negatif
+  // herite des lignes de journal. On mesure donc l atterrissage, pas la declaration.
+  {
+    const qa = [...document.querySelectorAll(".ev.g-toi")].pop();
+    const ra = [...document.querySelectorAll(".ev.g-texte")].pop();
+    recevoir({ n: 950, genre: "toi", texte: "et le tour suivant", h: "14:34:00" });
+    const qb = [...document.querySelectorAll(".ev.g-toi")].pop();
+    await poser();
+    const A = qa.getBoundingClientRect(), B = ra.getBoundingClientRect();
+    const C = qb.getBoundingClientRect();
+    releve.air = {
+      repond: Math.round(B.top - A.bottom),
+      tour: Math.round(C.top - B.bottom),
+      bordD: Math.round(innerWidth - A.right),
+      bordG: Math.round(B.left),
+    };
+  }
+
+  // --- l en-tete repliee : ce qui survit au defilement ------------------------------
+  // Sur telephone, la classe compact arrive des 160 px de defilement, c est-a-dire des
+  // qu on entre dans une conversation. Tout ce qu elle emporte est, en pratique, absent.
+  {
+    const hd = document.querySelector("header");
+    // Dans une page servie, l etiquette est posee au demarrage par chargerProps(). Ici il n y
+    // a pas de serveur, donc pas de /propositions.json : le bouton resterait VIDE, et on
+    // mesurerait 22x6 px d un creux de 4 px de padding au lieu du bouton qu on voit.
+    if (typeof majPastilleProps === "function") majPastilleProps();
+    hd.classList.add("compact");
+    await poser();
+    const bp = document.getElementById("props");
+    const rp = bp ? bp.getBoundingClientRect() : null;
+    const cs = bp ? getComputedStyle(bp) : null;
+    releve.replie = {
+      props: rp ? { w: Math.round(rp.width), h: Math.round(rp.height) } : null,
+      clic: cs ? cs.pointerEvents : "absent",
+      opacite: cs ? Number(cs.opacity) : 0,
+      sousLentete: rp ? Math.round(hd.getBoundingClientRect().bottom - rp.bottom) : -999,
+    };
+    hd.classList.remove("compact");
+    await poser();
+  }
+
   releve.entete = document.querySelector("header").offsetHeight;
   // Dicter et lire sont caches tant que le navigateur n'a pas dit qu'il savait enregistrer
   // ou parler. On les decouvre pour les mesurer : c'est l'etat dans lequel un telephone les
@@ -438,22 +483,34 @@ function rendre(largeur, hauteur) {
   ], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 40 * 1024 * 1024 });
 }
 
-let dom;
+function lire(dom, ou) {
+  const brut = /<pre id="releve">([\s\S]*?)<\/pre>/.exec(dom);
+  if (!brut) {
+    require("fs").writeFileSync("/tmp/rendu-dom-" + ou + ".html", dom);
+    console.error("  ECHEC la sonde n'a rien releve (" + ou
+                  + ") : le script de la page a casse au chargement");
+    process.exit(1);
+  }
+  return JSON.parse(brut[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+                           .replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
+}
+
+let dom, domTel;
 try {
   dom = rendre(1280, 900);
+  // Et la MEME page a la largeur ou elle sert vraiment. Tout ce qui decide de l allure sur
+  // un telephone vit sous `@media (max-width: 760px)` : mesure a 1280 px, ce bloc n est tout
+  // simplement pas applique. Une suite entierement verte ne disait donc rien du seul ecran
+  // sur lequel cette page est lue — et c est ainsi qu un bouton replie a `max-height:0` a pu
+  // rester invisible pendant deux versions sans qu une seule mesure s en apercoive.
+  domTel = rendre(390, 844);
 } catch (e) {
   console.log("  Chrome n'a pas rendu la page — test ignore (" + (e.message || "").slice(0, 60) + ")");
   process.exit(0);
 }
 
-const brut = /<pre id="releve">([\s\S]*?)<\/pre>/.exec(dom);
-if (!brut) {
-  require("fs").writeFileSync("/tmp/rendu-dom.html", dom);
-  console.error("  ECHEC la sonde n'a rien releve : le script de la page a casse au chargement");
-  process.exit(1);
-}
-const r = JSON.parse(brut[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&")
-                            .replace(/&lt;/g, "<").replace(/&gt;/g, ">"));
+const r = lire(dom, "large");
+const rt = lire(domTel, "telephone");
 
 // --- les affirmations -------------------------------------------------------------------
 let ok = true;
@@ -833,6 +890,48 @@ if (r.liaison) {
   // rate le bouton deux fois sur trois — au moment precis ou l'on est le moins patient.
   dire(boutons.every(b => b.h >= 32),
        `et se touchent au pouce (hauteurs : ${boutons.map(b => b.h).join(", ")} px)`);
+}
+
+// --- l air entre les blocs : il se mesure, il ne se declare pas -------------------------
+// Demande le 23 novembre 2026 : « l espace entre certains blocs [...] des choses que j ai
+// dites et des reponses qui se font un peu collees ». Ce qui porte le sens n est pas la
+// valeur d une marge, c est l ORDRE des trois : un tour doit respirer plus qu une reponse,
+// sinon rien ne dit, en defilant vite, ou commence ce qu on vient de demander.
+for (const [ou, a] of [["au large", r.air], ["sur téléphone", rt.air]]) {
+  if (!a) continue;
+  dire(a.repond >= 8,
+       `${ou} : ma question et la réponse ne se touchent pas (${a.repond} px)`);
+  dire(a.tour > a.repond + 6,
+       `${ou} : un nouveau tour respire plus que la réponse (${a.tour} > ${a.repond} px)`);
+}
+// Et les bords de l ecran. `.ev` remonte de 9 px dans la marge des deux cotes — reste des
+// lignes de journal pleine largeur — ce qui laissait UN pixel entre une bulle et le bord a
+// 760 px, et moins que zero en dessous de 420 : la bulle sortait de la page.
+if (rt.air) {
+  dire(rt.air.bordD >= 9,
+       `sur téléphone, ma bulle ne touche pas le bord droit (${rt.air.bordD} px)`);
+  dire(rt.air.bordG >= 9,
+       `ni la réponse le bord gauche (${rt.air.bordG} px)`);
+}
+
+// --- le bouton des propositions survit au defilement -------------------------------------
+// Il est permanent depuis la 0.40.0, a cote des conversations — et il n a jamais ete trouve
+// une seule fois : « on n a toujours pas ce bouton-la sur l interface ». Sa zone entiere est
+// repliee a `max-height:0` des 160 px de defilement, donc exactement pendant les seuls
+// moments ou on le cherche. Un bouton qu on ne voit qu en haut de la page n est pas permanent.
+for (const [ou, x] of [["au large", r.replie], ["sur téléphone", rt.replie]]) {
+  if (!x) continue;
+  dire(x.props && x.props.h >= 20 && x.props.w >= 20,
+       `${ou} : en-tête repliée, « propositions » est encore là `
+       + `(${x.props ? x.props.w + "x" + x.props.h : "effacé"} px)`);
+  dire(x.clic !== "none" && x.opacite > 0.5,
+       `${ou} : et il se presse encore (pointer-events ${x.clic}, opacité ${x.opacite})`);
+  dire(x.sousLentete >= -1,
+       `${ou} : et il reste dans l en-tête (${x.sousLentete} px sous lui)`);
+}
+if (rt.replie && rt.replie.props) {
+  dire(rt.replie.props.h >= 36,
+       `sur téléphone c est une vraie cible au pouce (${rt.replie.props.h} px de haut)`);
 }
 
 fs.rmSync(dossier, { recursive: true, force: true });

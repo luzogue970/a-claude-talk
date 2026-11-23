@@ -4576,8 +4576,8 @@ async function testerPropositions() {
   globalThis.traiteesProps = [];
   await chargerProps(true);
   dire(btnProps.hidden !== true, 'le bouton des propositions est la meme quand rien n attend');
-  dire(/propositions/.test(btnProps.innerHTML) && !/\d/.test(btnProps.innerHTML),
-       'il se tait : il se nomme, sans annoncer un compte a zero');
+  dire(/ico-prop/.test(btnProps.innerHTML) && !/\d/.test(btnProps.innerHTML),
+       'il se tait : il reste a sa place, sans annoncer un compte a zero');
   dire(btnProps.classList.contains('calme'),
        'et il prend la mise en sourdine, pour ne pas reclamer l oeil pour rien');
 
@@ -4588,9 +4588,11 @@ async function testerPropositions() {
       projet: 'insnap', quand: Date.now() / 1000 - 3600 },
   ];
   await chargerProps(true);
-  dire(/2<span class="mot"> propositions/.test(btnProps.innerHTML)
+  dire(/<span class="nb">2<\/span>/.test(btnProps.innerHTML)
        && !btnProps.classList.contains('calme'),
        'deux propositions en attente : le bouton le dit, sans ouvrir quoi que ce soit');
+  dire(/2 proposition/.test(btnProps.title),
+       'et le mot entier vit dans l infobulle, la ou il ne coute aucun pixel de rangee');
 
   const panneau = document.getElementById('choix-prop');
   dessinerProps();
