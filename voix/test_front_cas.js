@@ -4456,7 +4456,9 @@ async function testerUnTourUneEcoute() {
   const visible = l => !!(l && l.zoneEcoute) && l.zoneEcoute.hidden !== true;
   // Compte DANS le tour : les tours d avant gardent le leur, et c est voulu — on reecoute
   // une reponse d il y a deux tours la ou elle est.
-  const duTour = () => [inter, etape, rep, debrief].filter(visible).length;
+  // Dedoublonne : depuis que le debrief se replie dans la reponse ecrite, `debrief` EST
+  // `rep`. Compter deux fois la meme ligne ferait croire a deux boutons.
+  const duTour = () => [...new Set([inter, etape, rep, debrief])].filter(visible).length;
 
   recevoir({ genre: 'toi', texte: 'repare le micro', n: 120000, h: '10:00' });
 
@@ -4485,21 +4487,31 @@ async function testerUnTourUneEcoute() {
        'mais la reponse reste UN message : ' + JSON.stringify(rep.brutMd));
   dire(visible(rep) && !visible(etape), 'et c est elle, seule, qui porte « écouter »');
 
-  // 4. Le debrief parle conclut : le bouton migre une derniere fois, en bas du tour.
+  // 4. Le debrief parle conclut — et il NE PREND PAS de ligne. C est la meme reponse, dite
+  //    pour l oreille au lieu d etre ecrite pour l oeil : « j ai une premiere petite
+  //    reponse puis la suite dans une autre reponse ». Une bulle, un bouton.
+  const avant = flux.children.length;
   emettre({ genre: 'voix', texte: 'Le micro se rend au depart maintenant.', id: 'D1', suite: true });
-  const debrief = dernier;
-  dire(visible(debrief) && !visible(rep),
-       'le debrief parle prend le relais : c est la derniere chose produite');
+  const debrief = rep;
+  dire(flux.children.length === avant,
+       'le debrief parle n ouvre pas de seconde bulle : il rejoint la reponse ecrite');
+  dire(visible(rep), 'et c est la reponse ecrite qui garde le bouton');
+  dire(/se rend au depart/.test(rep.texteParle || ''),
+       'la version dite vit a cote de la version ecrite : ' + JSON.stringify(rep.texteParle));
+  dire(!/se rend au depart/.test(rep.brutMd || ''),
+       'elle ne se colle pas au markdown, sinon la reponse serait lue deux fois');
   dire(duTour() === 1, 'a la fin du tour, UN seul bouton sur ses quatre lignes (' + duTour() + ')');
 
-  // 5. Et il lit SA ligne — pas le tour entier, pas la derniere reponse d une autre.
+  // 5. Et il lit la version DITE, pas le markdown — les asterisques du gras et le contenu
+  //    des blocs de code partent tels quels dans la synthese.
   joues.length = 0; requetes.length = 0; azureMarche = true;
   debrief.zoneEcoute.children[0].onclick();
   await tick(); await tick(); await tick();
   const dit = requetes.filter(r => /\/parler\/preparer$/.test(r.url))
                       .map(r => JSON.parse(r.opts.body).texte)[0] || '';
-  dire(/se rend au depart/.test(dit) && !/j'y vais/.test(dit) && !/regarde le fichier/.test(dit),
-       'il lit la reponse du tour, et rien d autre : ' + JSON.stringify(dit));
+  dire(/se rend au depart/.test(dit) && !/j'y vais/.test(dit) && !/regarde le fichier/.test(dit)
+       && !/restait ouvert au retour/.test(dit),
+       'il lit la version dite du tour, et rien d autre : ' + JSON.stringify(dit));
   couperLectureLocale();
 
   // 6. Le tour suivant ne vole pas le bouton du precedent : on reecoute une reponse d il y
@@ -4667,6 +4679,38 @@ async function testerPropositions() {
 }
 
 
+// ---------------------------------------------------------------------------------------
+// « J ai envoye deux pieces jointes, mais on ne voit pas qu on en a envoye. »
+//
+// Signale le 23 novembre 2026. Les vignettes du composeur disparaissent a l envoi, donc
+// apres coup rien a l ecran ne distingue « les photos sont parties avec la phrase » de
+// « elles ont ete oubliees en route » — et c est exactement la question qu on se pose.
+function testerJointesVues() {
+  flux.innerHTML = '';
+  recevoir({ genre: 'toi', texte: 'regarde ces deux captures',
+             jointes: ['/home/x/.cache/claude-talk/images/a1.png',
+                       '/home/x/.cache/claude-talk/images/b2.jpg'],
+             n: 130000, h: '11:00' });
+  const ligne = flux.children[flux.children.length - 1];
+  const html = ligne.innerHTML || '';
+  dire(/2 photos jointes/.test(html),
+       'le message dit combien de photos sont parties avec lui');
+  dire((html.match(/class="vue"/g) || []).length === 2,
+       'et il en montre une vignette chacune, pas un simple compte');
+  dire(/\/jointe\?c=/.test(html) && /a1\.png/.test(decodeURIComponent(html)),
+       'la vignette pointe la route qui sert la photo, avec son chemin');
+
+  recevoir({ genre: 'toi', texte: 'et celle-ci', jointes: ['/tmp/c3.png'],
+             n: 130001, h: '11:01' });
+  dire(/1 photo jointe/.test(flux.children[flux.children.length - 1].innerHTML || ''),
+       'au singulier quand il n y en a qu une');
+
+  recevoir({ genre: 'toi', texte: 'sans photo', n: 130002, h: '11:02' });
+  dire(!/jointes-vues/.test(flux.children[flux.children.length - 1].innerHTML || ''),
+       'et rien du tout quand le message partait seul');
+  flux.innerHTML = '';
+}
+
     testerLecture()
       .then(testerEcouteHistorique)
       .then(testerRelaisVocal)
@@ -4684,6 +4728,7 @@ async function testerPropositions() {
       .then(testerUnTourUneEcoute)
       .then(testerPropositions)
       .then(testerCopie)
+      .then(testerJointesVues)
       .catch(e => { console.error('  ECHEC asynchrone : ' + (e && e.stack || e)); ok = false; })
       .then(() => {
         console.log('\n' + faits + ' verifications — ' + (ok ? 'TOUT VERT' : 'DES ECHECS'));

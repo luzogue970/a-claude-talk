@@ -345,6 +345,34 @@ setTimeout(async () => {
              texte: propos ? propos.textContent : "(pas de .propos)" };
   });
 
+  // Les deux cotes de la conversation, et l unique bulle de la reponse. On MESURE la
+  // page rendue : une regle CSS peut etre juste et finir ecrasee par une autre, et c est
+  // l atterrissage de la bulle qui se voit sur un telephone, pas la feuille de style.
+  {
+    const avantVoix = document.querySelectorAll(".ev.g-voix").length;
+    recevoir({ n: 940, genre: "toi", texte: "court", h: "14:32:00" });
+    const q = [...document.querySelectorAll(".ev.g-toi")].pop();
+    recevoir({ n: 941, genre: "texte", texte: "La reponse ecrite du tour.", suite: true,
+               h: "14:32:01" });
+    const rep = [...document.querySelectorAll(".ev.g-texte")].pop();
+    recevoir({ n: 942, genre: "voix", texte: "La version dite du tour.", id: "Z9",
+               suite: true, h: "14:32:02" });
+    await poser();
+    const bq = q.getBoundingClientRect();
+    const br = rep.getBoundingClientRect();
+    const bf = flux.getBoundingClientRect();
+    const be = rep.querySelector(".lecture button.ecouter");
+    const bbe = be ? be.getBoundingClientRect() : null;
+    releve.cotes = {
+      qG: Math.round(bq.left - bf.left), qD: Math.round(bf.right - bq.right),
+      rG: Math.round(br.left - bf.left), rD: Math.round(bf.right - br.right),
+      qW: Math.round(bq.width), fW: Math.round(bf.width),
+      voixEnPlus: document.querySelectorAll(".ev.g-voix").length - avantVoix,
+      parle: (rep.texteParle || "").trim(),
+      ecoute: bbe ? { w: Math.round(bbe.width), h: Math.round(bbe.height) } : null
+    };
+  }
+
   releve.entete = document.querySelector("header").offsetHeight;
   // Dicter et lire sont caches tant que le navigateur n'a pas dit qu'il savait enregistrer
   // ou parler. On les decouvre pour les mesurer : c'est l'etat dans lequel un telephone les
@@ -559,6 +587,28 @@ if (bo.direct) {
   dire(bo.direct.l > r.vue.w * 0.45,
        `la zone « ce qui se passe » reste à droite (x=${bo.direct.l} sur ${r.vue.w})`);
 }
+// --- la conversation a deux cotes, et une seule bulle par reponse -----------------------
+// Demande le 23 novembre 2026 : « moi je parle a droite, toi tu reponds a gauche » — et
+// « j ai une premiere petite reponse puis la suite dans une autre reponse ».
+if (r.cotes) {
+  const c = r.cotes;
+  dire(c.qD < c.qG,
+       `ma question est posée à droite (${c.qG} px à gauche, ${c.qD} px à droite)`);
+  dire(c.rG < c.rD,
+       `et la réponse de Claude à gauche (${c.rG} px à gauche, ${c.rD} px à droite)`);
+  dire(c.qW < c.fW * 0.75,
+       `une question courte ne prend pas toute la largeur (${c.qW} px sur ${c.fW})`);
+  dire(c.voixEnPlus === 0,
+       `le débrief parlé ne s'ouvre pas une bulle à part (${c.voixEnPlus} ligne en plus)`);
+  dire(/version dite/.test(c.parle),
+       `il vit dans la réponse écrite, comme sa version audio : ${JSON.stringify(c.parle)}`);
+  // 11 px gris sans fond, c'etait le geste principal du tour avec l'allure d'une mention
+  // legale. On ne mesure pas la couleur, on mesure la CIBLE : un bouton qu'on rate deux fois
+  // sur un telephone est un bouton qu'on n'utilise pas.
+  dire(c.ecoute && c.ecoute.h >= 20 && c.ecoute.w >= 60,
+       `« écouter » est une vraie cible (${c.ecoute ? c.ecoute.w + "x" + c.ecoute.h : "absent"} px)`);
+}
+
 if (bo.cogit && bo.barre) {
   dire(bo.cogit.b <= bo.barre.t + 1,
        `le bandeau de cogitation ne recouvre pas la barre (${bo.cogit.b} <= ${bo.barre.t})`);

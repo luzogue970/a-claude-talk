@@ -438,7 +438,7 @@ class Voix(Agent):
         """Le prochain tour vient du clavier, pas du micro."""
         self._tape_en_attente = True
 
-    def _avec_jointes(self, texte: str) -> str:
+    def _avec_jointes(self, texte: str) -> tuple[str, list[str]]:
         """La phrase, suivie des photos qui attendaient dans le composeur.
 
         Deux garde-fous, et chacun repare un silence observe :
@@ -450,7 +450,7 @@ class Voix(Agent):
         """
         chemins, self._jointes = self._jointes, []
         if not chemins:
-            return texte
+            return texte, []
         vivants, morts = [], []
         for c in chemins:
             (vivants if Path(c).is_file() else morts).append(c)
@@ -458,14 +458,15 @@ class Voix(Agent):
             self._voir("erreur", texte=("photo introuvable au moment de l'envoi : "
                                         + ", ".join(Path(c).name for c in morts)))
         if not vivants:
-            return texte
+            return texte, []
         self._voir("log", niveau="INFO", source="image",
                    texte=f"{len(vivants)} image(s) jointe(s) au message")
         quoi = "ces images" if len(vivants) > 1 else "cette image"
-        return ((texte or f"regarde {quoi}.")
-                + f"\n\nimages jointes (ouvre chaque fichier avec l'outil Read avant de "
-                  f"répondre — {quoi} fait partie de la demande) :\n"
-                + "\n".join("- " + c for c in vivants))
+        return (((texte or f"regarde {quoi}.")
+                 + f"\n\nimages jointes (ouvre chaque fichier avec l'outil Read avant de "
+                   f"répondre — {quoi} fait partie de la demande) :\n"
+                 + "\n".join("- " + c for c in vivants)),
+                vivants)
 
     def _parler(self, texte: str):
         """Every short line the voice says goes to the page too, or the transcript on
@@ -494,8 +495,12 @@ class Voix(Agent):
         # Elle n'est pas non plus publiée depuis l'événement de transcription : les
         # transcriptions finales tombent plusieurs fois par tour dès qu'on marque une pause,
         # ce qui donnait trois lignes pour un seul message.
-        def vu():
-            self._voir("toi", texte=texte, tape=tape)
+        # `jointes` dit ce qui est PARTI avec la phrase. Sans ce champ, joindre deux photos
+        # puis dicter laissait une ligne « toi » identique a un message sans piece jointe :
+        # rien a l'ecran ne distinguait « les photos sont parties » de « elles ont ete
+        # oubliees en route », et c'est precisement la question qu'on se pose.
+        def vu(jointes: list[str] | None = None):
+            self._voir("toi", texte=texte, tape=tape, jointes=list(jointes or []) or None)
 
         # Une question en attente capte la phrase entiere, telle quelle : contrairement a
         # une permission, il n'y a rien a interpreter — « plutot la deuxieme, mais garde
@@ -568,9 +573,9 @@ class Voix(Agent):
         # On le fait ICI, au point unique ou un enonce part vraiment : plus haut, une dictee
         # retenue ou un ordre local aurait consomme les images sans les envoyer. La ligne
         # « toi » garde la phrase dite, pas les chemins : c'est ce qu'on a dit qu'on relit.
-        envoi = self._avec_jointes(texte)
+        envoi, parties = self._avec_jointes(texte)
 
-        vu()
+        vu(parties)
         deja_occupe = self.worker.occupe
         # Relevé au départ, pas à l'arrivée : sans point de comparaison il n'y a pas d'écart.
         # Un tour ajouté à un tour déjà en cours ne réinitialise pas le départ, sinon la

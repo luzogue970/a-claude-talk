@@ -417,6 +417,33 @@ class Tableau:
         await self._executer(nom, ordre)
         return web.json_response({"recu": True, "differee": False})
 
+    def _dossier_images(self) -> Path:
+        return Path(os.environ.get("VOIX_IMAGES")
+                    or Path.home() / ".cache" / "claude-talk" / "images")
+
+    async def _jointe(self, requete):
+        """Rendre une photo deja jointe, pour sa vignette dans le flux.
+
+        La page ne garde ses propres vignettes que le temps du composeur : apres l'envoi
+        elles sont liberees, et un rejeu d'historique n'en a jamais eu. Sans cette route,
+        une ligne « toi » rejouee ne pourrait afficher qu'un compte.
+
+        Le chemin vient du flux, donc du serveur — mais il transite par le navigateur, donc
+        il ne vaut rien. On le resout et on exige qu'il tombe DANS le dossier des photos :
+        sans ca, `?c=/etc/shadow` servirait ce fichier a qui atteint la page.
+        """
+        brut = (requete.query.get("c") or "").strip()
+        if not brut:
+            return web.Response(status=400, text="chemin manquant")
+        dossier = self._dossier_images().resolve()
+        try:
+            chemin = Path(brut).resolve()
+        except (OSError, ValueError, RuntimeError):
+            return web.Response(status=400, text="chemin illisible")
+        if not chemin.is_relative_to(dossier) or not chemin.is_file():
+            return web.Response(status=404, text="photo inconnue")
+        return web.FileResponse(chemin, headers={"Cache-Control": "private, max-age=86400"})
+
     async def _image(self, requete):
         """Recevoir une photo, et rendre son chemin.
 
@@ -447,8 +474,7 @@ class Tableau:
             return web.json_response(
                 {"erreur": f"type refuse : {mime or 'inconnu'}"}, status=415)
 
-        dossier = Path(os.environ.get("VOIX_IMAGES")
-                       or Path.home() / ".cache" / "claude-talk" / "images")
+        dossier = self._dossier_images()
         dossier.mkdir(parents=True, exist_ok=True)
         self._images += 1
         # Le nom vient de nous, jamais du client : un « ../ » dans le nom d'origine
@@ -1108,6 +1134,7 @@ class Tableau:
         app.router.add_post("/proposition", self._proposition)
         app.router.add_post("/commande", self._commande)
         app.router.add_post("/image", self._image)
+        app.router.add_get("/jointe", self._jointe)
         app.router.add_post("/audio", self._audio)
         app.router.add_post("/parler", self._parler)
         app.router.add_post("/parler/preparer", self._preparer_voix)
@@ -2083,14 +2110,46 @@ body{overflow-x:hidden}
    laissait le bloc d'un message s'etendre sur toute la page avec quatre cents pixels de
    vide a droite — on bornait le texte et on gardait le cadre trop grand. */
 .ev:is(.g-toi,.g-voix,.g-texte,.g-pensee){max-width:calc(var(--mesure) + 26px)}
-/* Ce que JE dis : un bloc. Tout le reste de la page est pose a plat sur le fond ; ce
-   seul relief suffit a retrouver ses propres messages en faisant defiler vite, et il
-   remplace l'alternance de couleurs qu'il a fallu abandonner ci-dessus. Pas de bulle
-   alignee a droite : sur un telephone tenu a une main, une bulle a droite rogne la
-   mesure de vingt pour cent pour ne rien dire de plus qu'un filet. */
-.ev.g-toi{background:#151c25;border-left:2px solid var(--toi);
-  border-radius:4px 12px 12px 4px;padding:9px 12px}
-.ev.g-toi:hover{background:#18202a}
+/* ── Deux cotes, parce que c'est une conversation ─────────────────────────────────────
+   Demande le 23 novembre 2026 : « vu qu'on est dans une conversation, fais en sorte que
+   moi je parle a droite et toi tu reponds a gauche ».
+
+   Ce qui etait ecrit ici avant — « pas de bulle alignee a droite, elle rogne la mesure de
+   vingt pour cent pour ne rien dire de plus qu'un filet » — supposait que la bulle soit
+   etroite. Elle ne l'est pas : la largeur reste celle de la mesure, et c'est seulement le
+   RESTE qui pousse la bulle a droite quand le message est court. Un message long occupe la
+   meme place qu'avant. On gagne le cote sans rien payer sur la lecture.
+
+   Et le cote fait ce qu'aucun filet ne fait : il se voit sans etre lu. En faisant defiler
+   vite, on retrouve ses propres questions au bord droit sans avoir a lire les badges. */
+.ev.g-toi{background:#17222e;border:1px solid #243244;border-right:2px solid var(--toi);
+  border-radius:14px 14px 4px 14px;padding:9px 12px;
+  margin-left:auto;width:fit-content;max-width:min(92%,calc(var(--mesure) + 26px))}
+.ev.g-toi:hover{background:#1b2735}
+/* L'heure et le nom suivent le cote : sur une bulle a droite, un badge colle a gauche
+   pointe dans le vide. */
+.ev.g-toi > .t{grid-column:1;justify-self:start}
+.ev.g-toi > .badge{grid-column:3;justify-self:end}
+/* Et ce que CLAUDE repond : meme traitement, a gauche, avec sa couleur. Une reponse posee
+   a plat sur le fond, face a une bulle, ne se lisait plus comme l'autre moitie de
+   l'echange — juste comme du texte qui passe. */
+.ev:is(.g-texte,.g-voix){background:#141b22;border:1px solid #1f2731;
+  border-left:2px solid var(--voix);border-radius:14px 14px 14px 4px;
+  padding:9px 12px;margin-right:auto;max-width:min(94%,calc(var(--mesure) + 26px))}
+.ev:is(.g-texte,.g-voix):hover{background:#171f27}
+/* Une etape n'est PAS une reponse, et elle ne doit pas en avoir l'air. Le message
+   intermediaire ecrit au milieu du travail garde sa place dans le fil, mais perd la bulle :
+   un filet pointille, du texte plus petit, et aucun bouton « écouter » — « le seul message
+   que j'ai vraiment envie d'ecouter, c'est celui de la conclusion ». */
+.ev.g-texte.etape{background:none;border:0;border-left:2px dashed #39424d;
+  border-radius:0;padding:5px 0 5px 10px;margin-left:5px;max-width:calc(var(--mesure) + 26px)}
+.ev.g-texte.etape:hover{background:#111720}
+/* Les photos parties avec le message. En petit, cliquables en grand. */
+.jointes-vues{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.jointes-vues .vue{display:block;width:60px;height:60px;border-radius:9px;overflow:hidden;
+  border:1px solid var(--bord);background:#0c1016}
+.jointes-vues .vue img{width:100%;height:100%;object-fit:cover;display:block}
+.jointes-vues .combien{font-size:11px;color:var(--faible);white-space:nowrap}
 .g-toi .badge{color:var(--toi)}
 /* Un tour commence quand JE parle. C'est le seul endroit du flux ou il faut de l'air :
    entre deux lignes d'une meme reponse, l'air separe ce qui va ensemble. */
@@ -2105,7 +2164,7 @@ body{overflow-x:hidden}
 .ev.g-voix + .ev.g-voix > :is(.badge,.t),
 .ev.g-texte + .ev.g-texte > :is(.badge,.t){display:none}
 .ev.g-voix + .ev.g-voix,
-.ev.g-texte + .ev.g-texte{padding-top:0;margin-top:-2px}
+.ev.g-texte + .ev.g-texte{margin-top:4px}
 /* Une reponse qui ATTEND une reponse. Le defaut : « c'est fait » et « il me faut ton avis
    sur trois points » arrivaient dans la meme ligne, de la meme couleur, et se lisaient a
    voix haute de la meme facon — donc il fallait ecouter la reponse ENTIERE a chaque fois
@@ -2253,10 +2312,19 @@ body{overflow-x:hidden}
 /* Les commandes de lecture, accrochees a LA reponse concernee : couper « la parole en
    general » ne dit pas laquelle, et relire la derniere n'est pas relire celle-ci. */
 .lecture{display:inline-flex;gap:5px;margin-left:9px;vertical-align:1px}
+/* « Fais en sorte que le bouton écouter soit un peu plus visible. » Il etait gris, en
+   10,5 px, sans fond : le seul geste qu'on fait vraiment sur une reponse avait l'allure
+   d'une mention legale. Il porte maintenant la couleur de la parole, un fond, et un
+   triangle de lecture pose en CSS — pas dans le textContent, que la lecture relit. */
 .lecture button{background:transparent;border:1px solid var(--bord);border-radius:999px;
-  color:var(--faible);padding:1px 8px;font:inherit;font-size:10.5px;cursor:pointer;
+  color:var(--faible);padding:2px 9px;font:inherit;font-size:11px;cursor:pointer;
   white-space:nowrap}
+.lecture button.ecouter{background:#14241a;border-color:#2f6b3c;color:#8ee39d;
+  padding:3px 12px;font-size:11.5px;font-weight:600}
 .lecture button:hover{border-color:#4b5563;color:var(--texte)}
+.lecture button.ecouter:hover{background:#1a3022;border-color:#3f8d50;color:#a8efb5}
+.lecture button.ecouter::before{content:"\25B6\FE0E";font-size:9px;margin-right:5px;
+  vertical-align:1px;opacity:.9}
 .lecture button.vif{border-color:var(--voix);color:#7ee08d}
 .fenetre{color:#e3b341;margin-left:2px}
 .fenetre.nul{color:#7d8590}
@@ -3399,6 +3467,15 @@ function completerTour(e) {
   cible.appendChild(marque);
 }
 
+// L'URL qui sert une photo déjà jointe. Le chemin part tel quel : c'est le serveur qui
+// vérifie qu'il tombe dans le dossier des photos, parce que lui seul peut le vérifier.
+function urlJointe(chemin) {
+  return location.pathname.replace(/[/]$/, "") + "/jointe?c=" + encodeURIComponent(chemin || "");
+}
+function nomDeChemin(chemin) {
+  return String(chemin || "").split("/").pop() || "photo";
+}
+
 function corps(e) {
   switch (e.genre) {
     case "outil": {
@@ -3478,11 +3555,26 @@ function corps(e) {
       // c'est précisément l'identifiant qu'on vient chercher pour reprendre.
       return `<code>${ech(e.id || "?")}</code>`
         + `<span class="apres">reprendre : vvreprendre ${ech(e.id || "")}</span>`;
-    case "toi":
+    case "toi": {
       // Même badge, même couleur : c'est le même tour de conversation. Le petit glyphe dit
       // seulement par quel canal il est arrivé, ce qui compte pour relire un transcript.
+      //
+      // Et ce qui est PARTI avec la phrase se voit. Signalé le 23 novembre 2026 : « j'ai
+      // envoyé deux pièces jointes, mais on ne voit pas qu'on en a envoyé — je suppose
+      // qu'elles sont parties, en réalité je n'en sais rien. » Les vignettes du composeur
+      // disparaîssent à l'envoi, donc après coup la page était muette sur le sujet.
+      const vues = Array.isArray(e.jointes) ? e.jointes : [];
+      const combien = vues.length > 1 ? vues.length + " photos jointes" : "1 photo jointe";
+      const vignettes = vues.length
+        ? `<span class="jointes-vues" title="${ech(combien)}">`
+          + vues.map(c => `<a class="vue" target="_blank" rel="noopener" `
+              + `href="${ech(urlJointe(c))}" title="${ech(nomDeChemin(c))}">`
+              + `<img src="${ech(urlJointe(c))}" alt="${ech(nomDeChemin(c))}" loading="lazy"></a>`).join("")
+          + `<span class="combien">&#128206; ${ech(combien)}</span></span>`
+        : "";
       return (e.tape ? `<span class="tape" title="écrit au clavier">⌨</span>` : "")
-        + ech(e.texte);
+        + ech(e.texte) + vignettes;
+    }
     case "micro":
       return e.actif ? "micro rouvert" : "micro coupé — il ne t'entend plus";
     case "arret":
@@ -3747,8 +3839,43 @@ let dernier = null;
 // - `ligneEcoute` : la seule ligne du tour qui porte « écouter ». Il y en avait jusqu'a
 //   trois — l'interjection de depart, chaque bloc ecrit, puis le debrief parle — donc
 //   reecouter une reponse voulait dire les retrouver un par un dans un flux qui defile.
-let ligneEcrit = null, ligneEcoute = null;
-function nouveauTour() { ligneEcrit = null; ligneEcoute = null; }
+// - `ligneReponse` : la derniere chose ECRITE du tour qui soit encore une reponse (pas une
+//   etape depassee par un outil). Elle survit a la fin du tour, parce que le debrief parle
+//   arrive APRES — c'est le porte-parole qui le dit une fois le travail fini.
+// - `voixRepliee` : l'identifiant du debrief deja replie dans cette reponse. Un second
+//   debrief, avec un autre identifiant, est une AUTRE reponse et reprend sa propre bulle.
+let ligneEcrit = null, ligneEcoute = null, ligneReponse = null, voixRepliee = null;
+function nouveauTour() {
+  ligneEcrit = null; ligneEcoute = null; ligneReponse = null; voixRepliee = null;
+}
+
+// Une reponse, une bulle, une ecoute.
+//
+// Signale le 23 novembre 2026 : « j'ai une premiere petite reponse, puis la suite qui
+// semble etre la suite logique, ecrite dans une autre reponse. » Les deux etaient reelles :
+// la reponse ECRITE (markdown, pour l'oeil) et le debrief PARLE (prose continue, pour
+// l'oreille) sont deux redactions du meme tour, et la page en faisait deux messages
+// consecutifs disant la meme chose autrement. A l'ecran, ça se lit comme une reponse coupee
+// en deux.
+//
+// Le debrief ne s'affiche donc plus a part : il se REPLIE dans la reponse ecrite, dont il
+// devient la version audio. Une seule bulle, un seul bouton « écouter », et ce bouton lit
+// le texte fait pour etre dit — pas le markdown, qui s'entend mal.
+//
+// Seuls les debriefs IDENTIFIES se replient. Une interjection (« c'est parti. ») n'a pas
+// d'identifiant, elle precede le travail, et un tour qui ne produit QU'elle doit rester
+// reecoutable sur sa propre ligne.
+function replierVoix(e) {
+  if (e.genre !== "voix" || !e.id || !ligneReponse) return null;
+  if (voixRepliee !== null && voixRepliee !== e.id) { ligneReponse = null; return null; }
+  voixRepliee = e.id;
+  ligneReponse.replieVoix = true;
+  // Le filtre « écrit » pourrait la masquer, et elle porte desormais la reponse PARLEE :
+  // la cacher reviendrait a perdre le debrief sans que rien ne le dise.
+  if (ligneReponse.dataset) ligneReponse.dataset.toujours = "1";
+  if (ligneReponse.style) ligneReponse.style.display = "";
+  return ligneReponse;
+}
 // Vrai pendant le rejeu de l'historique : les lignes du passé ne s'animent pas, sinon une
 // reconnexion déclencherait cinq cents animations simultanées.
 let enRejeu = false;
@@ -3816,10 +3943,14 @@ function ajouter(e) {
   // Un outil qui demarre CLOT ce qui etait ecrit : Claude a repris son travail, donc ce
   // qu'il venait d'ecrire n'etait pas sa reponse mais une etape.
   if (e.genre === "outil" && !e.passe) cloreEcrit();
+  // Le debrief parle rejoint la reponse ecrite au lieu d'ouvrir sa propre ligne.
+  const replie = replierVoix(e);
   // La ligne que CET evenement alimente. Pas forcement la derniere du flux : un bloc ecrit
   // continue de s'allonger alors qu'une ligne de reflexion s'est posee sous lui.
   let cible = null;
-  if (e.genre === "partiel" && meme && propos) {
+  if (replie) {
+    cible = replie;
+  } else if (e.genre === "partiel" && meme && propos) {
     propos.textContent = e.texte;
     cible = dernier;
   } else if (e.genre === "texte" && ligneEcrit) {
@@ -3863,7 +3994,7 @@ function ajouter(e) {
     flux.appendChild(ligne);
     dernier = ligne;
     cible = ligne;
-    if (e.genre === "texte") ligneEcrit = ligne;
+    if (e.genre === "texte") { ligneEcrit = ligne; ligneReponse = ligne; }
     nouvelle = true;
   }
 
@@ -3922,7 +4053,11 @@ function ajouter(e) {
   // pour une conversation reprise, ce qu'il a ECRIT (« texte ») — c'est tout ce que Claude
   // Code garde d'un tour passe.
   if ((e.genre === "voix" || e.genre === "texte") && cible) {
-    cible.texteBrut = (cible.texteBrut || "") + (e.texte || "");
+    // Le debrief replie ne s'ajoute PAS au texte ecrit : les deux disent la meme chose, et
+    // les concatener ferait relire la reponse deux fois de suite a voix haute. Il vit a
+    // cote, et c'est lui que le bouton prefere — il est ecrit pour l'oreille.
+    if (replie) cible.texteParle = (cible.texteParle || "") + (e.texte || "");
+    else cible.texteBrut = (cible.texteBrut || "") + (e.texte || "");
     // TOUTE reponse de Claude doit pouvoir etre ecoutee. La version precedente ne posait le
     // bouton que sur les lignes rejouees, en comptant sur « relire » — qui arrive avec
     // parole_fin — pour les lignes en direct. Or parole_fin ne suit que les DEBRIEFS, ceux
@@ -6127,6 +6262,12 @@ const lignesVoix = new Map();   // id de réponse -> sa ligne dans le flux
 // avait deja en main, et un libelle qui change casserait la lecture en silence.
 function texteDeLigne(ligne) {
   if (!ligne) return "";
+  // La version dite passe avant la version ecrite : le markdown s'entend mal — les asterisques
+  // du gras, les tirets des listes et le contenu des blocs de code partent tels quels dans la
+  // synthese. Le debrief, lui, est redige pour etre dit.
+  if (typeof ligne.texteParle === "string" && ligne.texteParle.trim()) {
+    return ligne.texteParle.trim();
+  }
   if (typeof ligne.texteBrut === "string") return ligne.texteBrut.trim();
   const corps = ligne.querySelector?.(".corps");
   return ((corps && corps.textContent) || "")
@@ -6170,6 +6311,7 @@ function cloreEcrit() {
   ligneEcrit = null;
   if (!l || l.estEtape) return;
   l.estEtape = true;
+  if (ligneReponse === l) ligneReponse = null;
   if (l.classList) l.classList.add("etape");
   const badge = l.querySelector?.(".badge");
   if (badge) badge.textContent = "étape";
@@ -6190,6 +6332,9 @@ function outillerEcoute(ligne, e) {
   zone.className = "lecture";
   const b = document.createElement("button");
   b.type = "button";
+  // La classe porte l'allure, pas le libellé : `texteDeLigne` relit le textContent quand une
+  // ligne n'a pas de texte brut, et un pictogramme collé au mot serait lu à voix haute.
+  b.className = "ecouter";
   b.textContent = "écouter";
   b.title = "lire cette réponse sur cet appareil";
   b.onclick = () => {
