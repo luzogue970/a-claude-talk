@@ -1033,8 +1033,14 @@ def le_rejeu_ne_garde_que_ce_qui_se_relit():
         evs3, _ = journal.rejouer_session("sid", "/x")
     dire(sum(1 for e in evs3 if e["genre"] == "tour") == 3,
          "trois tours -> trois bilans, pas un seul agrege")
-    dire([e["genre"] for e in evs3[:4]] == ["toi", "outil", "texte", "tour"],
+    # Le bilan se glisse AVANT la conclusion du tour. Pose apres, il etait la derniere
+    # ligne d'une conversation rouverte : on retrouvait « outil bash monter la version et
+    # pousser » la ou on venait chercher la reponse. Un tour se LIT « voila ce que j'ai
+    # fait, voila ce que j'en dis ».
+    dire([e["genre"] for e in evs3[:4]] == ["toi", "outil", "tour", "texte"],
          f"et l'ordre est celui de la lecture : {[e['genre'] for e in evs3[:4]]}")
+    dire(evs3[-1]["genre"] == "texte",
+         f"donc le dernier tour finit sur sa reponse ({evs3[-1]['genre']})")
 
 
 

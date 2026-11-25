@@ -216,6 +216,50 @@ def principal():
          "la fin de la tache lancee il y a vingt minutes reste lisible : c'est pour elle "
          "qu'on rouvre la page")
 
+    # ---------------------------------------------------------------------------------
+    # TF — une conversation rouverte se termine par ce qu'il a repondu
+    # ---------------------------------------------------------------------------------
+    print("\nTF — je rouvre une conversation finie, et je tombe sur sa conclusion")
+
+    # Le tour tel qu'un transcript l'ecrit : la demande, le travail, puis la reponse. C'est
+    # cet ordre-la qui fait le bug — les outils PRECEDENT toujours la conclusion, donc un
+    # bilan accumule jusqu'au bout atterrit apres elle.
+    fini = rejouer([
+        utilisateur("monte la version et pousse"),
+        assistant({"type": "tool_use", "name": "Bash", "id": "t1",
+                   "input": {"command": "version-projet min",
+                             "description": "monter la version et pousser"}}),
+        FauxMessage({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "0.41.0 -> 0.42.0"}]}),
+        assistant({"type": "text", "text": "Poussé en v0.42.0."},
+                  {"type": "text", "text": "Appuie sur « Mettre à jour »."}),
+    ])
+    dire(fini[-1]["genre"] == "texte",
+         f"la derniere ligne est ce qu'il m'a repondu, pas son travail ({fini[-1]['genre']})")
+    dire(fini[-1]["texte"].startswith("Appuie"),
+         "et c'est la fin de la reponse, celle qui porte le bouton « ecouter »")
+    # Le bilan n'est pas jete pour autant : il dit ce qui a ete fait, et il le dit AVANT.
+    bilans = [i for i, e in enumerate(fini) if e["genre"] == "tour"]
+    textes = [i for i, e in enumerate(fini) if e["genre"] == "texte"]
+    dire(len(bilans) == 1 and bilans[0] < min(textes),
+         "le bilan du tour reste, pose avant la conclusion plutot que jete")
+    dire("monter la version et pousser" in fini[bilans[0]]["texte"],
+         "et il nomme toujours ce qui a tourne pendant le tour")
+    # Une reponse arrive souvent en plusieurs blocs. Reculer sur un seul laissait le bilan
+    # au milieu de la reponse, ce qui la coupe en deux a l'ecran.
+    dire(textes == list(range(bilans[0] + 1, len(fini))),
+         "les deux blocs de la reponse restent colles, rien ne s'intercale")
+
+    # Et le tour qu'on interrompt en plein travail : il n'a pas de conclusion, son bilan
+    # reste donc en queue. C'est exact, et c'est ce qui dit qu'il a ete coupe.
+    coupe = rejouer([
+        utilisateur("lance les tests"),
+        assistant({"type": "tool_use", "name": "Bash", "id": "t2",
+                   "input": {"command": "./tests.py", "description": "lancer la suite"}}),
+    ])
+    dire(coupe[-1]["genre"] == "tour",
+         "un tour coupe en plein travail garde son bilan en queue : rien ne l'a conclu")
+
     # Et le filtre de la page doit connaitre ce genre. Un genre absent de la legende cree
     # une ligne invisible qu'aucune case ne peut rallumer — c'est deja arrive avec
     # « session », et c'est le genre de panne qu'on ne voit jamais.

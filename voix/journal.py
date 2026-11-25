@@ -905,9 +905,30 @@ def rejouer_session(sid: str, dossier: str | None = None,
         if not outils:
             return
         apercu_actions = ", ".join(outils[:8]) + (" …" if len(outils) > 8 else "")
-        evenements.append({"genre": "tour", "actions": len(outils),
-                           "texte": apercu_actions})
+        bilan = {"genre": "tour", "actions": len(outils), "texte": apercu_actions}
         outils.clear()
+        # Le bilan se pose AVANT la conclusion du tour, jamais apres.
+        #
+        # Signale le 25 novembre 2026 : « quand je reviens sur les conversations, au lieu
+        # d'avoir le dernier message, j'ai outil bash monter la version et pousser, alors
+        # que je devrais avoir un message que je peux ecouter ». La ligne lue etait celle-ci,
+        # et elle etait la DERNIERE du flux rejoue : dans un transcript, les appels d'outils
+        # d'un tour precedent la reponse, donc le bilan accumule jusqu'au bout arrivait
+        # apres elle.
+        #
+        # En direct la ligne est muette — le worker l'emet sans `texte`, avec des jetons et
+        # une duree, et personne ne la lit. Ici elle porte la liste des outils, ce qui est
+        # utile quand on filtre les appels un par un, et franchement bavard en bas d'ecran.
+        #
+        # Une conversation se termine par ce qu'il a REPONDU : c'est la seule ligne qu'on
+        # vient relire, et la seule qui porte le bouton « ecouter ». On recule donc sur la
+        # conclusion — une reponse arrive souvent en plusieurs blocs de texte — et on glisse
+        # le bilan juste avant. Un tour coupe en plein travail, lui, n'a pas de conclusion :
+        # son bilan reste en queue, et c'est exact.
+        i = len(evenements)
+        while i > 0 and evenements[i - 1].get("genre") == "texte":
+            i -= 1
+        evenements.insert(i, bilan)
 
     for m in messages:
         charge = getattr(m, "message", None)
