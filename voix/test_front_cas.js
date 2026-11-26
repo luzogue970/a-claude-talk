@@ -4729,6 +4729,28 @@ async function testerPropositions() {
        'et la barre recoit la question CITEE : « oui » tout nu, trois jours apres, '
        + 'ne dirait a personne de quoi il parle');
 
+  // 9. Une liste PAR conversation. « J ai ouvert deux conversations differentes et la
+  //    liste etait la meme. » Le serveur filtre deja sur la session courante — encore
+  //    faut-il que la page redemande quand on change de conversation, sinon elle garde a
+  //    l ecran les choses en attente de celle qu on vient de quitter.
+  globalThis.listeProps = [{ cle: 'ici', projet: 'claude-talk',
+                             texte: 'Borner l attente de la liaison a trois secondes.',
+                             quand: Date.now() / 1000 - 60 }];
+  globalThis.traiteesProps = [];
+  await chargerProps(true);
+  globalThis.requetes.length = 0;
+  recevoir({ genre: 'session', id: 'une-autre-conversation', titre: 'insnap' });
+  await pause(5);
+  dire(globalThis.requetes.some(r => /propositions\.json/.test(String(r.url))),
+       'changer de conversation redemande la liste : celle d a cote n a rien a faire la');
+
+  globalThis.requetes.length = 0;
+  recevoir({ genre: 'session', id: 'une-autre-conversation', titre: 'insnap' });
+  await pause(5);
+  dire(!globalThis.requetes.some(r => /propositions\.json/.test(String(r.url))),
+       'et la meme conversation annoncee deux fois ne redemande rien : l evenement '
+       + 'repart a chaque reprise, un aller-retour par battement ne servirait a rien');
+
   globalThis.listeProps = [];
   globalThis.traiteesProps = [];
   await chargerProps(true);

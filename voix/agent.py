@@ -1036,6 +1036,41 @@ class Voix(Agent):
             self._voir("propositions", combien=len(neuves),
                        total=propositions.compter(),
                        textes=[p["texte"] for p in neuves])
+            self._enoncer_plus_tard(neuves)
+
+    def _enoncer_plus_tard(self, neuves: list[dict]) -> None:
+        """Faire dire a chaque ligne retenue CE QU'IL Y A A FAIRE, en arriere-plan.
+
+        « Qu'on n'ait pas des informations du méta-discours : pour moi, directement la
+        fonctionnalité. » Le decapage par expression reguliere ote l'amorce ; il ne peut
+        pas transformer une description en geste. Un modele le peut, et il est deja
+        enregistre : la ligne existe avec son texte d'origine, la reecriture ne fait que
+        l'ameliorer, et personne ne l'attend.
+
+        Hors boucle — les tests unitaires appellent ces methodes a nu — on ne tente rien :
+        le texte d'origine fait foi, et c'est exactement le repli prevu.
+        """
+        if not neuves:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(self._enoncer(neuves))
+
+    async def _enoncer(self, neuves: list[dict]) -> None:
+        try:
+            from porte_parole import enoncer
+            lignes = await enoncer([p["texte"] for p in neuves])
+            for p, ligne in zip(neuves, lignes):
+                propositions.reformuler(p["cle"], ligne)
+        except Exception:
+            log.debug("énoncés indisponibles", exc_info=True)
+            return
+        if lignes:
+            # La page relit sa liste : les lignes qu'elle affiche viennent de changer de
+            # texte, et rien d'autre ne le lui dirait.
+            self._voir("propositions", total=propositions.compter())
 
     def _garder_question(self, question: str | None, reponse: str) -> None:
         """Une question laissee sans reponse ne se perd pas : elle rejoint la liste.
@@ -1070,6 +1105,7 @@ class Voix(Agent):
             self._voir("propositions", combien=len(neuves), sorte="question",
                        total=propositions.compter(),
                        textes=[p["texte"] for p in neuves])
+            self._enoncer_plus_tard(neuves)
 
     def _solder_propositions(self, texte: str) -> None:
         """Fermer celles que ce message vient de demander.

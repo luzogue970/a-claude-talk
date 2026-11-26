@@ -779,19 +779,51 @@ class Tableau:
             self._voix_cache.popitem(last=False)
         return cle, None, tronque
 
-    async def _propositions(self, _req):
-        """Ce qui a été proposé un jour et n'a toujours pas été tranché.
+    def session_courante(self) -> str:
+        """Quelle conversation cette page regarde EN CE MOMENT.
 
-        Servi par HTTP plutôt que poussé dans le flux : la liste survit aux conversations,
-        donc une page qui s'ouvre doit pouvoir la demander, et non esperer avoir ete la
-        quand la proposition est passee.
+        Le registre des propositions est commun — une proposition se solde depuis
+        n'importe ou, des jours plus tard — mais ce qu'on MONTRE est ce qui a été proposé
+        ici. « J'ai ouvert deux conversations différentes et la liste était la même » :
+        une liste qui mélange quatre projets ne se traite pas, on ne sait pas de quoi
+        chaque ligne parle, donc on n'en tranche aucune.
+
+        Deux sources, et la seconde compte autant que la première. Le worker publie la
+        session dès qu'il la connaît — à treize secondes. La page, elle, demande sa liste
+        à sept. Sans le repli, toute ouverture de conversation montrerait six secondes de
+        liste vide, puis la bonne : exactement le défaut qu'on a déjà corrigé pour
+        l'historique. `session_a_reprendre` est le SEUL juge de « quelle conversation »,
+        et c'est le même que celui du rejeu : deux chemins qui décident séparément
+        finissent par décider différemment.
         """
         try:
-            return web.json_response({"liste": propositions.ouvertes(),
-                                      "traitees": propositions.tranchees()})
+            sid = (json.loads(self.etat.get("session") or "{}") or {}).get("id") or ""
+        except (ValueError, AttributeError):
+            sid = ""
+        if sid:
+            return sid
+        try:
+            import journal
+            return journal.session_a_reprendre() or ""
+        except Exception:
+            log.debug("session à reprendre inconnue", exc_info=True)
+            return ""
+
+    async def _propositions(self, _req):
+        """Ce qui a été proposé DANS CETTE CONVERSATION et n'a pas été tranché.
+
+        Servi par HTTP plutôt que poussé dans le flux : la liste survit au processus, donc
+        une page qui s'ouvre doit pouvoir la demander, et non espérer avoir été là quand la
+        proposition est passée.
+        """
+        try:
+            sid = self.session_courante()
+            return web.json_response({"liste": propositions.ouvertes(session=sid),
+                                      "traitees": propositions.tranchees(session=sid),
+                                      "session": sid})
         except Exception:
             log.debug("propositions illisibles", exc_info=True)
-            return web.json_response({"liste": [], "traitees": []})
+            return web.json_response({"liste": [], "traitees": [], "session": ""})
 
     async def _proposition(self, requete):
         """Trancher : faite, ou ecartee. Les deux la sortent de la liste."""
@@ -804,7 +836,7 @@ class Tableau:
         if not cle or etat not in ("faite", "ecartee", "ouverte"):
             return web.json_response({"erreur": "cle ou etat manquant"}, status=400)
         touche = propositions.marquer(cle, etat)
-        reste = propositions.compter()
+        reste = propositions.compter(session=self.session_courante())
         # Republie pour toutes les pages ouvertes : trancher sur le telephone doit
         # decrementer la pastille de l'onglet reste ouvert sur l'ordinateur.
         self.publier("propositions", total=reste, tranchee=cle, etat=etat)
@@ -4076,6 +4108,11 @@ function ajouter(e) {
   if (e.genre === "session" && e.id && e.id !== convCourante) {
     convCourante = e.id;
     majConvs();
+    // La liste des choses en attente est celle de CETTE conversation. Changer de
+    // conversation sans la relire laisserait a l'ecran, et dans la pastille, le compte de
+    // celle qu'on vient de quitter — « j'ai ouvert deux conversations differentes et la
+    // liste etait la meme ».
+    chargerProps();
   }
   if (e.genre === "voix") {
     battre("voix");
@@ -6097,9 +6134,10 @@ function majPastilleProps() {
   btnProps.innerHTML = '<span class="ico-prop">◇</span>'
     + (n ? '<span class="nb">' + n + "</span>" : "");
   btnProps.title = n
-    ? n + " chose(s) en attente — propositions jamais tranchées et questions restées "
-      + "sans réponse. Appuie pour les traiter"
-    : "ce qui attend : rien pour l\'instant, et ce qui a déjà été tranché";
+    ? n + " chose(s) en attente dans cette conversation — propositions jamais tranchées "
+      + "et questions restées sans réponse. Appuie pour les traiter"
+    : "ce qui attend dans cette conversation : rien pour l\'instant, et ce qui a déjà "
+      + "été tranché";
 }
 
 // La page est servie PAR LE TABLEAU DE BORD, sous /talk/<nom>/ — et ces deux appels-la
@@ -6143,8 +6181,8 @@ function dessinerProps() {
   if (!b) return;
   let html = "";
   if (!props.length) {
-    html += '<div class="vide">Rien en attente. Tout ce qui a été proposé, et toute '
-      + 'question restée sans réponse, a été traité ou écarté.</div>';
+    html += '<div class="vide">Rien en attente dans cette conversation. Tout ce qui y a '
+      + 'été proposé, et toute question restée sans réponse, a été traité ou écarté.</div>';
   }
   for (const p of props) {
     const ou = quandProp(p, false);
@@ -6175,7 +6213,8 @@ function dessinerProps() {
       + 'd\'ici, ou dans n\'importe quelle conversation, en lui redisant ce qu\'elle dit. '
       + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes. '
       + 'Les lignes marquées <b>?</b> sont des questions auxquelles le message suivant '
-      + 'n\'a pas répondu.</div>';
+      + 'n\'a pas répondu. Cette liste est celle de <b>cette conversation</b> : chacune a '
+      + 'la sienne.</div>';
   }
   // Ce qui a deja ete tranche, sous un trait. Le bouton etant desormais toujours la, un
   // panneau qui n'ouvre QUE « rien en attente » serait un bouton qu'on cesse d'appuyer.

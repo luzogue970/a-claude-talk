@@ -308,6 +308,100 @@ async def titrer(question: str, reponse: str) -> str:
     return _nettoyer_titre("".join(morceaux))
 
 
+# Ce qu'une ligne de la liste doit dire : LA TACHE, pas la facon dont la reponse l'a
+# racontee. Le decapage par expression reguliere (`propositions.sans_cadre`) ote l'amorce,
+# et ca ne suffit pas : « Ce que je ferais ensuite : l'écran Cartes garde trois rangées de
+# filtres, une vingtaine de taxons, et rien pour chercher » devient une DESCRIPTION, pas un
+# geste. Lue trois jours plus tard, elle ne dit toujours pas ce qu'il y a a faire.
+#
+# Un appel de modele, donc — et il est bon marche la ou celui de `question_en_plan` ne
+# l'etait pas : UN seul par tour, pour toutes les propositions retenues ensemble, et
+# seulement les tours ou quelque chose a ete retenu. La plupart n'en retiennent aucune.
+# En tache de fond, comme le titre : la ligne existe deja dans le registre avec son texte
+# d'origine, la reecriture ne fait que l'ameliorer, et rien ne l'attend.
+MAX_ENONCES = 6
+
+
+async def enoncer(textes: list[str]) -> list[str]:
+    """Reecrire ces phrases en enonces de tache. Autant de lignes que d'entrees, ou [].
+
+    Le contrat est strict et le repli est total : si le modele ne rend pas EXACTEMENT le
+    meme nombre de lignes, on ne garde rien. Reattribuer des lignes a la louche ferait
+    porter a une proposition le texte d'une autre — une ligne fausse dans une liste de
+    taches coute infiniment plus cher qu'une ligne mal tournee.
+
+    Client jetable, meme raison que `titrer` : la session du porte-parole garde l'historique
+    des reformulations a l'oral, et y glisser ce travail la pollue pour tous les tours
+    suivants.
+    """
+    textes = [t.strip() for t in (textes or []) if t and t.strip()][:MAX_ENONCES]
+    if not textes:
+        return []
+    client = ClaudeSDKClient(ClaudeAgentOptions(
+        model=config.SPEAKER_MODEL,
+        cli_path=config.claude_binary(),
+        cwd=config.WORKDIR,
+        allowed_tools=[],
+        thinking=ThinkingConfigDisabled(type="disabled"),
+        system_prompt=(
+            "Tu transformes des phrases tirees d'un compte rendu de developpement en "
+            "ENONCES DE TACHE, en français.\n"
+            "Pour chaque ligne numerotee qu'on te donne, rends une ligne numerotee : la "
+            "fonctionnalite a construire ou le defaut a corriger, dit a l'imperatif, "
+            "comme on l'ecrirait sur une carte a faire.\n"
+            "Une phrase, deux au maximum, et seulement si la seconde porte une "
+            "information que la premiere perdrait.\n"
+            "JETTE tout le cadre narratif : « ce que je ferais ensuite », « ce qui "
+            "reste », « je propose de », « dis-moi si tu veux que », « on pourrait ». "
+            "Ne dis pas ce que tu as fait ni ce que tu ferais : dis la CHOSE A FAIRE.\n"
+            "Garde les noms propres, les noms de fichiers et les chiffres tels quels : "
+            "c'est par eux qu'on reconnait de quoi il s'agit trois jours plus tard.\n"
+            "Si une ligne ne contient aucune tache identifiable, rends-la telle quelle.\n"
+            "Reponds par les lignes numerotees seules, rien avant, rien apres."),
+    ))
+    morceaux: list[str] = []
+    try:
+        await client.connect()
+        await client.query("\n".join(f"{i}. {t}" for i, t in enumerate(textes, 1)))
+        async for message in client.receive_response():
+            for bloc in getattr(message, "content", []) or []:
+                texte = getattr(bloc, "text", None)
+                if texte:
+                    morceaux.append(texte)
+    except Exception:
+        log.debug("enonces impossibles", exc_info=True)
+        return []
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+    return _lignes_numerotees("".join(morceaux), len(textes))
+
+
+_NUMERO = re.compile(r"^\s*(\d+)\s*[.)\-–—:]\s*(.+)$")
+
+
+def _lignes_numerotees(brut: str, combien: int) -> list[str]:
+    """Les `combien` lignes numerotees de cette reponse, dans l'ordre, ou [].
+
+    On lit les NUMEROS plutot que l'ordre d'arrivee : un modele qui glisse une phrase de
+    preambule decalerait tout d'un cran, et chaque proposition porterait alors le texte de
+    la precedente. Le numero est la seule chose qui rattache une ligne a son entree.
+    """
+    trouve: dict[int, str] = {}
+    for ligne in (brut or "").splitlines():
+        m = _NUMERO.match(ligne)
+        if not m:
+            continue
+        i = int(m.group(1))
+        if 1 <= i <= combien and i not in trouve:
+            trouve[i] = m.group(2).strip().strip("«»\"'").strip()
+    if len(trouve) != combien or not all(trouve[i] for i in range(1, combien + 1)):
+        return []
+    return [trouve[i] for i in range(1, combien + 1)]
+
+
 # Les entrees en matiere d'un modele qui repond a cote : il accuse reception au lieu de
 # titrer. Mesure — « Compris. Je vais titrer les conversations… » est sorti tel quel, et se
 # retrouvait dans la liste, tronque au milieu d'un mot.

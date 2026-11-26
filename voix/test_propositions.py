@@ -205,14 +205,29 @@ async def le_serveur_sert_la_liste_et_la_tranche():
         t = Tableau(port=7897, ouvrir=False)
         url = await t.demarrer()
         try:
+            # La conversation que cette page regarde. Le serveur la lit dans l'état publié
+            # par le worker ; ici on la pose à la main, c'est la même entrée.
+            t.etat["session"] = json.dumps({"id": "ici", "titre": "la courante"})
             propositions.enregistrer(["Il faudrait borner l'attente de la liaison à trois "
-                                      "secondes."], projet="claude-talk")
+                                      "secondes."], projet="claude-talk", session="ici")
+            # Et une proposition d'une AUTRE conversation. « J'ai ouvert deux conversations
+            # différentes et la liste était la même » : c'est cette ligne-là qui ne doit
+            # jamais apparaître.
+            propositions.enregistrer(["On pourrait colorer les propositions du flux."],
+                                     projet="insnap", session="ailleurs")
             async with aiohttp.ClientSession() as http:
                 async with http.get(f"{url}/propositions.json") as r:
-                    liste = (await r.json())["liste"]
+                    rendu0 = await r.json()
+                liste = rendu0["liste"]
                 dire(len(liste) == 1 and liste[0]["projet"] == "claude-talk",
                      "la liste arrive par HTTP : une page qui s'ouvre la demande, "
                      "elle n'a pas à avoir été là quand la proposition est passée")
+                dire(all("colorer" not in p["texte"] for p in liste),
+                     "et c'est la liste de CETTE conversation : celle d'à côté reste "
+                     "chez elle, sinon on ne sait de quoi aucune ligne parle")
+                dire(rendu0.get("session") == "ici",
+                     "le serveur dit de quelle conversation il parle : la page peut "
+                     "vérifier qu'elle regarde bien la sienne")
                 cle = liste[0]["cle"]
 
                 async with http.post(f"{url}/proposition",
@@ -226,6 +241,9 @@ async def le_serveur_sert_la_liste_et_la_tranche():
                 async with http.get(f"{url}/propositions.json") as r:
                     rendu = await r.json()
                 dire(rendu["liste"] == [], "et elle ne revient pas")
+                dire(propositions.compter() == 1,
+                     "le registre, lui, garde celle d'à côté : il est commun, c'est "
+                     "l'affichage qui est par conversation")
                 # Le même appel rend les deux : une page qui s'ouvre doit pouvoir montrer
                 # ce qui attend ET ce qui a été tranché, sans un second aller-retour.
                 dire(len(rendu.get("traitees") or []) == 1
@@ -260,12 +278,20 @@ def l_agent_note_et_solde_sans_jamais_tomber():
 
         def __init__(self):
             self.vus = []
+            self.enonces = []
 
         def _voir(self, genre, **d):
             self.vus.append((genre, d))
 
         _noter_propositions = A.Voix._noter_propositions
         _solder_propositions = A.Voix._solder_propositions
+        # Doublée : la vraie lance un appel de modèle, et aucune suite par défaut ne
+        # dépense d'argent. Ce qu'on vérifie ici est qu'elle est DEMANDÉE, avec les
+        # lignes qui viennent d'être retenues.
+        enonces = []
+
+        def _enoncer_plus_tard(self, neuves):
+            self.enonces.append([p["texte"] for p in neuves])
 
     with tempfile.TemporaryDirectory() as d:
         ancien = propositions.FICHIER
@@ -277,6 +303,8 @@ def l_agent_note_et_solde_sans_jamais_tomber():
             dire(propositions.compter() == 1, "la proposition de la réponse est retenue")
             dire(any(g == "propositions" for g, _ in a.vus),
                  "la page l'apprend tout de suite : la pastille monte sans recharger")
+            dire(a.enonces and "borner l'attente" in a.enonces[0][0],
+                 "et sa reformulation en énoncé de tâche est demandée dans la foulée")
 
             a.vus.clear()
             a._solder_propositions("Mets en place cette proposition : « Il faudrait maintenant "
@@ -330,6 +358,142 @@ def la_page_surligne_ce_que_le_registre_retient():
     dire(cote_page == propositions.MARQUEURS,
          f"les deux listes sont la même, à l'alternative près "
          f"({len(cote_page)} côté page, {len(propositions.MARQUEURS)} côté registre)")
+
+
+# --- TU : une ligne dit la TACHE, pas la façon dont on l'a racontée ----------------------
+def une_ligne_dit_la_tache_et_pas_le_recit():
+    print("\n=== ce qu'on lit dans la liste est la chose à faire, pas le récit ===")
+    # Les quinze entrées réelles du registre du 26 novembre 2026, celles qui ont motivé
+    # la demande : « qu'on n'ait pas des informations du méta-discours ».
+    cas = [
+        ("Ce que je ferais ensuite : une prise Zigbee en amont de la lampe.",
+         "Une prise Zigbee en amont de la lampe."),
+        ("Ce qui reste, et c'est ton geste : créer le raccourci et l'accrocher à "
+         "une automatisation quotidienne.",
+         "Créer le raccourci et l'accrocher à une automatisation quotidienne."),
+        ("Ce qui reste à juger sur le téléphone, parce qu'aucun banc ne reproduit ce "
+         "bug : rouvrir Halo et regarder si la bande a disparu.",
+         "Rouvrir Halo et regarder si la bande a disparu."),
+        ("Il reste à appuyer sur « Mettre à jour » dans Monitoring.",
+         "Appuyer sur « Mettre à jour » dans Monitoring."),
+        ("Il faudrait un filet pour les conversations sans ligne de fin.",
+         "Un filet pour les conversations sans ligne de fin."),
+        ("Tu veux que je monte la version maintenant ?", "Monte la version maintenant ?"),
+    ]
+    for brut, attendu in cas:
+        rendu = propositions.sans_cadre(brut)
+        dire(rendu == attendu, f"« {brut[:38]}… » → « {rendu[:52]} »")
+
+    # Le garde-fou qui compte : un décapage ne doit JAMAIS rendre la ligne moins lisible.
+    pronom = "Dis-moi si tu veux que je le pousse quand même."
+    dire(propositions.sans_cadre(pronom) == pronom,
+         "un pronom qui perdrait son antécédent retient tout le décapage : « Le pousse "
+         "quand même » ne dit plus quoi")
+    dire(propositions.sans_cadre("On pourrait colorer les propositions dans le flux.")
+         == "On pourrait colorer les propositions dans le flux.",
+         "et une phrase qui dit déjà la chose n'est pas touchée")
+    dire(propositions.sans_cadre("Ce qui reste : ça.") == "Ce qui reste : ça.",
+         "un décapage qui ne laisserait que trois mots a mangé le sujet : on garde tout")
+
+    # Et c'est l'extraction elle-même qui l'applique : sans ça, rien n'arriverait décapé
+    # dans le registre.
+    trouve = propositions.extraire(
+        "C'est fait, 2677 vertes.\n\n"
+        "Ce que je ferais ensuite : borner l'attente de la liaison à trois secondes.")
+    dire(trouve == ["Borner l'attente de la liaison à trois secondes."],
+         f"l'extraction rend déjà la tâche nue → {trouve}")
+
+
+def une_ligne_se_reecrit_sans_changer_d_identite():
+    print("\n=== et sa réécriture ne la dédouble pas ===")
+    with tempfile.TemporaryDirectory() as d:
+        ancien = propositions.FICHIER
+        propositions.FICHIER = Path(d) / "propositions.json"
+        try:
+            brut = "Il faudrait un filet pour les conversations sans ligne de fin."
+            [neuve] = propositions.enregistrer([brut], projet="claude-talk", session="ici")
+            cle = neuve["cle"]
+            dire(propositions.reformuler(cle, "Poser un filet sur les conversations qui "
+                                              "n'écrivent pas leur ligne de fin."),
+                 "la ligne se réécrit en énoncé de tâche")
+            [p] = propositions.ouvertes()
+            dire(p["cle"] == cle,
+                 "sans changer de clé : la recalculer ferait revenir, sous un autre nom, "
+                 "ce qu'on vient d'écarter")
+            dire(p["texte"].startswith("Poser un filet"), "c'est l'énoncé qu'on affiche")
+            dire(p["source"] == brut, "et l'original reste, pour qu'on sache d'où ça vient")
+
+            # Le piège : redemander la chose avec les mots de la RÉPONSE d'origine. Après
+            # réécriture, comparer au seul texte affiché ne reconnaîtrait plus rien.
+            dire(propositions.resoudre("Mets en place cette proposition : « " + brut + " »"),
+                 "la redemander avec les mots d'origine la solde encore")
+            propositions.marquer(cle, "ouverte")
+            dire(propositions.resoudre("Pose un filet sur les conversations qui n'écrivent "
+                                       "pas leur ligne de fin."),
+                 "et la redemander avec les mots de l'énoncé aussi")
+        finally:
+            propositions.FICHIER = ancien
+
+
+def la_reecriture_ne_reattribue_jamais_une_ligne_a_une_autre():
+    print("\n=== le modèle rend autant de lignes qu'on lui en donne, ou rien ===")
+    import porte_parole as PP
+    lu = PP._lignes_numerotees
+    dire(lu("1. Borner l'attente\n2. Colorer le flux", 2)
+         == ["Borner l'attente", "Colorer le flux"], "deux lignes pour deux entrées")
+    dire(lu("Voici les énoncés :\n1. Borner l'attente\n2. Colorer le flux", 2)
+         == ["Borner l'attente", "Colorer le flux"],
+         "un préambule ne décale rien : c'est le NUMÉRO qui rattache, pas le rang")
+    dire(lu("2. Colorer le flux\n1. Borner l'attente", 2)
+         == ["Borner l'attente", "Colorer le flux"],
+         "et l'ordre d'arrivée non plus")
+    dire(lu("1. Borner l'attente", 2) == [],
+         "une ligne manquante annule TOUT : porter le texte d'une tâche sur une autre "
+         "coûte infiniment plus cher qu'une ligne mal tournée")
+    dire(lu("1. Borner l'attente\n2.   ", 2) == [], "une ligne vide aussi")
+    dire(lu("Je vais reformuler ces phrases pour toi.", 1) == [],
+         "et un modèle qui accuse réception au lieu de répondre ne donne rien")
+    dire(lu("1. « Borner l'attente de la liaison »", 1) == ["Borner l'attente de la liaison"],
+         "les guillemets du modèle ne se retrouvent pas dans la liste")
+
+
+# --- TU : une liste par conversation -----------------------------------------------------
+def chaque_conversation_a_sa_liste():
+    print("\n=== chaque conversation a SA liste : deux conversations, deux listes ===")
+    with tempfile.TemporaryDirectory() as d:
+        ancien = propositions.FICHIER
+        propositions.FICHIER = Path(d) / "propositions.json"
+        try:
+            propositions.enregistrer(["Borner l'attente de la liaison."],
+                                     projet="claude-talk", session="ici")
+            propositions.enregistrer(["Colorer les propositions du flux."],
+                                     projet="insnap", session="ailleurs")
+            propositions.enregistrer(["Reprendre la veille des sessions oisives."],
+                                     projet="claude-talk", session="ici")
+            dire(propositions.compter() == 3, "le registre reste commun : trois entrées")
+            dire(propositions.compter(session="ici") == 2
+                 and propositions.compter(session="ailleurs") == 1,
+                 "mais chaque conversation ne compte que les siennes")
+            dire(all("Colorer" not in p["texte"]
+                     for p in propositions.ouvertes(session="ici")),
+                 "« j'ai ouvert deux conversations différentes et la liste était la "
+                 "même » : celle d'à côté ne traverse plus")
+
+            propositions.marquer(propositions.ouvertes(session="ailleurs")[0]["cle"],
+                                 "ecartee")
+            dire(propositions.tranchees(session="ici") == [],
+                 "ce qui a été tranché ailleurs ne revient pas non plus sous le trait")
+            dire(len(propositions.tranchees(session="ailleurs")) == 1,
+                 "et reste consultable là où ça a été décidé")
+
+            # Le solde, lui, reste COMMUN, et c'est voulu : « tant que je n'ai pas dit,
+            # ce truc-là mets-le en place » peut arriver dans une autre conversation.
+            propositions.resoudre("Borne l'attente de la liaison, maintenant.")
+            dire(propositions.compter(session="ici") == 1,
+                 "demander la chose la solde, même depuis ailleurs : c'est l'AFFICHAGE "
+                 "qui est par conversation, pas le registre")
+        finally:
+            propositions.FICHIER = ancien
 
 
 # --- TU : une question restee sans reponse ------------------------------------------------
@@ -398,11 +562,16 @@ def l_agent_garde_la_question_qu_on_n_a_pas_honoree():
 
         def __init__(self):
             self.vus = []
+            self.enonces = []
 
         def _voir(self, genre, **d):
             self.vus.append((genre, d))
 
         _garder_question = A.Voix._garder_question
+        enonces = []
+
+        def _enoncer_plus_tard(self, neuves):
+            self.enonces.append([p["texte"] for p in neuves])
 
     with tempfile.TemporaryDirectory() as d:
         ancien = propositions.FICHIER
@@ -532,6 +701,10 @@ async def principal():
     une_proposition_a_un_etat()
     ce_qui_est_tranche_reste_consultable()
     demander_une_proposition_la_solde()
+    une_ligne_dit_la_tache_et_pas_le_recit()
+    une_ligne_se_reecrit_sans_changer_d_identite()
+    la_reecriture_ne_reattribue_jamais_une_ligne_a_une_autre()
+    chaque_conversation_a_sa_liste()
     une_question_sans_reponse_se_reconnait()
     une_question_gardee_porte_son_genre()
     await le_serveur_sert_la_liste_et_la_tranche()

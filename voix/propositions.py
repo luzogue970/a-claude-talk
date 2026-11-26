@@ -141,6 +141,71 @@ def _mots(texte: str) -> set[str]:
                          "mais", "elle", "elles", "leur", "comme", "aussi", "bien"}}
 
 
+# Le CADRE NARRATIF, et c'est la premiere chose qu'on ote. Une reponse de fin de tour
+# emballe ce qu'elle propose dans la facon dont elle le raconte : « Ce que je ferais
+# ensuite : », « Ce qui reste, et c'est ton geste : », « Il reste a ». Garde tel quel, le
+# registre affiche des lignes qui parlent de la reponse au lieu de dire la chose a faire —
+# « on n'a pas des informations du meta-discours du type "je vais faire ca mais il y a
+# cette fonctionnalite-la plutot" : pour moi, directement la fonctionnalite ».
+#
+# Borne a quatre-vingts caracteres avant les deux-points : au-dela, ce n'est plus une
+# amorce, c'est une phrase entiere dont les deux-points introduisent une explication, et la
+# decapiter perdrait le sujet.
+_CADRE = re.compile(
+    r"^\s*(ce (que|qui)\b|il (reste|restera|resterait)\b|la suite\b|prochaine [ée]tape\b|"
+    r"ensuite\b|apr[èe]s (ça|cela)\b|[àa] faire\b|reste\b)[^:]{0,80}:\s*",
+    re.IGNORECASE)
+
+# La meme chose SANS deux-points, parce que la tournure la plus courante n'en a pas : « Il
+# reste à appuyer sur Mettre à jour » annonce la tache dans la foulee. Liste etroite et
+# ancree au debut de phrase : « il reste » au milieu d'un raisonnement ne se touche pas.
+_CADRE_DIRECT = re.compile(
+    r"^\s*(il (reste|resterait|restera|faudrait|faut)\s+(encore\s+)?([àa]\s+)?|"
+    r"reste\s+[àa]\s+|ensuite,?\s+|la suite,?\s+c'est\s+|"
+    r"ce qu'il (reste|faut|faudrait)\s+([àa]\s+)?(faire\s+)?,?\s*)", re.IGNORECASE)
+
+# Ce qui demande une permission plutot que de nommer une tache. « Dis-moi si tu veux que
+# je monte la version » n'est pas une fonctionnalite : c'est le cadre, et la tache est
+# derriere le « que je ».
+_PERMISSION = re.compile(
+    r"^\s*(dis-?\s?moi si tu veux que (je|j')|tu veux que (je|j')|veux-tu que (je|j')|"
+    r"je peux\b|on peut\b|si tu veux,? (je|j'))\s*", re.IGNORECASE)
+
+
+# Un pronom en tete de phrase n'a plus d'antecedent : il pointe vers ce que le decapage
+# vient justement d'oter.
+_CLITIQUE = re.compile(r"^(le|la|les|l'|te|t'|me|m'|lui|leur|y|en|se|s')\b", re.IGNORECASE)
+
+
+def sans_cadre(phrase: str) -> str:
+    """La phrase debarrassee de la facon dont elle etait racontee.
+
+    Deux decapages, dans cet ordre, parce qu'ils s'enchainent : « Ce qui reste : dis-moi
+    si tu veux que je monte la version » perd d'abord son cadre, puis sa demande de
+    permission, et il reste « monte la version ».
+
+    Le repli est toujours la phrase d'origine : un decapage qui ne laisserait que trois
+    caracteres a mange le sujet, et une ligne vide dans la liste est pire qu'une ligne
+    bavarde.
+    """
+    avant = (phrase or "").strip()
+    apres = _CADRE.sub("", avant).strip()
+    apres = _CADRE_DIRECT.sub("", apres).strip()
+    # La demande de permission ne s'ote QUE si ce qui reste tient debout tout seul. « Dis-moi
+    # si tu veux que je le pousse quand même » decapite donne « Le pousse quand même » : le
+    # pronom n'a plus d'antecedent, et la ligne est moins lisible qu'avant. Mesure sur les
+    # quinze entrees du registre du 26 novembre 2026 — trois sur quatre tombaient dans ce
+    # cas. On laisse alors la phrase entiere : la reecriture par le modele la reprendra.
+    sans_permission = _PERMISSION.sub("", apres).strip()
+    if sans_permission != apres and not _CLITIQUE.match(sans_permission):
+        apres = sans_permission
+    if len(apres) < 12:
+        return avant
+    # La majuscule se perd au decapage : « Ce qui reste : créer le raccourci » donnait
+    # « créer le raccourci », en minuscule au milieu d'une liste de lignes capitalisees.
+    return apres[0].upper() + apres[1:]
+
+
 def extraire(texte: str) -> list[str]:
     """Les propositions de ce texte, dans l'ordre ou elles sont ecrites.
 
@@ -156,7 +221,7 @@ def extraire(texte: str) -> list[str]:
     for ph in _phrases(_nettoyer(texte)):
         if not _MARQUEURS.search(ph) or _ANNULE.search(ph):
             continue
-        ph = ph.strip(" -—•\t")
+        ph = sans_cadre(ph.strip(" -—•\t"))
         if not MINI <= len(ph) <= MAXI:
             continue
         cle = _cle(ph)
@@ -219,20 +284,31 @@ def enregistrer(textes: list[str], projet: str = "", session: str = "",
     return neuves
 
 
-def ouvertes(projet: str = "") -> list[dict]:
-    """Ce qui attend encore, la plus RÉCENTE d'abord.
+def ouvertes(projet: str = "", session: str = "") -> list[dict]:
+    """Ce qui attend encore DANS CETTE CONVERSATION, la plus RÉCENTE d'abord.
 
     L'ordre compte : une proposition d'il y a trois semaines a de bonnes chances d'etre
     perimee, et la liste se lit par le haut sur un telephone.
+
+    Le filtre par session est la correction du 26 novembre 2026 : « j'ai ouvert deux
+    conversations differentes et la liste etait la meme ». Le registre reste commun — une
+    proposition se solde depuis n'importe ou, et c'est voulu — mais ce qu'on MONTRE est ce
+    qui a ete propose ici. Une liste qui melange quatre projets ne se traite pas : on ne
+    sait pas de quoi chaque ligne parle, donc on n'en tranche aucune.
+
+    Sans session demandee, tout est rendu : c'est ce dont vivent `compter()` sans
+    argument, l'amorce et les tests.
     """
     tout = [p for p in _lire() if p.get("etat") == "ouverte"]
     if projet:
         tout = [p for p in tout if p.get("projet") == projet]
+    if session:
+        tout = [p for p in tout if p.get("session") == session]
     return sorted(tout, key=lambda p: p.get("quand") or 0, reverse=True)
 
 
-def compter(projet: str = "") -> int:
-    return len(ouvertes(projet))
+def compter(projet: str = "", session: str = "") -> int:
+    return len(ouvertes(projet, session))
 
 
 # Ce qu'on garde a l'ecran de ce qui est deja tranche. Assez pour retrouver « le truc d'hier
@@ -241,7 +317,7 @@ def compter(projet: str = "") -> int:
 TRANCHEES_VUES = 12
 
 
-def tranchees(limite: int = TRANCHEES_VUES) -> list[dict]:
+def tranchees(limite: int = TRANCHEES_VUES, session: str = "") -> list[dict]:
     """Ce qui a ete fait ou ecarte, le plus RECEMMENT tranche d'abord.
 
     Sans ça, le panneau est vide des que tout est traite — et un bouton qui n'ouvre rien
@@ -250,8 +326,37 @@ def tranchees(limite: int = TRANCHEES_VUES) -> list[dict]:
     texte de la proposition existe encore.
     """
     faits = [p for p in _lire() if p.get("etat") in ("faite", "ecartee")]
+    if session:
+        faits = [p for p in faits if p.get("session") == session]
     faits.sort(key=lambda p: p.get("repondu") or p.get("quand") or 0, reverse=True)
     return faits[:max(0, limite)]
+
+
+def reformuler(cle: str, enonce: str) -> bool:
+    """Remplacer le texte affiche par l'ENONCE de la tache, et garder l'original.
+
+    La cle ne bouge PAS : elle est le hachage de la phrase d'origine, et c'est elle qui
+    empeche la meme proposition de s'empiler quand le bilan du tour suivant la repete mot
+    pour mot. La recalculer sur l'enonce ferait revenir, sous un autre nom, ce qu'on vient
+    d'ecarter — et une reecriture n'est pas deterministe, donc deux fois la meme phrase
+    donneraient deux cles.
+
+    L'original part dans `source` : c'est lui que `resoudre` reconnait quand on redemande
+    la chose avec les mots de la reponse d'origine.
+    """
+    enonce = (enonce or "").strip()
+    if not enonce:
+        return False
+    tout = _lire()
+    touche = False
+    for p in tout:
+        if p.get("cle") == cle and p.get("texte") != enonce:
+            p.setdefault("source", p.get("texte", ""))
+            p["texte"] = enonce
+            touche = True
+    if touche:
+        _ecrire(tout)
+    return touche
 
 
 def marquer(cle: str, etat: str) -> bool:
@@ -289,10 +394,12 @@ def resoudre(message: str) -> list[str]:
         return []
     fermees = []
     for p in ouvertes():
-        siens = _mots(p.get("texte", ""))
-        if not siens:
+        # L'enonce ET la phrase d'origine : apres reformulation, redemander la chose avec
+        # les mots de la reponse qui l'avait proposee ne reconnaitrait plus rien.
+        candidats = [m for m in (_mots(p.get("texte", "")), _mots(p.get("source", ""))) if m]
+        if not candidats:
             continue
-        if len(siens & mots) / len(siens) >= SEUIL_REPRISE:
+        if max(len(s & mots) / len(s) for s in candidats) >= SEUIL_REPRISE:
             marquer(p["cle"], "faite")
             fermees.append(p["texte"])
     return fermees
