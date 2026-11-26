@@ -1017,6 +1017,29 @@ class Voix(Agent):
                                   duree=getattr(journal_, "duree_s", None),
                                   attend=demande)
 
+    def _session_des_propositions(self) -> str:
+        """A quelle conversation rattacher ce qui est retenu.
+
+        C'est l'identifiant de session, et c'est le bon : une conversation reprise le
+        GARDE d'une reprise a l'autre — mesure du 26 novembre 2026, 557 transcrits pour
+        26 sessions, dont une seule porte les 78 reprises de « home sweet home ». Le
+        fichier du transcrit, lui, est neuf a chaque relance : s'y rattacher donnerait une
+        liste vide a chaque ouverture.
+
+        Le repli compte. `conv.session_id` n'est pose qu'au premier message rendu par le
+        SDK ; sans lui, l'entree partirait SANS session — donc invisible partout, puisque
+        le serveur ne montre que la conversation courante. Deux des quinze entrees du
+        registre etaient dans cet etat.
+        """
+        sid = getattr(self.conv, "session_id", "") or ""
+        if sid:
+            return sid
+        try:
+            return journal.session_a_reprendre() or ""
+        except Exception:
+            log.debug("session des propositions inconnue", exc_info=True)
+            return ""
+
     def _noter_propositions(self, ecrit: str | None) -> None:
         """Retenir ce que cette réponse propose, et dire combien attendent.
 
@@ -1027,7 +1050,7 @@ class Voix(Agent):
             neuves = propositions.enregistrer(
                 propositions.extraire(ecrit or self._dernier_debrief or ""),
                 projet=getattr(self.conv, "projet", "") or "",
-                session=getattr(self.conv, "session_id", "") or "",
+                session=self._session_des_propositions(),
                 conversation=getattr(getattr(self.conv, "fichier", None), "name", "") or "")
         except Exception:
             log.debug("propositions : extraction impossible", exc_info=True)
@@ -1093,7 +1116,7 @@ class Voix(Agent):
             neuves = propositions.enregistrer(
                 [question], genre="question",
                 projet=getattr(self.conv, "projet", "") or "",
-                session=getattr(self.conv, "session_id", "") or "",
+                session=self._session_des_propositions(),
                 conversation=getattr(getattr(self.conv, "fichier", None), "name", "") or "")
         except Exception:
             log.debug("propositions : question non gardee", exc_info=True)

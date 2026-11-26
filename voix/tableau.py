@@ -818,6 +818,12 @@ class Tableau:
         """
         try:
             sid = self.session_courante()
+            if not sid:
+                # Conversation dont on ne connait pas encore l'identifiant — une neuve,
+                # typiquement. Rendre TOUT serait le defaut de depart : « j'ai ouvert deux
+                # conversations differentes et la liste etait la meme ». Une conversation
+                # qui n'a pas d'identite n'a rien propose : sa liste est vide.
+                return web.json_response({"liste": [], "traitees": [], "session": ""})
             return web.json_response({"liste": propositions.ouvertes(session=sid),
                                       "traitees": propositions.tranchees(session=sid),
                                       "session": sid})

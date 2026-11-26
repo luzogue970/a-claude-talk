@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import aiohttp
 
 import config
+import journal
 import propositions
 from tableau import Tableau
 
@@ -250,6 +251,21 @@ async def le_serveur_sert_la_liste_et_la_tranche():
                      and rendu["traitees"][0]["etat"] == "ecartee",
                      "mais elle reste consultable, avec son sort, dans la même réponse")
 
+                # Une conversation dont on ne connait pas encore l'identifiant. Rendre
+                # tout le registre serait exactement le defaut de depart, en pire : on
+                # verrait les lignes de quatre projets sans savoir de quoi elles parlent.
+                t.etat["session"] = json.dumps({"id": "", "titre": ""})
+                ancienne_reprise = journal.session_a_reprendre
+                journal.session_a_reprendre = lambda *a, **k: ""
+                try:
+                    async with http.get(f"{url}/propositions.json") as r:
+                        orpheline = await r.json()
+                finally:
+                    journal.session_a_reprendre = ancienne_reprise
+                dire(orpheline["liste"] == [] and orpheline["traitees"] == [],
+                     "une conversation sans identité n'a rien proposé : sa liste est "
+                     "vide, elle ne reçoit pas celle des autres")
+
             publies = [json.loads(c).get("genre") for c in
                        [c for c in t.etat.values()]] if t.etat else []
             dire("propositions" in [e.get("genre") for e in list(t.histoire)],
@@ -293,6 +309,12 @@ def l_agent_note_et_solde_sans_jamais_tomber():
         def _enoncer_plus_tard(self, neuves):
             self.enonces.append([p["texte"] for p in neuves])
 
+        # La conversation a laquelle ce qui est retenu se rattache. Doublee aussi : la
+        # vraie lit l'index des sessions de la machine, et un test ne doit pas ecrire
+        # dans le registre sous l'identite d'une vraie conversation.
+        def _session_des_propositions(self):
+            return "la-courante"
+
     with tempfile.TemporaryDirectory() as d:
         ancien = propositions.FICHIER
         propositions.FICHIER = Path(d) / "propositions.json"
@@ -305,6 +327,9 @@ def l_agent_note_et_solde_sans_jamais_tomber():
                  "la page l'apprend tout de suite : la pastille monte sans recharger")
             dire(a.enonces and "borner l'attente" in a.enonces[0][0],
                  "et sa reformulation en énoncé de tâche est demandée dans la foulée")
+            dire(propositions.ouvertes()[0]["session"] == "la-courante",
+                 "et elle est rattachée à CETTE conversation : « je vais sur home sweet "
+                 "home, je n'ai que les points de home sweet home »")
 
             a.vus.clear()
             a._solder_propositions("Mets en place cette proposition : « Il faudrait maintenant "
@@ -496,6 +521,41 @@ def chaque_conversation_a_sa_liste():
             propositions.FICHIER = ancien
 
 
+def ce_qui_est_retenu_se_rattache_a_la_conversation_reprise():
+    print("\n=== et ce rattachement survit aux reprises ===")
+    import agent as A
+
+    class Conv:
+        projet = "home-sweet-home"
+        fichier = None
+        def __init__(self, sid): self.session_id = sid
+
+    class Minimal:
+        _session_des_propositions = A.Voix._session_des_propositions
+
+    m = Minimal()
+    m.conv = Conv("acf34942")
+    dire(m._session_des_propositions() == "acf34942",
+         "l'identifiant de session fait foi : une conversation reprise le GARDE — "
+         "mesuré le 26 novembre 2026, 557 transcrits pour 26 sessions, dont une seule "
+         "porte les 78 reprises de « home sweet home »")
+
+    # Le transcrit, lui, est neuf a chaque relance : s'y rattacher viderait la liste a
+    # chaque ouverture. C'est la raison d'etre du choix ci-dessus.
+    m.conv = Conv(None)
+    ancienne = journal.session_a_reprendre
+    journal.session_a_reprendre = lambda *a, **k: "celle-qu-on-reprend"
+    try:
+        dire(m._session_des_propositions() == "celle-qu-on-reprend",
+             "avant le premier message du SDK, la session à reprendre prend le relais : "
+             "sans ça l'entrée partirait sans conversation, donc invisible partout")
+        journal.session_a_reprendre = lambda *a, **k: (_ for _ in ()).throw(OSError("index"))
+        dire(m._session_des_propositions() == "",
+             "et un index illisible ne fait pas tomber la réponse en cours")
+    finally:
+        journal.session_a_reprendre = ancienne
+
+
 # --- TU : une question restee sans reponse ------------------------------------------------
 def une_question_sans_reponse_se_reconnait():
     print("\n=== répondre, ça se reconnaît : sinon la question tombe dans la liste ===")
@@ -572,6 +632,12 @@ def l_agent_garde_la_question_qu_on_n_a_pas_honoree():
 
         def _enoncer_plus_tard(self, neuves):
             self.enonces.append([p["texte"] for p in neuves])
+
+        # La conversation a laquelle ce qui est retenu se rattache. Doublee aussi : la
+        # vraie lit l'index des sessions de la machine, et un test ne doit pas ecrire
+        # dans le registre sous l'identite d'une vraie conversation.
+        def _session_des_propositions(self):
+            return "la-courante"
 
     with tempfile.TemporaryDirectory() as d:
         ancien = propositions.FICHIER
@@ -705,6 +771,7 @@ async def principal():
     une_ligne_se_reecrit_sans_changer_d_identite()
     la_reecriture_ne_reattribue_jamais_une_ligne_a_une_autre()
     chaque_conversation_a_sa_liste()
+    ce_qui_est_retenu_se_rattache_a_la_conversation_reprise()
     une_question_sans_reponse_se_reconnait()
     une_question_gardee_porte_son_genre()
     await le_serveur_sert_la_liste_et_la_tranche()
