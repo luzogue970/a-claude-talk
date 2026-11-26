@@ -308,6 +308,15 @@ def la_page_surligne_ce_que_le_registre_retient():
     dire("btnProps.hidden" not in page,
          "le bouton ne se masque plus tout seul : il est au même endroit tous les jours, "
          "y compris ceux où la réponse à « qu'est-ce que j'ai laissé en plan ? » est « rien »")
+    # Le defaut du 26 novembre 2026, et il rendait TOUT le reste invisible : ces deux
+    # appels etaient les seuls de la page a partir en chemin absolu. Servie par le tableau
+    # de bord sous /talk/<nom>/, la page demandait /propositions.json a la racine du
+    # tableau — 404, `catch` muet, bouton eteint. Treize propositions ouvertes attendaient.
+    dire('fetch("/propositions.json"' not in page and 'fetch("/proposition"' not in page,
+         "aucune URL absolue : derrière le tableau de bord, elles partent à la racine")
+    dire('urlAgent("/propositions.json")' in page and 'urlAgent("/proposition")' in page
+         and "location.pathname" in page,
+         "les deux passent par urlAgent, comme /audio, /image et /jointe avant elles")
     dire('id="props"' in page and "/propositions.json" in page,
          "et le bouton, qui va chercher la liste par HTTP")
     # Les deux listes ne peuvent pas être partagées (l'une est en Python, l'autre dans du
@@ -321,6 +330,119 @@ def la_page_surligne_ce_que_le_registre_retient():
     dire(cote_page == propositions.MARQUEURS,
          f"les deux listes sont la même, à l'alternative près "
          f"({len(cote_page)} côté page, {len(propositions.MARQUEURS)} côté registre)")
+
+
+# --- TU : une question restee sans reponse ------------------------------------------------
+def une_question_sans_reponse_se_reconnait():
+    print("\n=== répondre, ça se reconnaît : sinon la question tombe dans la liste ===")
+    q = "Tu veux que je monte la version maintenant ?"
+    for court in ("oui", "Ouais", "non", "ok", "vas-y", "le second", "les deux",
+                  "peu importe", "comme tu veux", "laisse tomber", "pas la peine",
+                  "d'accord", "carrément", "plutôt le premier"):
+        dire(propositions.repond_a(court, q),
+             f"« {court} » répond — deux syllabes, aucun mot commun, et ça tranche")
+    dire(propositions.repond_a("oui monte la version", q),
+         "une réponse qui reprend la question répond deux fois plutôt qu'aucune")
+    dire(propositions.repond_a("La version, monte-la maintenant.", q),
+         "et la reprise seule suffit : répondre, c'est presque toujours citer")
+    # Le cas qui MOTIVE tout le module : on enchaîne sur autre chose, et la question
+    # disparaît sans que rien ne la retienne nulle part.
+    dire(not propositions.repond_a("Corrige le micro qui se coupe sur le téléphone.", q),
+         "un message qui change de sujet ne répond pas — c'est là qu'une question se perd")
+    dire(not propositions.repond_a(
+        "Relis test_micro_navigateur et dis-moi pourquoi il traîne.", q),
+        "même long et même précis : précis sur autre chose")
+    dire(propositions.repond_a("", q) and propositions.repond_a("peu importe", ""),
+         "sans message ou sans question, il n'y a rien à garder")
+
+
+def une_question_gardee_porte_son_genre():
+    print("\n=== et elle arrive dans la liste en disant qu'elle est une question ===")
+    with tempfile.TemporaryDirectory() as d:
+        ancien = propositions.FICHIER
+        propositions.FICHIER = Path(d) / "propositions.json"
+        try:
+            propositions.enregistrer(["Tu veux que je monte la version ?"],
+                                     projet="claude-talk", genre="question")
+            propositions.enregistrer(["On pourrait borner l'attente de la liaison."],
+                                     projet="claude-talk")
+            liste = {p["texte"]: p for p in propositions.ouvertes()}
+            dire(len(liste) == 2, "les deux vivent dans le même registre, et le même bouton")
+            dire(liste["Tu veux que je monte la version ?"].get("genre") == "question",
+                 "la question se dit question : la page n'offre pas « faire » sur une question")
+            dire("genre" not in liste["On pourrait borner l'attente de la liaison."],
+                 "et une proposition n'écrit rien : les entrées d'avant la 0.43.0 se lisent "
+                 "toujours, sans migrer le fichier")
+        finally:
+            propositions.FICHIER = ancien
+
+
+# --- TI : le branchement de la question dans l'agent -------------------------------------
+def l_agent_garde_la_question_qu_on_n_a_pas_honoree():
+    print("\n=== l'agent garde la question à laquelle le message suivant n'a pas répondu ===")
+    source = (Path(__file__).parent / "agent.py").read_text(encoding="utf-8")
+    # Le relevé doit être pris AVANT la ligne qui l'efface : c'est tout l'objet du
+    # correctif, et c'est la première chose qu'un refactor remettrait au mauvais endroit.
+    debut = source.index("attendait = self._attend_reponse")
+    dire(debut < source.index("self.conv.tour_utilisateur(texte"),
+         "l'attente est relevée avant la ligne qui la solde — après, elle n'existe plus")
+    dire(source.index("self._solder_propositions(texte)", debut)
+         < source.index("self._garder_question(attendait, texte)"),
+         "et gardée APRÈS le solde : un message qui reprend la question la ferme, "
+         "la garder avant la rouvrirait dans la foulée")
+
+    import agent as A
+
+    class AgentMinimal:
+        conv = None
+
+        def __init__(self):
+            self.vus = []
+
+        def _voir(self, genre, **d):
+            self.vus.append((genre, d))
+
+        _garder_question = A.Voix._garder_question
+
+    with tempfile.TemporaryDirectory() as d:
+        ancien = propositions.FICHIER
+        propositions.FICHIER = Path(d) / "propositions.json"
+        try:
+            a = AgentMinimal()
+            q = "Tu veux que je monte la version maintenant ?"
+            a._garder_question(q, "oui")
+            dire(propositions.compter() == 0,
+                 "une question honorée ne laisse rien : la liste ne se remplit pas de "
+                 "choses déjà réglées")
+
+            a._garder_question(q, "Corrige plutôt le micro du téléphone.")
+            ouvertes = propositions.ouvertes()
+            dire(len(ouvertes) == 1 and ouvertes[0]["texte"] == q,
+                 "une question enterrée par le message suivant est retenue, mot pour mot")
+            dire(ouvertes[0].get("genre") == "question", "et elle se dit question")
+            dire(any(g == "propositions" for g, _ in a.vus),
+                 "la page l'apprend tout de suite, sans recharger")
+            dire(all("genre" not in d for g, d in a.vus if g == "propositions"),
+                 "sans jamais réécrire le `genre` de l'événement : « propositions » est "
+                 "ce que la page attend pour recharger, et le repasser ferait tomber l'appel")
+
+            a._garder_question(None, "n'importe quoi")
+            dire(propositions.compter() == 1, "pas de question posée, rien à garder")
+
+            # Le même garde-fou que pour les propositions : une liste de questions ne vaut
+            # pas qu'on perde un message.
+            propositions.FICHIER = Path(d) / "interdit" / "propositions.json"
+            Path(d, "interdit").mkdir()
+            Path(d, "interdit").chmod(0o500)
+            try:
+                a._garder_question("Tu préfères laquelle des deux ?", "autre chose")
+                dire(True, "un registre illisible ne fait pas tomber l'envoi du message")
+            except Exception as e:
+                dire(False, f"l'envoi est tombé sur le registre : {e}")
+            finally:
+                Path(d, "interdit").chmod(0o700)
+        finally:
+            propositions.FICHIER = ancien
 
 
 # --- TI : l'amorce depuis les transcripts ------------------------------------------------
@@ -410,8 +532,11 @@ async def principal():
     une_proposition_a_un_etat()
     ce_qui_est_tranche_reste_consultable()
     demander_une_proposition_la_solde()
+    une_question_sans_reponse_se_reconnait()
+    une_question_gardee_porte_son_genre()
     await le_serveur_sert_la_liste_et_la_tranche()
     l_agent_note_et_solde_sans_jamais_tomber()
+    l_agent_garde_la_question_qu_on_n_a_pas_honoree()
     la_page_surligne_ce_que_le_registre_retient()
     l_amorce_relit_l_historique_une_seule_fois()
     l_amorce_se_plafonne()

@@ -1559,6 +1559,8 @@ h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.02em;
 #choix-prop .p{border-left:2px solid #d8a65766;padding:7px 9px;border-radius:0 6px 6px 0}
 #choix-prop .p+.p{margin-top:6px;border-top:1px solid #ffffff10}
 #choix-prop .quoi{color:var(--texte);line-height:1.5;white-space:pre-wrap}
+#choix-prop .p.q{border-left-color:#7aa2d8aa}
+#choix-prop .marq{color:#8ab4e8;font-weight:700;margin-right:6px}
 #choix-prop .meta{color:#5a636e;margin-top:4px}
 /* Ce qui est deja tranche. Visible, mais clairement en-dessous : on vient ici pour ce qui
    attend, et on descend seulement quand on cherche « le truc que j'ai ecarte trop vite ».
@@ -6095,13 +6097,25 @@ function majPastilleProps() {
   btnProps.innerHTML = '<span class="ico-prop">◇</span>'
     + (n ? '<span class="nb">' + n + "</span>" : "");
   btnProps.title = n
-    ? n + " proposition(s) faite(s) et jamais tranchée(s) — appuie pour les traiter"
-    : "ce qui a été proposé : rien en attente, et ce qui a déjà été tranché";
+    ? n + " chose(s) en attente — propositions jamais tranchées et questions restées "
+      + "sans réponse. Appuie pour les traiter"
+    : "ce qui attend : rien pour l\'instant, et ce qui a déjà été tranché";
+}
+
+// La page est servie PAR LE TABLEAU DE BORD, sous /talk/<nom>/ — et ces deux appels-la
+// partaient a la RACINE, qui ne connait ni /propositions.json ni /proposition. Le fetch
+// tombait en 404, le `catch` rendait la main sans un mot, et le bouton restait eteint pour
+// toujours : « ça ne s'allume jamais, je n'ai jamais aucun élément à gérer ». Il y avait
+// treize propositions ouvertes dans le registre a ce moment-la.
+// Tout le reste de la page construisait deja son URL a partir de `location.pathname` —
+// /audio, /image, /jointe, /etat.json, le flux. Ces deux-la avaient ete oublies.
+function urlAgent(bout) {
+  return location.pathname.replace(/\/$/, "") + bout;
 }
 
 async function chargerProps(redessiner) {
   try {
-    const r = await fetch("/propositions.json", { cache: "no-store" });
+    const r = await fetch(urlAgent("/propositions.json"), { cache: "no-store" });
     const d = await r.json();
     props = (d && d.liste) || [];
     propsFaites = (d && d.traitees) || [];
@@ -6129,29 +6143,39 @@ function dessinerProps() {
   if (!b) return;
   let html = "";
   if (!props.length) {
-    html += '<div class="vide">Rien en attente. Tout ce qui a été proposé a été '
-      + 'traité ou écarté.</div>';
+    html += '<div class="vide">Rien en attente. Tout ce qui a été proposé, et toute '
+      + 'question restée sans réponse, a été traité ou écarté.</div>';
   }
   for (const p of props) {
     const ou = quandProp(p, false);
-    html += '<div class="p" data-cle="' + ech(p.cle) + '">'
-      + '<div class="quoi">' + ech(p.texte) + "</div>"
+    // Une QUESTION restee sans reponse arrive ici par le meme chemin qu'une proposition,
+    // et elle ne se traite pas pareil : « faire » n'a aucun sens — on n'envoie pas sa
+    // propre question a celui qui l'a posee. Les deux gestes sont y répondre, ou dire
+    // qu'elle n'appelle plus de réponse.
+    const q = p.genre === "question";
+    html += '<div class="p' + (q ? " q" : "") + '" data-cle="' + ech(p.cle) + '">'
+      + '<div class="quoi">' + (q ? '<span class="marq">?</span>' : "") + ech(p.texte) + "</div>"
       + (ou ? '<div class="meta">' + ech(ou) + "</div>" : "")
       + '<div class="actes">'
       // La cle est portee par CHAQUE bouton, pas seulement par la carte : remonter au
       // parent suppose un arbre, et le talon des tests n'en a pas — mais surtout, un
       // bouton qui porte lui-meme ce sur quoi il agit ne peut pas se tromper de ligne.
-      + acte(p.cle, "faire", "faire", "↑ faire", "l\'envoyer comme demande, telle quelle")
-      + acte(p.cle, "modifier", "modifier", "✎ modifier",
-             "la mettre dans la barre pour la compléter")
+      + (q ? "" : acte(p.cle, "faire", "faire", "↑ faire",
+                       "l\'envoyer comme demande, telle quelle"))
+      + acte(p.cle, "modifier", "modifier", q ? "✎ répondre" : "✎ modifier",
+             q ? "y répondre maintenant : la question part dans la barre"
+               : "la mettre dans la barre pour la compléter")
       + acte(p.cle, "ecarter", "ecarter", "✕ écarter",
-             "elle ne se fera pas — la sortir de la liste")
+             q ? "elle n\'appelle plus de réponse — la sortir de la liste"
+               : "elle ne se fera pas — la sortir de la liste")
       + "</div></div>";
   }
   if (props.length) {
     html += '<div class="pied">Une proposition sort d\'ici dès qu\'elle est demandée — '
       + 'd\'ici, ou dans n\'importe quelle conversation, en lui redisant ce qu\'elle dit. '
-      + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes.</div>';
+      + '<b>modifier</b> la dépose dans la barre : elle partira avec ce que tu ajoutes. '
+      + 'Les lignes marquées <b>?</b> sont des questions auxquelles le message suivant '
+      + 'n\'a pas répondu.</div>';
   }
   // Ce qui a deja ete tranche, sous un trait. Le bouton etant desormais toujours la, un
   // panneau qui n'ouvre QUE « rien en attente » serait un bouton qu'on cesse d'appuyer.
@@ -6181,6 +6205,13 @@ function demandeProp(texte) {
   return "Mets en place cette proposition : « " + texte + " »";
 }
 
+// Pour une question, l'amorce CITE la question et laisse le curseur apres les deux points :
+// la reponse arrive souvent en deux mots (« le second »), et deux mots tout nus, des jours
+// apres, ne disent a personne de quoi ils parlent.
+function reponseProp(texte) {
+  return "Tu m'avais demandé : « " + texte + " » — ";
+}
+
 function brancherProps(b) {
   for (const bouton of [...b.querySelectorAll("[data-a]")]) {
     bouton.onclick = async ev => {
@@ -6199,7 +6230,9 @@ function brancherProps(b) {
         // Rien n'est tranché ici : c'est l'envoi qui tranchera. La proposition reste dans
         // la liste tant que le message n'est pas parti — sortir avant, c'est la perdre si
         // on change d'avis en écrivant.
-        champ.value = demandeProp(p.texte) + " ";
+        champ.value = p.genre === "question"
+          ? reponseProp(p.texte)
+          : demandeProp(p.texte) + " ";
         b.hidden = true;
         majEnvoyer();
         ajusterHauteur();
@@ -6231,7 +6264,7 @@ async function trancherProp(cle, etat) {
   majPastilleProps();
   dessinerProps();
   try {
-    await fetch("/proposition", {
+    await fetch(urlAgent("/proposition"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cle, etat }),
     });

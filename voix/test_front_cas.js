@@ -4591,8 +4591,10 @@ async function testerPropositions() {
   dire(/<span class="nb">2<\/span>/.test(btnProps.innerHTML)
        && !btnProps.classList.contains('calme'),
        'deux propositions en attente : le bouton le dit, sans ouvrir quoi que ce soit');
-  dire(/2 proposition/.test(btnProps.title),
-       'et le mot entier vit dans l infobulle, la ou il ne coute aucun pixel de rangee');
+  dire(/2 chose/.test(btnProps.title) && /proposition/.test(btnProps.title)
+       && /question/.test(btnProps.title),
+       'et les mots entiers vivent dans l infobulle, la ou ils ne coutent aucun pixel '
+       + 'de rangee — propositions ET questions, puisque les deux tombent ici');
 
   const panneau = document.getElementById('choix-prop');
   dessinerProps();
@@ -4676,7 +4678,59 @@ async function testerPropositions() {
   dire(props.length === 1 && !btnProps.classList.contains('calme'),
        'mais le compte monte tout seul, sans recharger la page');
 
+  // 7. L URL, et c est LE defaut qui rendait tout le reste invisible. La page est servie
+  //    par le tableau de bord sous /talk/<nom>/ : un fetch absolu part a la racine du
+  //    tableau, qui ne connait pas cette route. 404, catch muet, bouton eteint pour
+  //    toujours — « ca ne s allume jamais, je n ai jamais aucun element a gerer », alors
+  //    qu il y avait treize propositions ouvertes dans le registre.
+  //    Le talon repondait a /propositions.json quelle que soit l URL : il ne pouvait pas
+  //    voir le defaut. C est l URL DEMANDEE qu on regarde ici, pas la reponse.
+  const cheminAvant = location.pathname;
+  location.pathname = '/talk/claude-talk/';
+  globalThis.requetes = [];
+  globalThis.listeProps = [{ cle: 'url', texte: 'Il faudrait relire ce chemin la.',
+                             projet: 'claude-talk', quand: Date.now() / 1000 }];
+  await chargerProps(true);
+  const demandee = (globalThis.requetes.find(r => /propositions\.json/.test(String(r.url))) || {}).url;
+  dire(demandee === '/talk/claude-talk/propositions.json',
+       'servie sous /talk/<nom>/, la page demande SA liste et pas celle de la racine → '
+       + demandee);
+  dire(props.length === 1, 'donc elle arrive, et le bouton a de quoi s allumer');
+  globalThis.requetes = [];
+  dessinerProps();
+  await clic(boutons('ecarter')[0]);
+  const trancheeUrl = (globalThis.requetes.find(r => /\/proposition$/.test(String(r.url))) || {}).url;
+  dire(trancheeUrl === '/talk/claude-talk/proposition',
+       'et trancher repart au meme endroit — sinon la liste ne se vide qu a l ecran → '
+       + trancheeUrl);
+  location.pathname = cheminAvant;
+
+  // 8. Une QUESTION restee sans reponse. Meme liste, meme bouton, et deux gestes au lieu
+  //    de trois : « faire » n a aucun sens — on n envoie pas sa propre question a celui
+  //    qui l a posee.
+  globalThis.listeProps = [{ cle: 'qqq', genre: 'question', projet: 'claude-talk',
+                             texte: 'Tu veux que je monte la version maintenant ?',
+                             quand: Date.now() / 1000 - 120 }];
+  globalThis.traiteesProps = [];
+  await chargerProps(true);
+  panneau.hidden = false;
+  dessinerProps();
+  dire(/monte la version maintenant/.test(panneau.innerHTML),
+       'une question laissee sans reponse arrive dans la meme liste que les propositions');
+  dire(/class="marq"/.test(panneau.innerHTML),
+       'marquee comme telle : y repondre et faire une chose ne sont pas le meme geste');
+  dire(boutons('faire').length === 0,
+       'et « faire » disparait : renvoyer sa question a celui qui l a posee n a aucun sens');
+  dire(boutons('modifier').length === 1 && /répondre/.test(panneau.innerHTML),
+       'le geste propose est d y repondre, pas de la « modifier »');
+  champ.value = '';
+  await clic(boutons('modifier')[0]);
+  dire(/monte la version maintenant/.test(champ.value),
+       'et la barre recoit la question CITEE : « oui » tout nu, trois jours apres, '
+       + 'ne dirait a personne de quoi il parle');
+
   globalThis.listeProps = [];
+  globalThis.traiteesProps = [];
   await chargerProps(true);
 }
 

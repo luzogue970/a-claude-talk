@@ -187,7 +187,8 @@ def _ecrire(tout: list[dict]) -> None:
 
 
 def enregistrer(textes: list[str], projet: str = "", session: str = "",
-                conversation: str = "", quand: float | None = None) -> list[dict]:
+                conversation: str = "", quand: float | None = None,
+                genre: str = "") -> list[dict]:
     """Ajouter ce qui est neuf, et rendre ce qui vient d'etre ajoute.
 
     Une proposition deja connue n'est PAS re-ouverte : l'ecarter puis la voir revenir au
@@ -204,9 +205,15 @@ def enregistrer(textes: list[str], projet: str = "", session: str = "",
         if cle in connues:
             continue
         connues.add(cle)
-        neuves.append({"cle": cle, "texte": texte, "projet": projet, "session": session,
-                       "conversation": conversation, "quand": quand or time.time(),
-                       "etat": "ouverte"})
+        neuve = {"cle": cle, "texte": texte, "projet": projet, "session": session,
+                 "conversation": conversation, "quand": quand or time.time(),
+                 "etat": "ouverte"}
+        # Le genre n'est ecrit que s'il y en a un : les enregistrements d'avant la 0.43.0
+        # n'en ont pas, et une proposition reste le cas par defaut. Un champ absent se lit
+        # donc comme « proposition » des deux cotes, sans migration du fichier.
+        if genre:
+            neuve["genre"] = genre
+        neuves.append(neuve)
     if neuves:
         _ecrire(tout + neuves)
     return neuves
@@ -289,6 +296,49 @@ def resoudre(message: str) -> list[str]:
             marquer(p["cle"], "faite")
             fermees.append(p["texte"])
     return fermees
+
+
+# Ce qui, en tete d'un message, REPOND sans rien reprendre de la question. « oui »,
+# « vas-y », « le second » : trois caracteres qui tranchent, et aucun mot commun avec ce
+# qui a ete demande. Sans cette liste, la reponse la plus frequente — celle qu'on dit a la
+# voix en deux syllabes — serait comptee comme un changement de sujet, et la question
+# qu'elle vient de regler atterrirait dans la liste des choses en attente.
+_ACQUIESCE = re.compile(
+    r"^\s*\W*(oui|ouais|ok|okay|yes|non|nan|d'accord|daccord|parfait|nickel|impec|"
+    r"carr[ée]ment|exact|exactement|c'est [cs]a|voil[àa]|vas-?y|allez|go|fonce|"
+    r"le (premier|second|deuxi[èe]me|troisi[èe]me|dernier)|la (premi[èe]re|seconde|"
+    r"deuxi[èe]me|derni[èe]re)|les deux|aucun|aucune|ni l'un|peu importe|comme tu (veux|"
+    r"le sens)|je te laisse|[àa] toi de|plut[ôo]t|fais-?le|fais ce que|laisse tomber|"
+    r"oublie|pas (la peine|besoin|grave))\b", re.IGNORECASE)
+
+
+def repond_a(message: str, question: str) -> bool:
+    """Est-ce que CE message repond a la question qui attendait ?
+
+    Appele au moment ou quelqu'un parle alors qu'une question etait posee. Trois facons de
+    repondre, et on les accepte toutes les trois :
+
+    - **acquiescer** — « oui », « vas-y », « le second ». Deux syllabes, zero mot commun
+      avec la question : aucune mesure de recouvrement ne les reconnaitrait.
+    - **reprendre la question** — c'est `SEUIL_REPRISE`, la meme mesure que `resoudre`,
+      pour la meme raison : repondre a une question, c'est presque toujours la citer.
+    - **ne rien avoir a garder** — pas de question, ou pas de message.
+
+    On penche ici vers REPONDRE, l'inverse exact de `resoudre`, et c'est voulu : une
+    question gardee a tort revient a l'ecran alors qu'elle est reglee, et fait douter de
+    tout le reste de la liste. Une question lachee a tort, elle, a au moins ete posee a
+    quelqu'un qui etait devant l'ecran.
+    """
+    m = (message or "").strip()
+    q = (question or "").strip()
+    if not m or not q:
+        return True
+    if _ACQUIESCE.match(m):
+        return True
+    siens = _mots(q)
+    if not siens:
+        return True
+    return len(siens & _mots(m)) / len(siens) >= SEUIL_REPRISE
 
 
 # --- l'amorce ---------------------------------------------------------------------------

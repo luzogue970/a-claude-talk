@@ -582,18 +582,29 @@ class Voix(Agent):
         # mesure ne couvrirait qu'une partie du travail.
         if self.quota and not deja_occupe:
             self._quota_depart = self.quota.instantane()
+        # Ce qui attendait une reponse AVANT ce message-ci : les lignes qui suivent
+        # l'effacent, et c'est apres l'avoir efface qu'on a besoin de savoir s'il a ete
+        # honore. Releve ici, donc, et pas plus bas.
+        attendait = self._attend_reponse
         if self.conv:
             # Repondre SOLDE l'attente. Sans ça la liste des conversations continuerait
             # d'afficher « attend ta réponse » pendant tout le tour qui suit la reponse —
             # une indication fausse, donc pire qu'aucune.
             self.conv.tour_utilisateur(texte, repond=bool(self._attend_reponse))
-            self._attend_reponse = None
             # Garde pour le titre : c'est la premiere DEMANDE qui dit le sujet, pas la reponse.
             self._dernier_tour_utilisateur = texte
+        # Hors du `if` : une question posee attend une reponse qu'il y ait une conversation
+        # enregistree ou non, et la laisser en place ferait traiter le message d'apres comme
+        # une reponse de plus a la meme question.
+        self._attend_reponse = None
         # « Tant que je n'ai pas dit : ce truc-là, mets-le en place. » C'est ce message-ci,
         # et il peut arriver des jours plus tard, dans une autre conversation — d'où un
         # registre commun à tous les projets plutôt qu'une liste par session.
         self._solder_propositions(texte)
+        # Et ce qui N'A PAS ete repondu rejoint la meme liste. Apres le solde, pas avant :
+        # un message qui reprend la question la ferme par `resoudre`, et la garder ici
+        # l'aurait rouverte dans la foulee.
+        self._garder_question(attendait, texte)
         if not deja_occupe:
             await self._ajuster_effort(texte)
         await self.worker.envoyer(envoi)
@@ -1023,6 +1034,40 @@ class Voix(Agent):
             return
         if neuves:
             self._voir("propositions", combien=len(neuves),
+                       total=propositions.compter(),
+                       textes=[p["texte"] for p in neuves])
+
+    def _garder_question(self, question: str | None, reponse: str) -> None:
+        """Une question laissee sans reponse ne se perd pas : elle rejoint la liste.
+
+        Le defaut qu'on corrige, dit tel quel : « je vois quelque chose qui est en attente,
+        qui n'a pas ete traite au cours de la derniere conversation — je n'ai pas repondu a
+        cette question — et ca n'arrive jamais dans ma liste. » En effet : la pastille
+        `attend ta reponse` vit le temps d'un tour. Au message suivant elle s'efface, que la
+        question ait ete honoree ou non, et il ne reste rien nulle part.
+
+        Le message d'apres est le seul juge possible, et il ne peut etre lu qu'ici : c'est
+        le point unique ou l'on tient a la fois la question posee et ce qui lui a ete
+        repondu. Tout est entoure — une question gardee ne vaut pas qu'on perde un message.
+        """
+        if not question:
+            return
+        try:
+            if propositions.repond_a(reponse, question):
+                return
+            neuves = propositions.enregistrer(
+                [question], genre="question",
+                projet=getattr(self.conv, "projet", "") or "",
+                session=getattr(self.conv, "session_id", "") or "",
+                conversation=getattr(getattr(self.conv, "fichier", None), "name", "") or "")
+        except Exception:
+            log.debug("propositions : question non gardee", exc_info=True)
+            return
+        if neuves:
+            # `sorte`, pas `genre` : `genre` est le NOM de l'evenement cote flux
+            # (`e.genre === "propositions"`), et le repasser en mot-cle ferait tomber
+            # l'appel — la question serait enregistree, et la page ne l'apprendrait jamais.
+            self._voir("propositions", combien=len(neuves), sorte="question",
                        total=propositions.compter(),
                        textes=[p["texte"] for p in neuves])
 
